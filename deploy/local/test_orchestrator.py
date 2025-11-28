@@ -241,27 +241,174 @@ def _display_event(event_type: str, data: dict, agent_results: dict[str, dict], 
         if verbose and description:
             console.print(f"  [dim]Description: {description}[/dim]")
 
+    elif event_type == "tool_call_started":
+        # New detailed tool call started event
+        tool_name = event_data.get("tool_name", "unknown")
+        tool_call_id = event_data.get("tool_call_id", "")
+        agent_name = event_data.get("agent_name", "orchestrator")
+        call_number = event_data.get("call_number", 1)
+        input_args = event_data.get("input_args", {})
+        
+        console.print(f"\n[yellow]🔧 Tool call:[/yellow] [bold cyan]{tool_name}[/bold cyan] (call #{call_number}) [dim]{timestamp}[/dim]")
+        
+        # Always show input args in a panel for visibility
+        if input_args:
+            args_str = json.dumps(input_args, indent=2, ensure_ascii=False)
+            # Show more in verbose mode
+            max_len = 2000 if verbose else 800
+            preview = args_str[:max_len] + "\n..." if len(args_str) > max_len else args_str
+            console.print(Panel(
+                preview,
+                title=f"[bold yellow]📥 Input: {tool_name}[/bold yellow]",
+                border_style="yellow",
+                padding=(0, 1),
+            ))
+
+    elif event_type == "tool_call_completed":
+        # New detailed tool call completed event
+        tool_name = event_data.get("tool_name", "unknown")
+        call_number = event_data.get("call_number", 1)
+        execution_time_ms = event_data.get("execution_time_ms", 0)
+        output = event_data.get("output")
+        
+        console.print(
+            f"[green]✓ {tool_name}[/green] (call #{call_number}) completed in {execution_time_ms}ms [dim]{timestamp}[/dim]"
+        )
+        
+        # Always show output in a panel for visibility
+        if output:
+            output_str = json.dumps(output, indent=2, ensure_ascii=False) if isinstance(output, (dict, list)) else str(output)
+            # Show more in verbose mode
+            max_len = 2000 if verbose else 800
+            preview = output_str[:max_len] + "\n..." if len(output_str) > max_len else output_str
+            console.print(Panel(
+                preview,
+                title=f"[bold green]📤 Output: {tool_name}[/bold green]",
+                border_style="green",
+                padding=(0, 1),
+            ))
+        
+        agent_results[tool_name] = {"execution_time_ms": execution_time_ms}
+
+    elif event_type == "tool_call_failed":
+        # New tool call failed event
+        tool_name = event_data.get("tool_name", "unknown")
+        call_number = event_data.get("call_number", 1)
+        error = event_data.get("error", "Unknown error")
+        error_type = event_data.get("error_type", "")
+        
+        console.print(f"\n[red]✗ Tool {tool_name}[/red] (call #{call_number}) failed [dim]{timestamp}[/dim]")
+        console.print(Panel(
+            f"Error: {error}\nType: {error_type}" if error_type else f"Error: {error}",
+            title=f"[bold red]❌ Failed: {tool_name}[/bold red]",
+            border_style="red",
+            padding=(0, 1),
+        ))
+
+    elif event_type == "scratchpad_updated":
+        # Scratchpad section updated
+        section_name = event_data.get("section_name", "unknown")
+        operation = event_data.get("operation", "updated")
+        updated_by = event_data.get("updated_by", "agent")
+        content_preview = event_data.get("content_preview", "")
+        
+        op_symbol = "📝" if operation == "created" else "✏️" if operation == "updated" else "➕"
+        console.print(
+            f"\n[magenta]{op_symbol} Scratchpad[/magenta] [{operation}] "
+            f"[bold]{section_name}[/bold] by {updated_by} [dim]{timestamp}[/dim]"
+        )
+        
+        # Always show content preview in a panel
+        if content_preview:
+            max_len = 1000 if verbose else 400
+            preview = content_preview[:max_len] + "\n..." if len(content_preview) > max_len else content_preview
+            console.print(Panel(
+                preview,
+                title=f"[bold magenta]📋 Section: {section_name}[/bold magenta]",
+                border_style="magenta",
+                padding=(0, 1),
+            ))
+
+    elif event_type == "scratchpad_snapshot":
+        # Full scratchpad state snapshot
+        sections = event_data.get("sections", [])
+        total_sections = event_data.get("total_sections", 0)
+        triggered_by = event_data.get("triggered_by", "checkpoint")
+        iteration = event_data.get("iteration")
+        
+        iter_str = f" (iteration {iteration})" if iteration else ""
+        console.print(
+            f"\n[magenta]📋 Scratchpad snapshot[/magenta]{iter_str}: "
+            f"{total_sections} sections [dim]({triggered_by})[/dim] [dim]{timestamp}[/dim]"
+        )
+        
+        # Always show section list in a panel
+        if sections:
+            section_names = [f"• {s.get('name', '?')}" for s in sections]
+            console.print(Panel(
+                "\n".join(section_names),
+                title="[bold magenta]📚 Scratchpad Sections[/bold magenta]",
+                border_style="magenta",
+                padding=(0, 1),
+            ))
+
+    elif event_type == "question_added":
+        # Human-in-the-loop question queued
+        question = event_data.get("question", "")
+        asked_by = event_data.get("asked_by", "agent")
+        context = event_data.get("context", "")
+        
+        console.print(f"\n[blue]❓ Question queued[/blue] by {asked_by} [dim]{timestamp}[/dim]")
+        question_content = f"[bold]{question}[/bold]"
+        if context:
+            question_content += f"\n\n[dim]Context: {context}[/dim]"
+        console.print(Panel(
+            question_content,
+            title="[bold blue]🙋 Human Input Needed[/bold blue]",
+            border_style="blue",
+            padding=(0, 1),
+        ))
+
+    elif event_type == "question_answered":
+        # Human answered a question
+        question = event_data.get("question", "")
+        answer = event_data.get("answer", "")
+        
+        console.print(f"\n[green]💬 Question answered[/green] [dim]{timestamp}[/dim]")
+        qa_content = f"[dim]Q: {question}[/dim]\n\n[bold]A: {answer}[/bold]"
+        console.print(Panel(
+            qa_content,
+            title="[bold green]✅ Answer Received[/bold green]",
+            border_style="green",
+            padding=(0, 1),
+        ))
+
     elif event_type == "agent_thinking":
-        # Tool call started by orchestrator
+        # Legacy event - tool call started by orchestrator
         tool = event_data.get("tool", "unknown")
         call_number = event_data.get("call_number", 1)
-        orchestrator_action = event_data.get("orchestrator_action", "")
         args_preview = event_data.get("args_preview", "")
         
-        console.print(f"[yellow]🔧 Calling tool:[/yellow] [bold cyan]{tool}[/bold cyan] (call #{call_number}) [dim]{timestamp}[/dim]")
-        if verbose and args_preview:
-            console.print(f"  [dim]Args: {args_preview[:150]}...[/dim]" if len(args_preview) > 150 else f"  [dim]Args: {args_preview}[/dim]")
+        console.print(f"\n[yellow]🔧 Calling tool:[/yellow] [bold cyan]{tool}[/bold cyan] (call #{call_number}) [dim]{timestamp}[/dim]")
+        if args_preview:
+            max_len = 500 if verbose else 200
+            preview = args_preview[:max_len] + "..." if len(args_preview) > max_len else args_preview
+            console.print(Panel(
+                preview,
+                title=f"[bold yellow]📥 Input: {tool}[/bold yellow]",
+                border_style="yellow",
+                padding=(0, 1),
+            ))
 
     elif event_type == "agent_progress":
         agent = event_data.get("agent", "unknown")
         text = event_data.get("text", "")
+        # Only show streaming text in verbose mode to reduce noise
         if verbose and text:
-            # Show streaming text chunks
-            console.print(f"[dim][{agent}][/dim] {text}", end="")
-        # In non-verbose mode, we skip these to reduce noise
+            console.print(f"[dim]{text}[/dim]", end="")
 
     elif event_type == "agent_completed":
-        # Tool call completed
+        # Legacy tool call completed
         tool = event_data.get("tool")
         agent = event_data.get("agent", tool or "unknown")
         time_ms = event_data.get("execution_time_ms", 0)
@@ -324,6 +471,7 @@ def _display_event(event_type: str, data: dict, agent_results: dict[str, dict], 
         total_time = event_data.get("total_time_ms", 0)
         total_calls = event_data.get("total_tool_calls", 0)
         agent_counts = event_data.get("agent_call_counts", {})
+        synthesis = event_data.get("synthesis", "")
         
         # Build summary string
         summary_parts = []
@@ -336,14 +484,17 @@ def _display_event(event_type: str, data: dict, agent_results: dict[str, dict], 
             f"\n[bold green]✓ Workflow complete[/bold green] "
             f"({summary}, {total_time}ms total)"
         )
-        if verbose:
-            synthesis = event_data.get("synthesis", "")
-            if synthesis:
-                console.print(Panel(
-                    synthesis[:1000] + ("..." if len(synthesis) > 1000 else ""),
-                    title="[bold]Synthesis Preview[/bold]",
-                    border_style="green",
-                ))
+        
+        # Always show synthesis in a panel
+        if synthesis:
+            max_len = 3000 if verbose else 1500
+            preview = synthesis[:max_len] + "\n\n[dim]... (truncated)[/dim]" if len(synthesis) > max_len else synthesis
+            console.print(Panel(
+                preview,
+                title="[bold green]📝 Final Synthesis[/bold green]",
+                border_style="green",
+                padding=(1, 2),
+            ))
 
     else:
         # Unknown event type - show in verbose mode

@@ -20,62 +20,38 @@ class ScratchpadSession(BaseModel):
     session_id: str
     created_at: datetime
     updated_at: datetime
-    sections: dict[str, Section]
-    checklist: list[ChecklistItem]
-    questions: list[Question]
+    state: WorkspaceState
     ttl: int = 86400  # 24 hours
 
+class WorkspaceState(BaseModel):
+    """The core state of the workspace."""
+    notes: list[Note] = []
+    draft_sections: dict[str, DraftSection] = {}
+    plan: list[Task] = []
 
-class SectionStatus(str, Enum):
-    """Status of a scratchpad section."""
-    DRAFT = "draft"
-    IN_PROGRESS = "in_progress"
-    NEEDS_REVIEW = "needs_review"
-    COMPLETE = "complete"
-
-
-class Section(BaseModel):
-    """Named section in scratchpad with collaborative editing support."""
-    name: str
+class Note(BaseModel):
+    """A raw piece of information, fact, or finding."""
+    id: str
     content: str
-    status: SectionStatus = SectionStatus.DRAFT
-    author: str  # Agent that created it
-    contributors: list[str] = []  # Other agents that modified
+    author: str
+    timestamp: datetime
+    tags: list[str] = []
+
+class DraftSection(BaseModel):
+    """A structured section of the final report/output."""
+    id: str
+    title: str
+    content: str
+    last_updated: datetime
     version: int = 1
-    outline_position: int | None = None  # Position in final report (null if not part of report)
-    created_at: datetime
-    updated_at: datetime
 
-
-class ChecklistItem(BaseModel):
-    """Task tracking item."""
+class Task(BaseModel):
+    """A unit of work to be done."""
     id: str
-    task: str
-    agent: str
-    status: Literal["pending", "in_progress", "completed", "failed"]
-    updated_at: datetime
-    notes: str | None = None
-
-
-class QuestionPriority(str, Enum):
-    """Priority level for human questions."""
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-
-
-class Question(BaseModel):
-    """Question queued for human review."""
-    id: str
-    question: str
-    context: str  # Why this information is needed
-    asked_by: str  # Agent that asked
-    priority: QuestionPriority = QuestionPriority.MEDIUM
-    blocking: bool = False  # If true, workflow should pause for this
-    options: list[str] | None = None  # Optional multiple choice
-    answer: str | None = None  # Human's answer (null until answered)
-    created_at: datetime
-    answered_at: datetime | None = None
+    description: str
+    status: str = "todo"  # todo, in_progress, completed, blocked
+    assigned_to: str | None = None
+    dependencies: list[str] = []
 ```
 
 ## Storage Design (Demo Phase)
@@ -101,40 +77,21 @@ def save_session(session: ScratchpadSession) -> None:
 
 > **Future (Production)**: Migrate to Cosmos DB with partition key `/session_id` and 24h TTL.
 
-## Section Naming Conventions
+## Section Naming Conventions (Draft)
 
-| Section Name | Purpose | Typical Author |
-|--------------|---------|----------------|
-| `market_findings` | Market size, trends, customer segments | market-analyst |
-| `competitor_analysis` | Competitor profiles, SWOT | competitor-analyst |
-| `location_options` | Location evaluations, pros/cons | location-scout |
-| `regulations` | Permits, zoning, compliance | location-scout |
-| `financial_projections` | Startup costs, ROI, break-even | finance-analyst |
-| `user_answers` | Collected answers from human | orchestrator |
-| `final_report` | Synthesized final deliverable | synthesizer |
+| Section ID | Title | Typical Author |
+|------------|-------|----------------|
+| `executive_summary` | Executive Summary | synthesizer |
+| `market_analysis` | Market Analysis | market-analyst |
+| `competitor_landscape` | Competitor Landscape | competitor-analyst |
+| `financial_plan` | Financial Plan | finance-analyst |
 
-## Question Examples
+## Note Tagging Conventions
 
-```python
-# High-priority blocking question
-Question(
-    id="q_001",
-    question="What is your budget range for initial investment?",
-    context="Required to calculate realistic financial projections and filter location options",
-    asked_by="finance-analyst",
-    priority=QuestionPriority.HIGH,
-    blocking=True,
-    options=["Under €50,000", "€50,000-€100,000", "€100,000-€200,000", "Over €200,000"],
-)
-
-# Medium-priority non-blocking question
-Question(
-    id="q_002",
-    question="Do you have a preferred neighborhood in Prague?",
-    context="Will prioritize analysis of specific areas if provided",
-    asked_by="location-scout",
-    priority=QuestionPriority.MEDIUM,
-    blocking=False,
-    options=None,  # Free-form answer
-)
-```
+| Tag | Usage |
+|-----|-------|
+| `pricing` | Pricing data, costs, fees |
+| `competitor` | Competitor names, features, strengths |
+| `regulation` | Laws, permits, zoning rules |
+| `demographics` | Population stats, customer segments |
+| `location` | Specific addresses, neighborhoods |

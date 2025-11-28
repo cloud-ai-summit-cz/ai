@@ -357,6 +357,7 @@ async def test_invoke_via_openai_sdk():
     
     from azure.identity import DefaultAzureCredential
     from azure.ai.projects import AIProjectClient
+    from azure.ai.projects.models import AgentReference
     
     credential = DefaultAzureCredential()
     client = AIProjectClient(
@@ -377,34 +378,26 @@ async def test_invoke_via_openai_sdk():
         openai_client = client.get_openai_client()
         print(f"Got OpenAI client: {type(openai_client)}")
         
-        # Check if responses exists
-        if hasattr(openai_client, 'responses'):
-            print("responses attribute found")
-            
-            # Create response using the agent
-            print("\nCalling responses.create with agent reference...")
-            response = openai_client.responses.create(
-                input=[{"role": "user", "content": "Hello! What can you help me with?"}],
-                extra_body={"agent": {"name": agent_name, "version": agent_version}}
-            )
-            
-            print("Success!")
-            print(f"Response type: {type(response)}")
-            if hasattr(response, 'output_text'):
-                print(f"Output: {response.output_text}")
-            else:
-                print(f"Response: {response}")
-        else:
-            print("No responses attribute on OpenAI client")
-            
-            # Try chat completions with model override
-            print("\nTrying chat.completions with model override...")
-            response = openai_client.chat.completions.create(
-                model=f"agents/{agent_name}",
-                messages=[{"role": "user", "content": "Hello!"}],
-                max_completion_tokens=100,
-            )
-            print(f"Success! Response: {response.choices[0].message.content}")
+        # Create agent reference using the SDK model
+        agent_ref = AgentReference(name=agent_name, version=agent_version)
+        print(f"Agent reference: {agent_ref.as_dict()}")
+        
+        # Create response using the agent
+        print("\nCalling responses.create with agent reference...")
+        response = openai_client.responses.create(
+            input=[{"role": "user", "content": "Hello! What can you help me with?"}],
+            extra_body={"agent": agent_ref.as_dict()}
+        )
+        
+        print("Success!")
+        print(f"Response type: {type(response)}")
+        print(f"Response dict: {response.model_dump()}")
+        if hasattr(response, 'output_text'):
+            print(f"Output text: {response.output_text}")
+        if hasattr(response, 'output'):
+            print(f"Output: {response.output}")
+        if hasattr(response, 'choices'):
+            print(f"Choices: {response.choices}")
         
     except Exception as e:
         print(f"Error: {e}")

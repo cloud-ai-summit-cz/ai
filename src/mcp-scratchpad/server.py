@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, List, Optional
 
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
@@ -10,12 +10,9 @@ from starlette.responses import JSONResponse
 
 from config import settings
 from models import (
-    ChecklistItem,
-    ChecklistStatus,
-    Question,
-    QuestionPriority,
-    Section,
-    SectionStatus,
+    Note,
+    DraftSection,
+    Task,
 )
 from storage import get_storage
 
@@ -33,15 +30,14 @@ auth = StaticTokenVerifier(
 mcp = FastMCP(
     name="mcp-scratchpad",
     instructions="""
-    Shared workspace for inter-agent collaboration, document building, and human question queue.
+    Shared workspace for inter-agent collaboration.
     
-    Use this MCP server to:
-    - Store and retrieve research findings in named sections
-    - Track progress with checklist items  
-    - Queue questions for human review
-    - Build collaborative documents across multiple agents
+    The workspace consists of three main pillars:
+    1. NOTES: A shared corkboard for raw facts, findings, and snippets. Append-only, unstructured.
+    2. DRAFT: The structured manuscript being written. Organized by sections.
+    3. PLAN: A shared checklist of tasks to coordinate work.
     
-    Session ID is required for all operations and should be passed in the request context.
+    Session ID is required for all operations.
     """,
     auth=auth,
 )
@@ -63,489 +59,224 @@ def _get_agent_id(context: dict[str, Any] | None = None) -> str:
 
 
 # =============================================================================
-# Section Management Tools
+# NOTES Tools (The Corkboard)
 # =============================================================================
 
-
 @mcp.tool
-def read_section(section_name: str, session_id: str = "default") -> dict[str, Any]:
-    """Read content from a named section in the scratchpad.
+def add_note(
+    content: str,
+    tags: List[str] = [],
+    session_id: str = "default",
+    agent_id: str = "unknown",
+) -> dict[str, Any]:
+    """Add a raw note, finding, or fact to the shared workspace.
+    
+    Use this to share information that might be useful for other agents or later in the process.
+    Examples: "Competitor X pricing is $10/mo", "Found URL: example.com/report.pdf"
     
     Args:
-        section_name: Name of the section to read (e.g., 'market_findings', 'competitor_analysis')
-        session_id: Session ID for the scratchpad
-        
-    Returns:
-        Section data including content, status, author, and metadata
+        content: The content of the note.
+        tags: Optional list of tags for categorization.
+        session_id: Session ID.
+        agent_id: ID of the agent creating the note.
     """
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
-    if section_name not in session.sections:
-        return {"error": f"Section '{section_name}' not found", "exists": False}
+    note = Note(
+        content=content,
+        author=agent_id,
+        tags=tags
+    )
+    session.state.notes.append(note)
+    storage.save_session(session)
     
-    section = session.sections[section_name]
     return {
-        "exists": True,
-        "name": section.name,
-        "content": section.content,
-        "status": section.status.value,
-        "author": section.author,
-        "contributors": section.contributors,
-        "version": section.version,
-        "outline_position": section.outline_position,
-        "created_at": section.created_at.isoformat(),
-        "updated_at": section.updated_at.isoformat(),
+        "success": True,
+        "note_id": note.id,
+        "message": "Note added to workspace."
+    }
+
+@mcp.tool
+def read_notes(
+    query: Optional[str] = None,
+    tag: Optional[str] = None,
+    session_id: str = "default"
+) -> dict[str, Any]:
+    """Read notes from the workspace.
+    
+    Args:
+        query: Optional text to search for in note content.
+        tag: Optional tag to filter by.
+        session_id: Session ID.
+    """
+    storage = get_storage()
+    session = storage.get_or_create_session(session_id)
+    
+    results = []
+    for note in session.state.notes:
+        if tag and tag not in note.tags:
+            continue
+        if query and query.lower() not in note.content.lower():
+            continue
+        results.append(note.dict())
+        
+    return {
+        "count": len(results),
+        "notes": results
     }
 
 
+# =============================================================================
+# DRAFT Tools (The Manuscript)
+# =============================================================================
+
 @mcp.tool
-def write_section(
-    section_name: str,
+def write_draft_section(
+    section_id: str,
+    title: str,
     content: str,
-    session_id: str = "default",
-    agent_id: str = "unknown",
-    status: str = "draft",
-    outline_position: int | None = None,
+    session_id: str = "default"
 ) -> dict[str, Any]:
-    """Write or overwrite content to a named section.
+    """Write or overwrite a section of the structured draft.
     
     Args:
-        section_name: Name of the section to write
-        content: Content to write to the section
-        session_id: Session ID for the scratchpad
-        agent_id: ID of the agent writing the section
-        status: Status of the section (draft, in_progress, needs_review, complete)
-        outline_position: Position in final report outline (1-based), null if not part of report
-        
-    Returns:
-        Confirmation with section metadata
+        section_id: Unique identifier for the section (e.g., 'executive_summary', 'market_analysis').
+        title: Human-readable title.
+        content: The full text content of the section.
+        session_id: Session ID.
     """
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
-    try:
-        section_status = SectionStatus(status)
-    except ValueError:
-        section_status = SectionStatus.DRAFT
-    
-    now = datetime.utcnow()
-    
-    if section_name in session.sections:
-        # Update existing section
-        existing = session.sections[section_name]
-        existing.content = content
-        existing.status = section_status
-        existing.version += 1
-        existing.updated_at = now
-        existing.outline_position = outline_position
-        if agent_id not in existing.contributors and agent_id != existing.author:
-            existing.contributors.append(agent_id)
-        is_new = False
+    if section_id in session.state.draft_sections:
+        # Update existing
+        section = session.state.draft_sections[section_id]
+        section.title = title
+        section.content = content
+        section.last_updated = datetime.now()
+        section.version += 1
     else:
-        # Create new section
-        session.sections[section_name] = Section(
-            name=section_name,
-            content=content,
-            status=section_status,
-            author=agent_id,
-            outline_position=outline_position,
-            created_at=now,
-            updated_at=now,
+        # Create new
+        section = DraftSection(
+            id=section_id,
+            title=title,
+            content=content
         )
-        is_new = True
-    
+        session.state.draft_sections[section_id] = section
+        
     storage.save_session(session)
-    section = session.sections[section_name]
     
     return {
         "success": True,
-        "is_new": is_new,
-        "name": section.name,
+        "section_id": section_id,
         "version": section.version,
-        "status": section.status.value,
-        "updated_at": section.updated_at.isoformat(),
+        "message": f"Section '{title}' updated."
     }
 
-
 @mcp.tool
-def append_to_section(
-    section_name: str,
-    content: str,
-    session_id: str = "default",
-    agent_id: str = "unknown",
+def read_draft(
+    section_id: Optional[str] = None,
+    session_id: str = "default"
 ) -> dict[str, Any]:
-    """Append content to an existing section without overwriting.
+    """Read the current draft.
     
     Args:
-        section_name: Name of the section to append to
-        content: Content to append
-        session_id: Session ID for the scratchpad
-        agent_id: ID of the agent appending content
-        
-    Returns:
-        Confirmation with updated section metadata
+        section_id: If provided, returns only that section. If None, returns full draft.
+        session_id: Session ID.
     """
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
-    if section_name not in session.sections:
-        return {"error": f"Section '{section_name}' not found", "success": False}
+    if section_id:
+        if section_id not in session.state.draft_sections:
+            return {"error": "Section not found"}
+        return {"section": session.state.draft_sections[section_id].dict()}
     
-    section = session.sections[section_name]
-    section.content += "\n" + content
-    section.version += 1
-    section.updated_at = datetime.utcnow()
+    # Return full draft sorted by something? For now just dict.
+    return {
+        "sections": {k: v.dict() for k, v in session.state.draft_sections.items()}
+    }
+
+
+# =============================================================================
+# PLAN Tools (The Checklist)
+# =============================================================================
+
+@mcp.tool
+def add_task(
+    description: str,
+    dependencies: List[str] = [],
+    session_id: str = "default"
+) -> dict[str, Any]:
+    """Add a task to the shared plan.
     
-    if agent_id not in section.contributors and agent_id != section.author:
-        section.contributors.append(agent_id)
+    Args:
+        description: What needs to be done.
+        dependencies: List of task IDs that must be completed first.
+        session_id: Session ID.
+    """
+    storage = get_storage()
+    session = storage.get_or_create_session(session_id)
     
+    task = Task(
+        description=description,
+        dependencies=dependencies
+    )
+    session.state.plan.append(task)
     storage.save_session(session)
     
     return {
         "success": True,
-        "name": section.name,
-        "version": section.version,
-        "content_length": len(section.content),
-        "updated_at": section.updated_at.isoformat(),
+        "task_id": task.id,
+        "message": "Task added to plan."
     }
 
-
 @mcp.tool
-def list_sections(session_id: str = "default") -> dict[str, Any]:
-    """List all sections in the current session scratchpad with their metadata.
-    
-    Args:
-        session_id: Session ID for the scratchpad
-        
-    Returns:
-        List of section summaries (without full content)
-    """
-    storage = get_storage()
-    session = storage.get_or_create_session(session_id)
-    
-    sections = [section.to_summary() for section in session.sections.values()]
-    
-    return {
-        "session_id": session_id,
-        "section_count": len(sections),
-        "sections": sections,
-    }
-
-
-# =============================================================================
-# Checklist Tools
-# =============================================================================
-
-
-@mcp.tool
-def get_checklist(session_id: str = "default") -> dict[str, Any]:
-    """Get the current state of the research checklist.
-    
-    Args:
-        session_id: Session ID for the scratchpad
-        
-    Returns:
-        List of checklist items with their status
-    """
-    storage = get_storage()
-    session = storage.get_or_create_session(session_id)
-    
-    items = [
-        {
-            "id": item.id,
-            "task": item.task,
-            "agent": item.agent,
-            "status": item.status.value,
-            "notes": item.notes,
-            "updated_at": item.updated_at.isoformat(),
-        }
-        for item in session.checklist
-    ]
-    
-    return {
-        "session_id": session_id,
-        "item_count": len(items),
-        "items": items,
-    }
-
-
-@mcp.tool
-def update_checklist(
-    item_id: str,
+def update_task(
+    task_id: str,
     status: str,
     session_id: str = "default",
-    notes: str | None = None,
+    assigned_to: Optional[str] = None
 ) -> dict[str, Any]:
-    """Update the status of a checklist item.
+    """Update a task's status or assignment.
     
     Args:
-        item_id: ID of the checklist item
-        status: New status (pending, in_progress, completed, failed)
-        session_id: Session ID for the scratchpad
-        notes: Optional notes about the status change
-        
-    Returns:
-        Updated checklist item or error
+        task_id: The ID of the task.
+        status: New status (todo, in_progress, completed, blocked).
+        assigned_to: Optional agent ID to assign the task to.
+        session_id: Session ID.
     """
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
-    try:
-        new_status = ChecklistStatus(status)
-    except ValueError:
-        return {"error": f"Invalid status: {status}", "success": False}
-    
-    for item in session.checklist:
-        if item.id == item_id:
-            old_status = item.status
-            item.status = new_status
-            item.updated_at = datetime.utcnow()
-            if notes:
-                item.notes = notes
-            storage.save_session(session)
-            return {
-                "success": True,
-                "id": item.id,
-                "old_status": old_status.value,
-                "new_status": item.status.value,
-                "notes": item.notes,
-            }
-    
-    return {"error": f"Checklist item '{item_id}' not found", "success": False}
-
-
-@mcp.tool
-def add_checklist_item(
-    task: str,
-    agent: str,
-    session_id: str = "default",
-    item_id: str | None = None,
-) -> dict[str, Any]:
-    """Add a new item to the checklist.
-    
-    Args:
-        task: Description of the task
-        agent: Agent responsible for the task
-        session_id: Session ID for the scratchpad
-        item_id: Optional custom ID (auto-generated if not provided)
+    found = False
+    for task in session.state.plan:
+        if task.id == task_id:
+            task.status = status
+            if assigned_to:
+                task.assigned_to = assigned_to
+            found = True
+            break
+            
+    if not found:
+        return {"error": "Task not found"}
         
-    Returns:
-        Created checklist item
-    """
-    storage = get_storage()
-    session = storage.get_or_create_session(session_id)
-    
-    if item_id is None:
-        item_id = f"task_{len(session.checklist) + 1}"
-    
-    item = ChecklistItem(
-        id=item_id,
-        task=task,
-        agent=agent,
-    )
-    session.checklist.append(item)
     storage.save_session(session)
-    
-    return {
-        "success": True,
-        "id": item.id,
-        "task": item.task,
-        "agent": item.agent,
-        "status": item.status.value,
-    }
-
-
-# =============================================================================
-# Question Tools
-# =============================================================================
-
+    return {"success": True, "task_id": task_id, "status": status}
 
 @mcp.tool
-def add_question(
-    question: str,
-    context: str,
-    session_id: str = "default",
-    agent_id: str = "unknown",
-    priority: str = "medium",
-    blocking: bool = False,
-    options: list[str] | None = None,
-) -> dict[str, Any]:
-    """Add a question for human review.
+def read_plan(session_id: str = "default") -> dict[str, Any]:
+    """Read the current plan/checklist.
     
     Args:
-        question: The question to ask the human
-        context: Why this information is needed (helps user provide better answer)
-        session_id: Session ID for the scratchpad
-        agent_id: ID of the agent asking the question
-        priority: Priority level (high, medium, low)
-        blocking: If true, workflow should pause until answered
-        options: Optional multiple choice options
-        
-    Returns:
-        Created question with ID
+        session_id: Session ID.
     """
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
-    try:
-        q_priority = QuestionPriority(priority)
-    except ValueError:
-        q_priority = QuestionPriority.MEDIUM
-    
-    question_id = f"q_{uuid.uuid4().hex[:8]}"
-    
-    q = Question(
-        id=question_id,
-        question=question,
-        context=context,
-        asked_by=agent_id,
-        priority=q_priority,
-        blocking=blocking,
-        options=options,
-    )
-    session.questions.append(q)
-    storage.save_session(session)
-    
     return {
-        "success": True,
-        "id": q.id,
-        "question": q.question,
-        "priority": q.priority.value,
-        "blocking": q.blocking,
-    }
-
-
-@mcp.tool
-def get_pending_questions(session_id: str = "default") -> dict[str, Any]:
-    """Get all questions that haven't been answered yet.
-    
-    Args:
-        session_id: Session ID for the scratchpad
-        
-    Returns:
-        List of pending questions
-    """
-    storage = get_storage()
-    session = storage.get_or_create_session(session_id)
-    
-    pending = [
-        {
-            "id": q.id,
-            "question": q.question,
-            "context": q.context,
-            "asked_by": q.asked_by,
-            "priority": q.priority.value,
-            "blocking": q.blocking,
-            "options": q.options,
-            "created_at": q.created_at.isoformat(),
-        }
-        for q in session.questions
-        if q.answer is None
-    ]
-    
-    has_blocking = any(q["blocking"] for q in pending)
-    
-    return {
-        "session_id": session_id,
-        "count": len(pending),
-        "has_blocking": has_blocking,
-        "questions": pending,
-    }
-
-
-@mcp.tool
-def get_answered_questions(session_id: str = "default") -> dict[str, Any]:
-    """Get questions that have been answered by the human.
-    
-    Args:
-        session_id: Session ID for the scratchpad
-        
-    Returns:
-        List of answered questions with their answers
-    """
-    storage = get_storage()
-    session = storage.get_or_create_session(session_id)
-    
-    answered = [
-        {
-            "id": q.id,
-            "question": q.question,
-            "answer": q.answer,
-            "asked_by": q.asked_by,
-            "answered_at": q.answered_at.isoformat() if q.answered_at else None,
-        }
-        for q in session.questions
-        if q.answer is not None
-    ]
-    
-    return {
-        "session_id": session_id,
-        "count": len(answered),
-        "questions": answered,
-    }
-
-
-@mcp.tool
-def submit_answers(
-    answers: dict[str, str],
-    session_id: str = "default",
-) -> dict[str, Any]:
-    """Submit answers to pending questions.
-    
-    Args:
-        answers: Map of question_id to answer string
-        session_id: Session ID for the scratchpad
-        
-    Returns:
-        Summary of submitted answers
-    """
-    storage = get_storage()
-    session = storage.get_or_create_session(session_id)
-    
-    now = datetime.utcnow()
-    answered_ids = []
-    not_found = []
-    
-    for question_id, answer in answers.items():
-        found = False
-        for q in session.questions:
-            if q.id == question_id:
-                q.answer = answer
-                q.answered_at = now
-                answered_ids.append(question_id)
-                found = True
-                break
-        if not found:
-            not_found.append(question_id)
-    
-    storage.save_session(session)
-    
-    # Also write answers to a special section for agents to read
-    if answered_ids:
-        answers_content = "\n".join(
-            f"Q: {q.question}\nA: {q.answer}"
-            for q in session.questions
-            if q.answer is not None
-        )
-        if "user_answers" not in session.sections:
-            session.sections["user_answers"] = Section(
-                name="user_answers",
-                content=answers_content,
-                author="human",
-                status=SectionStatus.COMPLETE,
-            )
-        else:
-            session.sections["user_answers"].content = answers_content
-            session.sections["user_answers"].version += 1
-            session.sections["user_answers"].updated_at = now
-        storage.save_session(session)
-    
-    return {
-        "success": True,
-        "answered_count": len(answered_ids),
-        "answered_ids": answered_ids,
-        "not_found": not_found,
+        "tasks": [t.dict() for t in session.state.plan]
     }
 
 

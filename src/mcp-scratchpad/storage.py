@@ -10,12 +10,7 @@ from datetime import datetime
 from typing import Protocol
 
 from models import (
-    ChecklistItem,
-    ChecklistStatus,
-    Question,
     ScratchpadSession,
-    Section,
-    SectionStatus,
 )
 
 

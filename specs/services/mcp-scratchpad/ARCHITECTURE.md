@@ -13,15 +13,23 @@ MCP Server providing shared workspace for inter-agent communication and collabor
 
 ## Design Philosophy
 
+### The "Shared Brain" Workspace
+
+The scratchpad is designed as a **collaborative workspace** that mimics how a human team works on a project. It is divided into three distinct pillars:
+
+| Pillar | Metaphor | Purpose | Characteristics |
+|--------|----------|---------|-----------------|
+| **NOTES** | The Corkboard | Raw facts, findings, URLs, and snippets found during research. | Unstructured, append-only, searchable, atomic. |
+| **DRAFT** | The Manuscript | The structured deliverable being built (e.g., the final report). | Structured, versioned, overwritable sections. |
+| **PLAN** | The Checklist | The shared to-do list coordinating the team's efforts. | Dynamic, status-tracking, dependency-aware. |
+
 ### Agent Inputs/Outputs vs. Scratchpad
 
 | Concept | Purpose | Example |
 |---------|---------|---------|
-| **Agent Input** | Concise task instruction from orchestrator | "Analyze coffee market in Prague, focus on specialty segment" |
-| **Agent Output** | Status + key insights summary (keeps orchestrator context manageable) | "Analysis complete. Found 3 key competitors. Details in scratchpad." |
-| **Scratchpad** | Collaborative workspace for detailed findings and evolving documents | Full market analysis, competitor profiles, draft report sections |
-
-The scratchpad is the **working memory** where agents collaborate on the actual deliverable (final report), while agent inputs/outputs are lightweight coordination messages.
+| **Agent Input** | Concise task instruction from orchestrator | "Analyze coffee market in Prague, check the Notes for existing data." |
+| **Agent Output** | Status + key insights summary | "Task complete. Added 5 notes and updated the 'Market' draft section." |
+| **Scratchpad** | The actual work product and shared context | The full list of competitor prices (Notes) and the written analysis (Draft). |
 
 ## Component Diagram
 
@@ -38,8 +46,12 @@ flowchart TB
     subgraph MCP["mcp-scratchpad Container"]
         Server[MCP Server]
         Store[In-Memory Store]
-        QMgr[Question Manager]
-        NotifPub[Notification Publisher]
+        
+        subgraph Workspace["Workspace State"]
+            Notes[Notes (Corkboard)]
+            Draft[Draft (Manuscript)]
+            Plan[Plan (Checklist)]
+        end
     end
     
     subgraph Orchestrator["Orchestrator"]
@@ -48,83 +60,77 @@ flowchart TB
     
     MA & CA & LS & FA & SY -->|MCP Tools| Server
     Server --> Store
-    Server --> QMgr
-    Server --> NotifPub
-    NotifPub -->|Notifications| Orch
+    Store --> Workspace
+    
+    MA -->|add_note| Notes
+    SY -->|read_notes| Notes
+    SY -->|write_draft_section| Draft
+    Orch -->|add_task| Plan
 ```
 
 ## MCP Tools
 
-### Section Management (Collaborative Document)
+### Notes (The Corkboard)
 
 | Tool | Description |
 |------|-------------|
-| `read_section` | Read a named section from scratchpad |
-| `write_section` | Write/overwrite content to a named section (with metadata) |
-| `append_to_section` | Append content to existing section |
-| `list_sections` | List all sections with their status and metadata |
+| `add_note` | Add a raw finding, fact, or URL to the workspace |
+| `read_notes` | Search and filter notes by tag or content |
 
-### Progress Tracking
+### Draft (The Manuscript)
 
 | Tool | Description |
 |------|-------------|
-| `update_checklist` | Update task completion status |
-| `get_checklist` | Get current checklist state |
+| `write_draft_section` | Write or overwrite a structured section of the report |
+| `read_draft` | Read the current state of the draft (full or specific section) |
 
-### Human Questions Queue
+### Plan (The Checklist)
 
 | Tool | Description |
 |------|-------------|
-| `add_question` | Add a question for human review |
-| `get_pending_questions` | Get all unanswered questions |
-| `submit_answers` | Submit human answers (called by orchestrator) |
-| `get_answered_questions` | Get questions that have been answered |
+| `add_task` | Add a new task to the plan |
+| `update_task` | Update status or assignment of a task |
+| `read_plan` | Get the current state of the plan |
 
-## Scratchpad Section Structure
+## Workspace Structure
 
-Sections are structured to support collaborative editing and document evolution:
+The workspace state is a single cohesive object containing the three pillars:
 
+```json
+{
+  "notes": [
+    {
+      "id": "n1",
+      "content": "Competitor X charges $10/mo",
+      "tags": ["pricing", "competitor"],
+      "author": "market-analyst",
+      "timestamp": "..."
+    }
+  ],
+  "draft_sections": {
+    "executive_summary": {
+      "title": "Executive Summary",
+      "content": "...",
+      "version": 2
+    }
+  },
+  "plan": [
+    {
+      "id": "t1",
+      "description": "Analyze market size",
+      "status": "completed",
+      "assigned_to": "market-analyst"
+    }
+  ]
+}
 ```
-sections:
-  market_findings:
-    status: "complete"           # draft | in_progress | complete | needs_review
-    author: "market-analyst"     # Primary author
-    contributors: ["synthesizer"] # Other agents that modified
-    version: 3
-    content: "..."
-    outline_position: 2          # Position in final report (null if not in report)
-    last_updated: "2025-11-28T10:00:00Z"
-    
-  final_report:
-    status: "draft"
-    author: "synthesizer"
-    contributors: ["market-analyst", "competitor-analyst", "finance-analyst"]
-    version: 7
-    content: |
-      # Coffee Shop Feasibility Study - Prague
-      
-      ## Executive Summary
-      [synthesizer builds this progressively]
-      
-      ## Market Analysis
-      [pulled from market_findings]
-      ...
-    outline_position: null       # This IS the report
-    last_updated: "..."
-```
 
-### Section Lifecycle
+### Workflow Example
 
-```mermaid
-stateDiagram-v2
-    [*] --> draft: Agent creates section
-    draft --> in_progress: Agent starts detailed work
-    in_progress --> needs_review: Agent requests review
-    in_progress --> complete: Agent marks done
-    needs_review --> in_progress: Another agent revises
-    needs_review --> complete: Reviewer approves
-    complete --> in_progress: Synthesizer incorporates into report
-```
+1. **Orchestrator** initializes the **Plan** with tasks.
+2. **Market Analyst** picks up a task, researches, and dumps findings into **Notes** using `add_note`.
+3. **Market Analyst** synthesizes those notes into a **Draft Section** using `write_draft_section`.
+4. **Synthesizer** reads all **Draft Sections** and **Notes** to write the final "Executive Summary".
 
 ## Human Questions Architecture
 

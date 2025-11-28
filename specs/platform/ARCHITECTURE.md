@@ -233,37 +233,33 @@ sequenceDiagram
     User->>UI: "Should Cofilot expand to Vienna?"
     UI->>Orch: POST /research/start
     
-    Orch->>SP: read_checklist()
-    SP-->>Orch: checklist status
+    Orch->>SP: read_plan()
+    SP-->>Orch: plan status
     
-    loop Until checklist complete
-        alt Questions pending
-            Orch->>UI: SSE: questions_pending
-            UI->>User: Show questions modal
-            User->>UI: Answers
-            UI->>Orch: POST /research/{id}/answers
-            Orch->>SP: write_answers()
-        end
-        
+    loop Until plan complete
         Orch->>MA: Invoke via Foundry SDK
-        MA->>SP: write_section(market_findings)
+        MA->>SP: add_note("Market size is €500M")
+        MA->>SP: write_draft_section(market_analysis)
         Orch->>UI: SSE: agent_activity(market-analyst)
         
         Orch->>CA: Invoke via Foundry SDK
-        CA->>SP: write_section(competitor_analysis)
+        CA->>SP: add_note("Competitor X is dominant")
+        CA->>SP: write_draft_section(competitor_landscape)
         Orch->>UI: SSE: agent_activity(competitor-analyst)
         
         Orch->>LS: Invoke via Foundry Responses API
-        LS->>SP: write_section(location_options)
+        LS->>SP: add_note("Found 3 viable locations")
+        LS->>SP: write_draft_section(location_options)
         Orch->>UI: SSE: agent_activity(location-scout)
         
         Orch->>FA: Invoke via A2A Protocol
-        FA->>SP: write_section(financial_projections)
+        FA->>SP: read_notes(tag="pricing")
+        FA->>SP: write_draft_section(financial_plan)
         Orch->>UI: SSE: agent_activity(finance-analyst)
     end
     
     Orch->>SY: Invoke via Foundry SDK
-    SY->>SP: read_all_sections()
+    SY->>SP: read_draft()
     SY-->>Orch: Final report
     Orch->>UI: SSE: research_complete
     UI->>User: Display report
@@ -273,17 +269,13 @@ sequenceDiagram
 
 ```
 Tools:
-├── read_section(section: str) -> dict
-│   Sections: market_findings, competitor_analysis, location_options, 
-│             regulations, financial_projections, user_answers
-├── write_section(section: str, content: dict) -> bool
-├── append_to_section(section: str, content: dict) -> bool
-├── list_sections() -> list[str]
-├── read_checklist() -> list[ChecklistItem]
-├── update_checklist(item_id: int, status: str, notes: str) -> bool
-├── add_question(question: str, context: str, priority: str) -> str
-├── get_pending_questions() -> list[Question]
-└── submit_answers(answers: dict) -> bool
+├── add_note(content: str, tags: list[str]) -> str
+├── read_notes(query: str, tag: str) -> list[Note]
+├── write_draft_section(section_id: str, title: str, content: str) -> bool
+├── read_draft(section_id: str) -> dict
+├── add_task(description: str, dependencies: list[str]) -> str
+├── update_task(task_id: str, status: str, assigned_to: str) -> bool
+└── read_plan() -> list[Task]
 ```
 
 ### MCP Server: mcp-web-search

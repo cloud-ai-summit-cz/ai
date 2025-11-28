@@ -47,7 +47,7 @@ agents:
 
 mcp_servers:
   scratchpad:
-    enabled: true
+    enabled: false
     port: 8010
     # command: "uv run uvicorn mcp_scratchpad.main:app --host 0.0.0.0 --port {port}"
 

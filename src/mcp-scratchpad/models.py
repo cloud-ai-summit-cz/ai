@@ -5,98 +5,49 @@ Designed to be storage-agnostic - can be used with in-memory, Cosmos DB, Redis, 
 """
 
 from datetime import datetime
-from enum import Enum
-from typing import Any
+from typing import Dict, List, Optional
+import uuid
 
 from pydantic import BaseModel, Field
 
 
-class SectionStatus(str, Enum):
-    """Status of a scratchpad section."""
-
-    DRAFT = "draft"
-    IN_PROGRESS = "in_progress"
-    NEEDS_REVIEW = "needs_review"
-    COMPLETE = "complete"
-
-
-class ChecklistStatus(str, Enum):
-    """Status of a checklist item."""
-
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class QuestionPriority(str, Enum):
-    """Priority level for human questions."""
-
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-
-
-class Section(BaseModel):
-    """Named section in scratchpad with collaborative editing support."""
-
-    name: str
+class Note(BaseModel):
+    """A raw piece of information, fact, or finding."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
     content: str
-    status: SectionStatus = SectionStatus.DRAFT
-    author: str  # Agent that created it
-    contributors: list[str] = Field(default_factory=list)  # Other agents that modified
+    author: str  # The name of the agent who created it
+    timestamp: datetime = Field(default_factory=datetime.now)
+    tags: List[str] = Field(default_factory=list)
+
+
+class DraftSection(BaseModel):
+    """A structured section of the final report/output."""
+    id: str
+    title: str
+    content: str
+    last_updated: datetime = Field(default_factory=datetime.now)
     version: int = 1
-    outline_position: int | None = None  # Position in final report (null if not part of report)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-
-    def to_summary(self) -> dict[str, Any]:
-        """Return a summary of the section without full content."""
-        return {
-            "name": self.name,
-            "status": self.status.value,
-            "author": self.author,
-            "contributors": self.contributors,
-            "version": self.version,
-            "outline_position": self.outline_position,
-            "content_length": len(self.content),
-            "updated_at": self.updated_at.isoformat(),
-        }
 
 
-class ChecklistItem(BaseModel):
-    """Task tracking item."""
-
-    id: str
-    task: str
-    agent: str
-    status: ChecklistStatus = ChecklistStatus.PENDING
-    notes: str | None = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+class Task(BaseModel):
+    """A unit of work to be done."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
+    description: str
+    status: str = "todo"  # todo, in_progress, completed, blocked
+    assigned_to: Optional[str] = None
+    dependencies: List[str] = Field(default_factory=list)  # IDs of other tasks
 
 
-class Question(BaseModel):
-    """Question queued for human review."""
-
-    id: str
-    question: str
-    context: str  # Why this information is needed
-    asked_by: str  # Agent that asked
-    priority: QuestionPriority = QuestionPriority.MEDIUM
-    blocking: bool = False  # If true, workflow should pause for this
-    options: list[str] | None = None  # Optional multiple choice
-    answer: str | None = None  # Human's answer (null until answered)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    answered_at: datetime | None = None
+class WorkspaceState(BaseModel):
+    """The core state of the workspace."""
+    notes: List[Note] = Field(default_factory=list)
+    draft_sections: Dict[str, DraftSection] = Field(default_factory=dict)
+    plan: List[Task] = Field(default_factory=list)
 
 
 class ScratchpadSession(BaseModel):
     """Session container for scratchpad data."""
-
     session_id: str
-    sections: dict[str, Section] = Field(default_factory=dict)
-    checklist: list[ChecklistItem] = Field(default_factory=list)
-    questions: list[Question] = Field(default_factory=list)
+    state: WorkspaceState = Field(default_factory=WorkspaceState)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
