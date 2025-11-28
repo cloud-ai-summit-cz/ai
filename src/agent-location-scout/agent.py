@@ -34,7 +34,7 @@ def create_llm() -> AzureChatOpenAI:
     endpoint = settings.azure_openai_endpoint or settings.azure_ai_foundry_endpoint
     
     return AzureChatOpenAI(
-        azure_deployment=settings.azure_ai_model_deployment_name,
+        azure_deployment=settings.effective_model_deployment,
         azure_endpoint=endpoint,
         azure_ad_token_provider=token_provider,
         api_version="2024-10-21",

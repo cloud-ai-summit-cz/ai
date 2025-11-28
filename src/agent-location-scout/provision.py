@@ -138,13 +138,26 @@ def deploy_foundry() -> None:
 
 
 def delete_agent() -> None:
-    """Delete the hosted agent."""
+    """Delete the hosted agent (latest version)."""
     settings = get_settings()
     client = get_client()
 
     print(f"Deleting agent: {settings.agent_name}")
-    client.agents.delete_version(name=settings.agent_name)
-    print(f"✓ Agent deleted")
+    
+    # Get the agent to find latest version
+    agent = get_agent_by_name(client, settings.agent_name)
+    if not agent:
+        print(f"Agent '{settings.agent_name}' not found")
+        return
+    
+    version = agent.versions.get("latest", {}).get("version")
+    if not version:
+        print("No version found for agent")
+        return
+        
+    print(f"Deleting version: {version}")
+    client.agents.delete_version(agent_name=settings.agent_name, agent_version=str(version))
+    print(f"✓ Agent version {version} deleted")
 
 
 def get_container_status() -> dict | None:
@@ -292,6 +305,42 @@ def stop_agent() -> None:
     print(f"  Status: {result.get('status', 'N/A')}")
 
 
+def delete_container() -> None:
+    """Delete the hosted agent container via REST API."""
+    settings = get_settings()
+    base_url = get_data_plane_base_url(settings.azure_ai_foundry_endpoint)
+    token = get_data_plane_token()
+    account_name, project_name = parse_endpoint(settings.azure_ai_foundry_endpoint)
+    
+    # Get the latest version number
+    client = get_client()
+    agent = get_agent_by_name(client, settings.agent_name)
+    if not agent:
+        print(f"Error: Agent '{settings.agent_name}' not found.")
+        sys.exit(1)
+    
+    version = agent.versions.get("latest", {}).get("version", "1")
+    
+    print(f"Deleting hosted container: {settings.agent_name} (version {version})")
+    print(f"  Account: {account_name}")
+    print(f"  Project: {project_name}")
+    
+    url = f"{base_url}/agents/{settings.agent_name}/versions/{version}/containers/default:delete"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    params = {"api-version": AGENT_API_VERSION}
+    
+    response = requests.post(url, headers=headers, params=params, json={}, timeout=60)
+    response.raise_for_status()
+    result = response.json()
+    
+    print(f"✓ Delete container command sent successfully")
+    print(f"  Operation ID: {result.get('id', 'N/A')}")
+    print(f"  Status: {result.get('status', 'N/A')}")
+
+
 def list_agents() -> None:
     """List all agents in the project."""
     client = get_client()
@@ -380,22 +429,28 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Commands:
-  deploy   Create/update hosted agent version (idempotent)
-  start    Start the hosted agent container
-  stop     Stop the hosted agent container
-  delete   Delete the hosted agent
-  list     List all agents in the project
-  status   Show current configuration and container status
+  deploy           Create/update hosted agent version (idempotent)
+  start            Start the hosted agent container
+  stop             Stop the hosted agent container
+  delete-container Delete the hosted container (required before delete)
+  delete           Delete the hosted agent version
+  list             List all agents in the project
+  status           Show current configuration and container status
 
 Typical workflow:
   1. uv run python provision.py deploy   # Create agent version
   2. uv run python provision.py start    # Start the container
   3. uv run python provision.py status   # Check status
+  
+To remove an agent:
+  1. uv run python provision.py stop              # Stop container
+  2. uv run python provision.py delete-container  # Delete container
+  3. uv run python provision.py delete            # Delete agent version
         """,
     )
     parser.add_argument(
         "command",
-        choices=["deploy", "start", "stop", "delete", "list", "status"],
+        choices=["deploy", "start", "stop", "delete-container", "delete", "list", "status"],
         help="Command to execute",
     )
 
@@ -405,6 +460,7 @@ Typical workflow:
         "deploy": deploy_foundry,
         "start": start_agent,
         "stop": stop_agent,
+        "delete-container": delete_container,
         "delete": delete_agent,
         "list": list_agents,
         "status": show_status,

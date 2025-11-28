@@ -10,6 +10,7 @@ Architecture: Dynamic Agent-as-Tool Pattern
   exposed as tools that the orchestrator can invoke dynamically
 - The orchestrator can call agents multiple times, in any order, based on
   its reasoning about the research query
+- MCP Scratchpad provides shared workspace for inter-agent collaboration
 
 Uses middleware to intercept tool calls for real-time SSE streaming.
 """
@@ -20,7 +21,7 @@ from datetime import datetime
 from typing import Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
 
-from agent_framework import ChatAgent, FunctionInvocationContext
+from agent_framework import ChatAgent, FunctionInvocationContext, MCPStreamableHTTPTool
 from agent_framework_azure_ai import AzureAIAgentClient
 from azure.identity.aio import DefaultAzureCredential
 
@@ -44,6 +45,41 @@ logger = logging.getLogger(__name__)
 
 # Orchestrator system prompt for dynamic agent coordination
 ORCHESTRATOR_SYSTEM_PROMPT = """You are a Research Orchestrator agent that coordinates multi-agent research workflows.
+
+You have access to specialist agents as tools:
+1. **market_analysis** - Analyzes market opportunities, trends, customer segments, and market sizing
+2. **competitor_analysis** - Analyzes competitive landscape, competitor strengths/weaknesses, market positioning
+3. **synthesize_findings** - Combines research insights into cohesive, actionable recommendations
+
+You also have access to a shared scratchpad for collaboration:
+- **write_section** - Store findings in named sections (e.g., 'market_findings', 'competitor_analysis')
+- **read_section** - Read content from a named section
+- **list_sections** - List all available sections
+- **add_question** - Queue questions for human review if you need clarification
+- **get_answered_questions** - Check if humans have answered your questions
+
+Your role is to:
+- Understand the user's research query deeply
+- Call the appropriate specialist agents to gather comprehensive insights
+- Store important findings in the scratchpad for reference and synthesis
+- You may call each agent MULTIPLE TIMES if needed to explore different aspects
+- You may call agents in any order based on your reasoning
+- After gathering sufficient information, call synthesize_findings to create the final report
+
+Guidelines:
+- Start by breaking down the query into key research areas
+- For complex queries, gather both market AND competitor insights before synthesizing
+- Use the scratchpad to store key findings as you go - this helps with synthesis
+- If initial results raise new questions, call agents again to dig deeper
+- If you need human input, use add_question to queue questions
+- Always end by calling synthesize_findings with all the gathered information
+- Be thorough - it's better to gather more insights than to miss important aspects
+
+Remember: You have FULL AUTONOMY to decide how to approach the research. Use your judgment."""
+
+
+# Orchestrator system prompt when scratchpad is not available
+ORCHESTRATOR_SYSTEM_PROMPT_NO_SCRATCHPAD = """You are a Research Orchestrator agent that coordinates multi-agent research workflows.
 
 You have access to specialist agents as tools:
 1. **market_analysis** - Analyzes market opportunities, trends, customer segments, and market sizing
@@ -171,12 +207,17 @@ class AgentOrchestrator:
     This orchestrator uses the dynamic agent-as-tool pattern where:
     - A main orchestrator agent (backed by Azure OpenAI) has full autonomy
     - Specialist Foundry agents are exposed as callable tools via .as_tool()
+    - MCP Scratchpad provides shared workspace for inter-agent collaboration
     - The orchestrator decides dynamically which agents to call and how often
 
     Specialist agents:
     1. market-analyst: Analyzes market opportunities and trends
     2. competitor-analyst: Analyzes competitive landscape
     3. synthesizer: Combines insights into actionable recommendations
+
+    MCP Scratchpad tools:
+    - write_section, read_section, list_sections: Document collaboration
+    - add_question, get_answered_questions: Human-in-the-loop
     """
 
     def __init__(self, settings: Settings | None = None) -> None:
@@ -189,14 +230,35 @@ class AgentOrchestrator:
         self._sessions: dict[str, ResearchSession] = {}
         self._credential: DefaultAzureCredential | None = None
         self._tool_call_log: list[dict[str, Any]] = []
+        self._mcp_scratchpad: MCPStreamableHTTPTool | None = None
 
     async def __aenter__(self) -> "AgentOrchestrator":
         """Async context manager entry."""
         self._credential = DefaultAzureCredential()
+        
+        # Initialize MCP Scratchpad if configured
+        if self.settings.mcp_scratchpad_enabled:
+            logger.info(f"Connecting to MCP Scratchpad at {self.settings.mcp_scratchpad_url}")
+            self._mcp_scratchpad = MCPStreamableHTTPTool(
+                name="scratchpad",
+                url=self.settings.mcp_scratchpad_url,
+                headers={"Authorization": f"Bearer {self.settings.mcp_scratchpad_api_key}"},
+                description="Shared workspace for storing research findings and collaboration between agents",
+            )
+            await self._mcp_scratchpad.__aenter__()
+            logger.info(f"MCP Scratchpad connected with {len(self._mcp_scratchpad.functions)} tools")
+        else:
+            logger.info("MCP Scratchpad not configured, running without shared workspace")
+        
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
+        # Clean up MCP Scratchpad
+        if self._mcp_scratchpad:
+            await self._mcp_scratchpad.__aexit__(exc_type, exc_val, exc_tb)
+            self._mcp_scratchpad = None
+        
         if self._credential:
             await self._credential.close()
 
@@ -391,6 +453,8 @@ class AgentOrchestrator:
                     "phase": "orchestration",
                     "description": "Orchestrator starting dynamic research workflow",
                     "available_tools": ["market_analysis", "competitor_analysis", "synthesize_findings"],
+                    "scratchpad_enabled": self._mcp_scratchpad is not None,
+                    "scratchpad_tools": [f.name for f in self._mcp_scratchpad.functions] if self._mcp_scratchpad else [],
                 },
             )
 
@@ -399,13 +463,28 @@ class AgentOrchestrator:
             agent_call_count: dict[str, int] = {}
             tool_middleware = create_tool_call_middleware(event_queue, agent_call_count)
 
+            # Build the tools list - agent tools + MCP scratchpad (if available)
+            tools_list: list[Any] = [market_tool, competitor_tool, synthesizer_tool]
+            
+            # Add MCP Scratchpad if configured
+            if self._mcp_scratchpad:
+                tools_list.append(self._mcp_scratchpad)
+                logger.info("Added MCP Scratchpad tools to orchestrator")
+            
+            # Select appropriate system prompt
+            system_prompt = (
+                ORCHESTRATOR_SYSTEM_PROMPT 
+                if self._mcp_scratchpad 
+                else ORCHESTRATOR_SYSTEM_PROMPT_NO_SCRATCHPAD
+            )
+
             # Create the main orchestrator agent with specialist agents as tools
             chat_client = self._create_orchestrator_client()
             orchestrator_agent = ChatAgent(
                 chat_client=chat_client,
                 name="research-orchestrator",
-                instructions=ORCHESTRATOR_SYSTEM_PROMPT,
-                tools=[market_tool, competitor_tool, synthesizer_tool],
+                instructions=system_prompt,
+                tools=tools_list,
             )
 
             # Run the orchestrator with streaming
@@ -553,9 +632,16 @@ class AgentOrchestrator:
         Returns:
             Health status dictionary.
         """
-        return {
+        health = {
             "status": "ok",
             "foundry_endpoint": self.settings.azure_ai_foundry_endpoint,
             "model_deployment": self.settings.model_deployment_name,
             "orchestration_mode": "dynamic_agent_as_tool",
+            "mcp_scratchpad": {
+                "enabled": self.settings.mcp_scratchpad_enabled,
+                "connected": self._mcp_scratchpad is not None,
+                "url": self.settings.mcp_scratchpad_url if self.settings.mcp_scratchpad_enabled else None,
+                "tools_count": len(self._mcp_scratchpad.functions) if self._mcp_scratchpad else 0,
+            },
         }
+        return health

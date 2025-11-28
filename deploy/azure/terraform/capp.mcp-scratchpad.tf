@@ -6,13 +6,21 @@ resource "azapi_resource" "capp_mcp_scratchpad" {
   parent_id = azurerm_resource_group.main.id
   tags      = local.common_tags
 
+  # Ensure role assignment is complete before creating/updating
+  depends_on = [azurerm_role_assignment.acr_pull_container_apps]
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.container_apps.id]
+  }
+
   body = {
     properties = {
       managedEnvironmentId = azapi_resource.container_app_environment.id
       configuration = {
         ingress = {
           external   = true
-          targetPort = 8080
+          targetPort = 8010
           transport  = "http"
           traffic = [
             {
@@ -27,12 +35,18 @@ resource "azapi_resource" "capp_mcp_scratchpad" {
             value = var.mcp_auth_token
           }
         ]
+        registries = [
+          {
+            server   = azurerm_container_registry.main.login_server
+            identity = azurerm_user_assigned_identity.container_apps.id
+          }
+        ]
       }
       template = {
         containers = [
           {
             name  = "mcp-scratchpad"
-            image = var.mcp_scratchpad_image
+            image = local.mcp_scratchpad_image
             resources = {
               cpu    = var.container_cpu
               memory = var.container_memory
@@ -44,7 +58,7 @@ resource "azapi_resource" "capp_mcp_scratchpad" {
               },
               {
                 name  = "PORT"
-                value = "8080"
+                value = "8010"
               },
               {
                 name      = "API_KEY"
@@ -56,7 +70,7 @@ resource "azapi_resource" "capp_mcp_scratchpad" {
                 type = "Liveness"
                 httpGet = {
                   path   = "/health"
-                  port   = 8080
+                  port   = 8010
                   scheme = "HTTP"
                 }
                 initialDelaySeconds = 10
@@ -68,7 +82,7 @@ resource "azapi_resource" "capp_mcp_scratchpad" {
                 type = "Readiness"
                 httpGet = {
                   path   = "/health"
-                  port   = 8080
+                  port   = 8010
                   scheme = "HTTP"
                 }
                 initialDelaySeconds = 5

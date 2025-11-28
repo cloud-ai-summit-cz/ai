@@ -41,12 +41,12 @@ variable "mcp_scratchpad_image" {
     The container image to deploy for the MCP Scratchpad server.
     
     Should include the full registry path and tag.
-    The GitHub Actions workflow pushes to ghcr.io with tag 'latest'.
+    Use ACR images built via deploy/azure/build.py.
     
-    Example: "ghcr.io/your-org/mcp-scratchpad:latest"
+    Example: "myacr.azurecr.io/mcp-scratchpad:latest"
   EOT
   type        = string
-  default     = "ghcr.io/tkubica12/mcp-scratchpad:latest"
+  default     = ""  # Will be computed from ACR if empty
 }
 
 variable "mcp_auth_token" {
@@ -123,12 +123,12 @@ variable "agent_location_scout_image" {
     The container image for the Agent Location Scout.
     
     This is a LangGraph-based agent hosted via azure-ai-agentserver-langgraph.
-    The GitHub Actions workflow pushes to ghcr.io with tag 'latest'.
+    Use ACR images built via deploy/azure/build.py.
     
-    Example: "ghcr.io/cloud-ai-summit-cz/ai/agent-location-scout:latest"
+    Example: "myacr.azurecr.io/agent-location-scout:latest"
   EOT
   type        = string
-  default     = "ghcr.io/cloud-ai-summit-cz/ai/agent-location-scout:latest"
+  default     = ""  # Will be computed from ACR if empty
 }
 
 variable "azure_ai_foundry_endpoint" {
@@ -205,4 +205,24 @@ variable "agent_max_replicas" {
   EOT
   type        = number
   default     = 5
+}
+
+# ============================================================================
+# Azure Container Registry Variables
+# ============================================================================
+
+variable "foundry_project_principal_id" {
+  description = <<-EOT
+    The principal ID of the Azure AI Foundry project managed identity.
+    
+    Used for granting AcrPull permission so hosted agents can pull images.
+    Retrieve via:
+      az rest --method GET --url "https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.MachineLearningServices/workspaces/{project}?api-version=2025-06-01" --query identity.principalId -o tsv
+    
+    Leave empty if not using Azure AI Foundry hosted agents.
+    
+    Example: "88c618b4-c06f-460c-bebf-0b336a41ee54"
+  EOT
+  type        = string
+  default     = ""
 }

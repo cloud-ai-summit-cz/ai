@@ -10,32 +10,43 @@ This service orchestrates research tasks across multiple specialist agents deplo
 - **competitor-analyst**: Analyzes competitive landscape
 - **synthesizer**: Combines insights into actionable recommendations
 
+The orchestrator also integrates with **MCP Scratchpad** for inter-agent collaboration:
+- Shared workspace for storing research findings
+- Human-in-the-loop question queue
+- Document collaboration across agents
+
 The orchestrator exposes a REST API with SSE (Server-Sent Events) streaming for real-time progress updates.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                   Research Orchestrator                      │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │  FastAPI    │  │   MAF       │  │  SSE Publisher      │ │
-│  │  REST API   │──│  Engine     │──│  (Event Streaming)  │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                   Research Orchestrator                          │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐     │
+│  │  FastAPI    │  │   MAF       │  │  SSE Publisher      │     │
+│  │  REST API   │──│  Engine     │──│  (Event Streaming)  │     │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘     │
+└─────────────────────────────────────────────────────────────────┘
                            │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-     ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-     │ market-      │ │ competitor-  │ │ synthesizer  │
-     │ analyst      │ │ analyst      │ │              │
-     │ (Foundry)    │ │ (Foundry)    │ │ (Foundry)    │
-     └──────────────┘ └──────────────┘ └──────────────┘
+        ┌──────────────────┼───────────────────┐
+        │                  │                   │
+        ▼                  ▼                   ▼
+┌──────────────┐  ┌──────────────┐    ┌──────────────┐
+│ Foundry      │  │ Foundry      │    │ MCP          │
+│ Agents       │  │ Agents       │    │ Scratchpad   │
+│              │  │              │    │ (Shared)     │
+└──────────────┘  └──────────────┘    └──────────────┘
+ market-analyst   competitor-analyst   write_section
+ synthesizer                           read_section
+                                       add_question
 ```
 
 ## Workflow
 
-1. **Phase 1 (Concurrent)**: Market analyst and competitor analyst run in parallel
-2. **Phase 2 (Sequential)**: Synthesizer receives combined results and produces recommendations
+1. **Dynamic Orchestration**: The orchestrator autonomously decides which agents to call
+2. **Parallel Execution**: Multiple agents can be invoked concurrently
+3. **Scratchpad Collaboration**: Agents share findings via MCP Scratchpad
+4. **Synthesis**: Final report synthesized from all gathered insights
 
 ## API Endpoints
 
@@ -92,8 +103,10 @@ curl -N http://localhost:8000/research/sessions/{session_id}/start
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `FOUNDRY_ENDPOINT` | (required) | Azure AI Foundry project endpoint |
+| `AZURE_AI_FOUNDRY_ENDPOINT` | (required) | Azure AI Foundry project endpoint |
 | `MODEL_DEPLOYMENT_NAME` | `gpt-5` | Model deployment name |
+| `MCP_SCRATCHPAD_URL` | (optional) | URL to MCP Scratchpad server (e.g., `https://ca-mcp-scratchpad.../mcp`) |
+| `MCP_SCRATCHPAD_API_KEY` | (optional) | API key for MCP Scratchpad authentication |
 | `API_HOST` | `0.0.0.0` | API server host |
 | `API_PORT` | `8000` | API server port |
 | `AGENT_TIMEOUT_SECONDS` | `60` | Individual agent timeout |

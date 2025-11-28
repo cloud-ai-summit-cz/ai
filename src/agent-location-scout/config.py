@@ -28,15 +28,23 @@ class Settings(BaseSettings):
     # Azure OpenAI (for LangGraph agent)
     azure_openai_endpoint: str | None = None
 
-    # Model deployment
+    # Model deployment name
+    # Can be set via AZURE_OPENAI_DEPLOYMENT or MODEL_NAME env vars
     azure_openai_deployment: str = "gpt-5"
+    model_name: str | None = None  # Alternative env var name used by provision.py
 
     # Container image (for hosted agent deployment)
-    container_image: str = "ghcr.io/cloud-ai-summit-cz/ai/agent-location-scout:latest"
+    # Set via CONTAINER_IMAGE env var or use terraform output: agent_location_scout_image
+    container_image: str = ""
 
     # Agent resources
     agent_cpu: str = "1"
     agent_memory: str = "2Gi"
+
+    @property
+    def effective_model_deployment(self) -> str:
+        """Get the model deployment name from either env var."""
+        return self.model_name or self.azure_openai_deployment
 
     @property
     def prompts_dir(self) -> Path:

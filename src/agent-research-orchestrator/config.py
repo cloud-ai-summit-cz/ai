@@ -34,6 +34,18 @@ class Settings(BaseSettings):
         description="Model deployment name in Azure AI Foundry",
     )
 
+    # MCP Scratchpad configuration
+    mcp_scratchpad_url: str = Field(
+        default="",
+        alias="MCP_SCRATCHPAD_URL",
+        description="URL to the MCP Scratchpad server (e.g., https://ca-mcp-scratchpad.../mcp)",
+    )
+    mcp_scratchpad_api_key: str = Field(
+        default="",
+        alias="MCP_SCRATCHPAD_API_KEY",
+        description="API key for MCP Scratchpad authentication",
+    )
+
     # API Configuration
     api_host: str = Field(default="0.0.0.0", description="API host")
     api_port: int = Field(default=8000, description="API port")
@@ -53,6 +65,11 @@ class Settings(BaseSettings):
     def prompts_dir(self) -> Path:
         """Get the prompts directory path."""
         return Path(__file__).parent / "prompts"
+
+    @property
+    def mcp_scratchpad_enabled(self) -> bool:
+        """Check if MCP Scratchpad is configured."""
+        return bool(self.mcp_scratchpad_url and self.mcp_scratchpad_api_key)
 
     def get_prompt(self, prompt_name: str = "system_prompt") -> str:
         """Load a prompt file.

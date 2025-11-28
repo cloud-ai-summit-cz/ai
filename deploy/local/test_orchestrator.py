@@ -229,9 +229,15 @@ def _display_event(event_type: str, data: dict, agent_results: dict[str, dict], 
         phase = event_data.get("phase", "orchestration")
         description = event_data.get("description", "")
         tools = event_data.get("available_tools", [])
+        scratchpad_enabled = event_data.get("scratchpad_enabled", False)
+        scratchpad_tools = event_data.get("scratchpad_tools", [])
         console.print(f"[yellow]⚙ {phase}[/yellow] starting [dim]{timestamp}[/dim]")
         if tools:
             console.print(f"  [dim]Available tools: {', '.join(tools)}[/dim]")
+        if scratchpad_enabled and scratchpad_tools:
+            console.print(f"  [dim]Scratchpad tools: {', '.join(scratchpad_tools)}[/dim]")
+        elif scratchpad_enabled:
+            console.print(f"  [dim]Scratchpad: enabled[/dim]")
         if verbose and description:
             console.print(f"  [dim]Description: {description}[/dim]")
 

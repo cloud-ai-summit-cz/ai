@@ -1,0 +1,25 @@
+# Build Configuration for ACR Tasks
+# Defines containers to build and push to Azure Container Registry
+
+# Azure Container Registry name (auto-detected from Terraform output)
+# Can be overridden via --acr-name flag
+acr_name: ""
+
+# Container definitions
+containers:
+  - name: mcp-scratchpad
+    # Path relative to this config file
+    path: ../../src/mcp-scratchpad
+    # Image name (will be prefixed with ACR login server)
+    image: mcp-scratchpad
+    # Optional: specific tag (default: latest)
+    tag: latest
+    
+  - name: agent-location-scout
+    path: ../../src/agent-location-scout
+    image: agent-location-scout
+    tag: latest
+
+# Optional: build all containers by default
+# Set to false to require explicit --container flag
+build_all_by_default: true
