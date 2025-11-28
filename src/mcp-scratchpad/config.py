@@ -8,15 +8,17 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_file=".env",
+        env_ignore_empty=True,
+        case_sensitive=False,  # Accept HOST, PORT, API_KEY (uppercase)
         extra="ignore",
     )
 
-    # Server settings (standardized env vars)
+    # Server settings
     host: str = "0.0.0.0"
     port: int = 8080
     
     # Authentication
-    api_key: str = "dev-scratchpad-key"  # Fixed API key for authentication
+    api_key: str = "dev-scratchpad-key"
     
     # Feature flags
     debug: bool = False

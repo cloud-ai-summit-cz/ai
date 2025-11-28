@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     azure_openai_deployment: str = "gpt-5"
 
     # Container image (for hosted agent deployment)
-    container_image: str = "ghcr.io/cloud-ai-summit-cz/agent-location-scout:latest"
+    container_image: str = "ghcr.io/cloud-ai-summit-cz/ai/agent-location-scout:latest"
 
     # Agent resources
     agent_cpu: str = "1"

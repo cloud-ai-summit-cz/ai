@@ -49,6 +49,13 @@ def get_client() -> AIProjectClient:
     )
 
 
+def get_data_plane_token() -> str:
+    """Get an access token for the AI Foundry data plane API."""
+    credential = DefaultAzureCredential()
+    token = credential.get_token("https://ai.azure.com/.default")
+    return token.token
+
+
 def parse_endpoint(endpoint: str) -> tuple[str, str]:
     """Parse the Foundry endpoint to extract account and project names.
     
@@ -65,6 +72,12 @@ def parse_endpoint(endpoint: str) -> tuple[str, str]:
         return match.group(1), match.group(2)
     
     raise ValueError(f"Cannot parse endpoint: {endpoint}")
+
+
+def get_data_plane_base_url(endpoint: str) -> str:
+    """Get the data plane base URL from the Foundry endpoint."""
+    account_name, project_name = parse_endpoint(endpoint)
+    return f"https://{account_name}.services.ai.azure.com/api/projects/{project_name}"
 
 
 def get_agent_by_name(client: AIProjectClient, agent_name: str):
@@ -117,21 +130,10 @@ def deploy_foundry() -> None:
     print(f"  Agent Name: {result.name}")
     print(f"  Version: {result.version}")
 
-    # Provide instructions for starting the agent
     print(f"\n" + "=" * 60)
-    print(f"NEXT STEPS - Start the hosted agent:")
+    print(f"NEXT STEP - Start the hosted agent:")
     print(f"=" * 60)
-    print(f"\nOption 1: Azure AI Foundry Portal")
-    print(f"  1. Go to https://ai.azure.com")
-    print(f"  2. Navigate to your project: {project_name}")
-    print(f"  3. Go to Agents > {settings.agent_name}")
-    print(f"  4. Click 'Start hosted agent' button")
-    print(f"\nOption 2: Azure CLI (when available)")
-    print(f"  az cognitiveservices agent start \\")
-    print(f"    --account-name {account_name} \\")
-    print(f"    --project-name {project_name} \\")
-    print(f"    --name {settings.agent_name} \\")
-    print(f"    --agent-version {result.version}")
+    print(f"\n  uv run python provision.py start")
     print(f"\n" + "=" * 60)
 
 
@@ -143,6 +145,151 @@ def delete_agent() -> None:
     print(f"Deleting agent: {settings.agent_name}")
     client.agents.delete_version(name=settings.agent_name)
     print(f"✓ Agent deleted")
+
+
+def get_container_status() -> dict | None:
+    """Get the current container status via REST API.
+    
+    Returns:
+        Container status dict or None if not found.
+    """
+    settings = get_settings()
+    base_url = get_data_plane_base_url(settings.azure_ai_foundry_endpoint)
+    token = get_data_plane_token()
+    
+    # Get the latest version number
+    client = get_client()
+    agent = get_agent_by_name(client, settings.agent_name)
+    if not agent:
+        return None
+    
+    version = "1"  # Default version
+    if hasattr(agent, 'versions') and agent.versions:
+        latest = getattr(agent.versions, 'latest', None)
+        if latest:
+            version = str(getattr(latest, 'version', '1'))
+    
+    url = f"{base_url}/agents/{settings.agent_name}/versions/{version}/containers/default"
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"api-version": AGENT_API_VERSION}
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Warning: Could not fetch container status: {e}")
+        return None
+
+
+def start_agent() -> None:
+    """Start the hosted agent container via REST API."""
+    settings = get_settings()
+    base_url = get_data_plane_base_url(settings.azure_ai_foundry_endpoint)
+    token = get_data_plane_token()
+    account_name, project_name = parse_endpoint(settings.azure_ai_foundry_endpoint)
+    
+    # Get the latest version number
+    client = get_client()
+    agent = get_agent_by_name(client, settings.agent_name)
+    if not agent:
+        print(f"Error: Agent '{settings.agent_name}' not found. Deploy it first with: uv run python provision.py deploy")
+        sys.exit(1)
+    
+    version = "1"  # Default version
+    if hasattr(agent, 'versions') and agent.versions:
+        latest = getattr(agent.versions, 'latest', None)
+        if latest:
+            version = str(getattr(latest, 'version', '1'))
+    
+    print(f"Starting hosted agent: {settings.agent_name} (version {version})")
+    print(f"  Account: {account_name}")
+    print(f"  Project: {project_name}")
+    
+    url = f"{base_url}/agents/{settings.agent_name}/versions/{version}/containers/default:start"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    params = {"api-version": AGENT_API_VERSION}
+    
+    response = requests.post(url, headers=headers, params=params, json={}, timeout=60)
+    response.raise_for_status()
+    result = response.json()
+    
+    print(f"✓ Start command sent successfully")
+    print(f"  Operation ID: {result.get('id', 'N/A')}")
+    print(f"  Status: {result.get('status', 'N/A')}")
+    
+    container = result.get('container', {})
+    print(f"  Container Status: {container.get('status', 'N/A')}")
+    
+    # Poll for status
+    print(f"\nWaiting for container to start...")
+    for i in range(30):  # Wait up to 5 minutes
+        time.sleep(10)
+        status = get_container_status()
+        if status:
+            container_status = status.get('status', 'Unknown')
+            error_msg = status.get('error_message', '')
+            print(f"  [{i+1}] Container status: {container_status}")
+            
+            if error_msg:
+                print(f"  Error: {error_msg}")
+                break
+                
+            if container_status == "Running":
+                print(f"\n✓ Container is now running!")
+                return
+            elif container_status in ["Failed", "Stopped"]:
+                print(f"\n✗ Container failed to start: {container_status}")
+                if error_msg:
+                    print(f"  Error: {error_msg}")
+                sys.exit(1)
+    
+    print(f"\n⚠ Container is still starting. Check status with: uv run python provision.py status")
+
+
+def stop_agent() -> None:
+    """Stop the hosted agent container via REST API."""
+    settings = get_settings()
+    base_url = get_data_plane_base_url(settings.azure_ai_foundry_endpoint)
+    token = get_data_plane_token()
+    account_name, project_name = parse_endpoint(settings.azure_ai_foundry_endpoint)
+    
+    # Get the latest version number
+    client = get_client()
+    agent = get_agent_by_name(client, settings.agent_name)
+    if not agent:
+        print(f"Error: Agent '{settings.agent_name}' not found.")
+        sys.exit(1)
+    
+    version = "1"  # Default version
+    if hasattr(agent, 'versions') and agent.versions:
+        latest = getattr(agent.versions, 'latest', None)
+        if latest:
+            version = str(getattr(latest, 'version', '1'))
+    
+    print(f"Stopping hosted agent: {settings.agent_name} (version {version})")
+    print(f"  Account: {account_name}")
+    print(f"  Project: {project_name}")
+    
+    url = f"{base_url}/agents/{settings.agent_name}/versions/{version}/containers/default:stop"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    params = {"api-version": AGENT_API_VERSION}
+    
+    response = requests.post(url, headers=headers, params=params, json={}, timeout=60)
+    response.raise_for_status()
+    result = response.json()
+    
+    print(f"✓ Stop command sent successfully")
+    print(f"  Operation ID: {result.get('id', 'N/A')}")
+    print(f"  Status: {result.get('status', 'N/A')}")
 
 
 def list_agents() -> None:
@@ -174,7 +321,7 @@ def list_agents() -> None:
 
 
 def show_status() -> None:
-    """Show current configuration and status."""
+    """Show current configuration and container status."""
     settings = get_settings()
     account_name, project_name = parse_endpoint(settings.azure_ai_foundry_endpoint)
     
@@ -197,12 +344,31 @@ def show_status() -> None:
         agent = get_agent_by_name(client, settings.agent_name)
         if agent:
             print(f"\nAgent Status: Registered")
+            version = "1"
             if hasattr(agent, 'versions') and agent.versions:
                 latest = getattr(agent.versions, 'latest', None)
                 if latest:
-                    print(f"Latest Version: {getattr(latest, 'version', 'unknown')}")
+                    version = str(getattr(latest, 'version', '1'))
+                    print(f"Latest Version: {version}")
+            
+            # Get container status
+            container = get_container_status()
+            if container:
+                print(f"\nContainer Status:")
+                print(f"  Status:       {container.get('status', 'Unknown')}")
+                print(f"  Min Replicas: {container.get('min_replicas', 'N/A')}")
+                print(f"  Max Replicas: {container.get('max_replicas', 'N/A')}")
+                print(f"  Created:      {container.get('created_at', 'N/A')}")
+                print(f"  Updated:      {container.get('updated_at', 'N/A')}")
+                error_msg = container.get('error_message', '')
+                if error_msg:
+                    print(f"  Error:        {error_msg}")
+            else:
+                print(f"\nContainer Status: Not deployed")
+                print(f"  Run 'uv run python provision.py start' to start the container")
         else:
             print(f"\nAgent Status: Not deployed")
+            print(f"  Run 'uv run python provision.py deploy' to deploy")
     except Exception as e:
         print(f"\nCould not fetch agent status: {e}")
 
@@ -215,17 +381,21 @@ def main() -> None:
         epilog="""
 Commands:
   deploy   Create/update hosted agent version (idempotent)
+  start    Start the hosted agent container
+  stop     Stop the hosted agent container
   delete   Delete the hosted agent
   list     List all agents in the project
-  status   Show current configuration
+  status   Show current configuration and container status
 
-Note: Starting hosted agents requires Azure Portal or CLI.
-Build and push operations are handled by GitHub Actions.
+Typical workflow:
+  1. uv run python provision.py deploy   # Create agent version
+  2. uv run python provision.py start    # Start the container
+  3. uv run python provision.py status   # Check status
         """,
     )
     parser.add_argument(
         "command",
-        choices=["deploy", "delete", "list", "status"],
+        choices=["deploy", "start", "stop", "delete", "list", "status"],
         help="Command to execute",
     )
 
@@ -233,6 +403,8 @@ Build and push operations are handled by GitHub Actions.
 
     commands = {
         "deploy": deploy_foundry,
+        "start": start_agent,
+        "stop": stop_agent,
         "delete": delete_agent,
         "list": list_agents,
         "status": show_status,
