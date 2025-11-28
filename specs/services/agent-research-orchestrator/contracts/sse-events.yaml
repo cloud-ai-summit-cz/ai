@@ -1,0 +1,432 @@
+openapi: 3.1.0
+info:
+  title: Research Orchestrator SSE Events
+  description: |
+    Documentation of Server-Sent Events emitted by the Research Orchestrator.
+    These events are consumed by the web-research frontend via the `/research/sessions/{id}/start` endpoint.
+  version: 1.0.0
+
+components:
+  schemas:
+    # Base event structure
+    SSEEvent:
+      type: object
+      required:
+        - event_type
+        - session_id
+        - timestamp
+      properties:
+        event_type:
+          type: string
+          description: Type of the event
+        session_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          description: Event-specific payload
+
+    # === Session Lifecycle Events ===
+    
+    SessionStartedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: session_started
+            data:
+              type: object
+              properties:
+                query:
+                  type: string
+                  description: The research query
+                message:
+                  type: string
+                  example: "Research workflow initialized"
+
+    WorkflowCompletedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: workflow_completed
+            data:
+              type: object
+              properties:
+                final_synthesis:
+                  type: string
+                  description: Final research report
+                duration_seconds:
+                  type: number
+
+    WorkflowFailedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: workflow_failed
+            data:
+              type: object
+              properties:
+                error:
+                  type: string
+                error_type:
+                  type: string
+
+    # === Agent Events ===
+
+    AgentStartedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: agent_started
+            data:
+              type: object
+              properties:
+                agent_name:
+                  type: string
+                  enum: [market-analyst, competitor-analyst, location-scout, finance-analyst, synthesizer]
+                task_description:
+                  type: string
+
+    AgentProgressEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: agent_progress
+            data:
+              type: object
+              properties:
+                agent_name:
+                  type: string
+                chunk:
+                  type: string
+                  description: Streaming text chunk from agent
+
+    AgentThinkingEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: agent_thinking
+            data:
+              type: object
+              properties:
+                agent_name:
+                  type: string
+                message:
+                  type: string
+                  description: What the agent is thinking about
+
+    AgentCompletedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: agent_completed
+            data:
+              type: object
+              properties:
+                agent_name:
+                  type: string
+                result_summary:
+                  type: string
+                execution_time_ms:
+                  type: integer
+
+    AgentFailedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: agent_failed
+            data:
+              type: object
+              properties:
+                agent_name:
+                  type: string
+                error:
+                  type: string
+
+    # === Tool Call Events ===
+
+    ToolCallStartedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: tool_call_started
+            data:
+              type: object
+              required:
+                - tool_name
+                - tool_call_id
+                - agent_name
+              properties:
+                tool_name:
+                  type: string
+                  description: Name of the MCP tool being called
+                  examples: [web_search, add_note, write_draft_section]
+                tool_call_id:
+                  type: string
+                  description: Unique ID for this invocation
+                agent_name:
+                  type: string
+                input_args:
+                  type: object
+                  description: Arguments passed to the tool
+
+    ToolCallCompletedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: tool_call_completed
+            data:
+              type: object
+              required:
+                - tool_name
+                - tool_call_id
+                - agent_name
+              properties:
+                tool_name:
+                  type: string
+                tool_call_id:
+                  type: string
+                agent_name:
+                  type: string
+                output:
+                  description: Tool output (type varies by tool)
+                execution_time_ms:
+                  type: integer
+
+    ToolCallFailedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: tool_call_failed
+            data:
+              type: object
+              properties:
+                tool_name:
+                  type: string
+                tool_call_id:
+                  type: string
+                agent_name:
+                  type: string
+                error:
+                  type: string
+                error_type:
+                  type: string
+
+    # === Scratchpad Events ===
+
+    ScratchpadUpdatedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: scratchpad_updated
+            data:
+              type: object
+              required:
+                - section_name
+                - operation
+                - updated_by
+              properties:
+                section_name:
+                  type: string
+                  description: Name of the scratchpad section
+                operation:
+                  type: string
+                  enum: [created, updated, appended, deleted]
+                updated_by:
+                  type: string
+                  description: Agent that made the change
+                content_preview:
+                  type: string
+                  description: First 500 chars of new content
+                appended_content:
+                  type: string
+                  description: Content appended (for append operation)
+
+    ScratchpadSnapshotEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: scratchpad_snapshot
+            data:
+              type: object
+              properties:
+                sections:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      content:
+                        type: string
+                      updated_by:
+                        type: string
+                      updated_at:
+                        type: string
+                        format: date-time
+                total_sections:
+                  type: integer
+                iteration:
+                  type: integer
+                triggered_by:
+                  type: string
+                  description: What triggered this snapshot
+                  examples: [iteration_complete, agent_finished, manual_refresh]
+
+    # === Question Events ===
+
+    QuestionAddedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: question_added
+            data:
+              type: object
+              required:
+                - question_id
+                - question
+                - asked_by
+              properties:
+                question_id:
+                  type: string
+                question:
+                  type: string
+                context:
+                  type: string
+                  description: Why this question is being asked
+                asked_by:
+                  type: string
+                  description: Agent that asked the question
+                priority:
+                  type: string
+                  enum: [high, medium, low]
+                  default: medium
+                blocking:
+                  type: boolean
+                  description: If true, workflow pauses until answered
+                  default: false
+                options:
+                  type: array
+                  items:
+                    type: string
+                  description: Optional multiple choice options
+
+    QuestionAnsweredEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: question_answered
+            data:
+              type: object
+              properties:
+                question_id:
+                  type: string
+                answer:
+                  type: string
+                answered_at:
+                  type: string
+                  format: date-time
+
+    # === Synthesis Events ===
+
+    SynthesisStartedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: synthesis_started
+            data:
+              type: object
+              properties:
+                message:
+                  type: string
+                  example: "Synthesizer agent compiling final report"
+
+    SynthesisProgressEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: synthesis_progress
+            data:
+              type: object
+              properties:
+                chunk:
+                  type: string
+                  description: Streaming text from synthesizer
+
+    SynthesisCompletedEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: synthesis_completed
+            data:
+              type: object
+              properties:
+                final_report:
+                  type: string
+                  description: Complete synthesized report
+                sections_used:
+                  type: array
+                  items:
+                    type: string
+                  description: Scratchpad sections referenced
+
+  # Event type enum for reference
+  x-event-types:
+    description: All possible SSE event types
+    enum:
+      - session_started
+      - workflow_completed
+      - workflow_failed
+      - agent_started
+      - agent_progress
+      - agent_thinking
+      - agent_completed
+      - agent_failed
+      - tool_call_started
+      - tool_call_completed
+      - tool_call_failed
+      - scratchpad_updated
+      - scratchpad_snapshot
+      - question_added
+      - question_answered
+      - synthesis_started
+      - synthesis_progress
+      - synthesis_completed

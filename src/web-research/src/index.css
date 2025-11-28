@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom scrollbar for the dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #212121;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #424242;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4a4a4a;
+}
+
+/* Markdown content styling */
+.markdown-content {
+  @apply text-text leading-relaxed;
+}
+
+.markdown-content h1 {
+  @apply text-2xl font-semibold mb-4 mt-6 first:mt-0;
+}
+
+.markdown-content h2 {
+  @apply text-xl font-semibold mb-3 mt-5 first:mt-0;
+}
+
+.markdown-content h3 {
+  @apply text-lg font-medium mb-2 mt-4 first:mt-0;
+}
+
+.markdown-content p {
+  @apply mb-3;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  @apply mb-3 pl-6;
+}
+
+.markdown-content ul {
+  @apply list-disc;
+}
+
+.markdown-content ol {
+  @apply list-decimal;
+}
+
+.markdown-content li {
+  @apply mb-1;
+}
+
+.markdown-content code {
+  @apply bg-surface-light px-1.5 py-0.5 rounded text-sm font-mono;
+}
+
+.markdown-content pre {
+  @apply bg-surface-light p-4 rounded-lg mb-3 overflow-x-auto;
+}
+
+.markdown-content pre code {
+  @apply bg-transparent p-0;
+}
+
+.markdown-content blockquote {
+  @apply border-l-4 border-border pl-4 italic text-text-muted mb-3;
+}
+
+.markdown-content a {
+  @apply text-accent hover:underline;
+}
+
+.markdown-content table {
+  @apply w-full border-collapse mb-3;
+}
+
+.markdown-content th,
+.markdown-content td {
+  @apply border border-border px-3 py-2 text-left;
+}
+
+.markdown-content th {
+  @apply bg-surface-light font-medium;
+}
+
+/* Typing indicator animation */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.typing-cursor::after {
+  content: '▊';
+  animation: blink 1s infinite;
+  @apply text-accent ml-0.5;
+}
