@@ -15,6 +15,13 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Agent identity
+    agent_name: str = "location-scout"
+
+    # Azure subscription/resource group (for ARM REST API calls)
+    azure_subscription_id: str | None = None
+    azure_resource_group: str = "rg-agentic-poc"
+
     # Azure AI Foundry connection
     azure_ai_foundry_endpoint: str
 
@@ -22,10 +29,10 @@ class Settings(BaseSettings):
     azure_openai_endpoint: str | None = None
 
     # Model deployment
-    azure_ai_model_deployment_name: str = "gpt-4o"
+    azure_openai_deployment: str = "gpt-5"
 
     # Container image (for hosted agent deployment)
-    container_image: str | None = None
+    container_image: str = "ghcr.io/cloud-ai-summit-cz/agent-location-scout:latest"
 
     # Agent resources
     agent_cpu: str = "1"

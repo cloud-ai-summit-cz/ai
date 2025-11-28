@@ -25,12 +25,12 @@ COPY . .
 RUN useradd --create-home --shell /bin/bash agent
 USER agent
 
-# Expose the hosting adapter port
-EXPOSE 8088
+# Expose the hosting adapter port (azure-ai-agentserver-langgraph default is 8010)
+EXPOSE 8010
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8088/health || exit 1
+    CMD curl -f http://localhost:8010/health || exit 1
 
 # Run the agent
 CMD ["python", "main.py"]

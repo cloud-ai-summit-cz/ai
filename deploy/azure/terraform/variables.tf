@@ -30,13 +30,13 @@ variable "location" {
     Choose a region that supports Azure Container Apps.
     Common options: eastus, westus2, westeurope, northeurope
     
-    Example: "sweedentcentral"
+    Example: "northcentralus"
   EOT
   type        = string
-  default     = "sweedentcentral"
+  default     = "northcentralus"
 }
 
-variable "container_image" {
+variable "mcp_scratchpad_image" {
   description = <<-EOT
     The container image to deploy for the MCP Scratchpad server.
     

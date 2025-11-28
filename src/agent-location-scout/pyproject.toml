@@ -10,14 +10,11 @@ dependencies = [
     "langchain>=0.3",
     "langchain-openai>=0.3",
     
-    # Foundry hosting adapter
-    "azure-ai-agentserver-langgraph>=1.0.0b5",
+    # Azure AI Projects SDK v2 (has ImageBasedHostedAgentDefinition for deployment)
+    "azure-ai-projects>=2.0.0b2",
     
     # Azure authentication
     "azure-identity>=1.19.0",
-    
-    # Azure AI Projects SDK (for provision.py)
-    "azure-ai-projects>=1.0.0b5",
     
     # Observability
     "azure-monitor-opentelemetry>=1.6",
@@ -59,3 +56,6 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[tool.uv]
+prerelease = "allow"

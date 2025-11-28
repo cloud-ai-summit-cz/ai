@@ -1,195 +1,239 @@
-"""Agent provisioner for Location Scout (Hosted Agent).
+#!/usr/bin/env python
+"""
+Provision script for Location Scout Agent.
 
-Creates and destroys the location-scout hosted agent in Azure AI Foundry Agent Service.
-Unlike prompt-based agents, hosted agents require a container image.
+Manages Azure AI Foundry hosted agent deployment using SDK v2.
+Build and push operations are handled by GitHub Actions - this script
+only handles remote provisioning via the Azure AI Projects SDK.
+
+Commands:
+    deploy  - Create/update hosted agent version in Azure AI Foundry (idempotent)
+    delete  - Delete the hosted agent
+    list    - List all agents
+    status  - Show current configuration
+
+Note: Starting hosted agents requires the Azure Portal or Azure CLI.
+The CLI command `az cognitiveservices agent start` is available in preview.
 """
 
-import os
+import argparse
 import sys
+import re
 
+from azure.identity import DefaultAzureCredential
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
     ImageBasedHostedAgentDefinition,
     ProtocolVersionRecord,
     AgentProtocol,
 )
-from azure.identity import DefaultAzureCredential
-from rich.console import Console
-from rich.table import Table
 
 from config import get_settings
 
-# Force UTF-8 output for subprocess compatibility
-if sys.stdout.encoding != "utf-8":
-    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore
-if sys.stderr.encoding != "utf-8":
-    sys.stderr.reconfigure(encoding="utf-8")  # type: ignore
-os.environ["PYTHONIOENCODING"] = "utf-8"
-
-console = Console(force_terminal=True)
-
-AGENT_NAME = "location-scout"
-AGENT_DISPLAY_NAME = "Location Scout"
-
 
 def get_client() -> AIProjectClient:
-    """Create AI Project client with default credentials."""
+    """Create and return an AIProjectClient using DefaultAzureCredential."""
     settings = get_settings()
+    credential = DefaultAzureCredential()
     return AIProjectClient(
-        credential=DefaultAzureCredential(),
         endpoint=settings.azure_ai_foundry_endpoint,
+        credential=credential,
     )
 
 
-def create_agent() -> None:
-    """Create the location-scout hosted agent in AI Foundry.
-
-    This function is idempotent - it will create a new version if agent exists.
-    Requires CONTAINER_IMAGE environment variable to be set.
+def parse_endpoint(endpoint: str) -> tuple[str, str]:
+    """Parse the Foundry endpoint to extract account and project names.
+    
+    Endpoint format: https://<account>.services.ai.azure.com/api/projects/<project>
+    
+    Returns:
+        Tuple of (account_name, project_name)
     """
-    console.print(f"[bold blue]Creating {AGENT_DISPLAY_NAME} Hosted Agent[/bold blue]\n")
+    match = re.match(
+        r"https://([^.]+)\.services\.ai\.azure\.com/api/projects/([^/]+)",
+        endpoint
+    )
+    if match:
+        return match.group(1), match.group(2)
+    
+    raise ValueError(f"Cannot parse endpoint: {endpoint}")
 
+
+def get_agent_by_name(client: AIProjectClient, agent_name: str):
+    """Find an agent by name. Returns None if not found."""
+    for agent in client.agents.list():
+        if agent.name == agent_name:
+            return agent
+    return None
+
+
+def deploy_foundry() -> None:
+    """Deploy the agent to Azure AI Foundry as a hosted container agent.
+    
+    Idempotent: creates new version if agent exists, or creates new agent.
+    """
     settings = get_settings()
-    
-    if not settings.container_image:
-        console.print("[red]Error: CONTAINER_IMAGE environment variable not set[/red]")
-        console.print("Set it to your GHCR image, e.g.:")
-        console.print("  export CONTAINER_IMAGE=ghcr.io/cloud-ai-summit-cz/agent-location-scout:latest")
-        sys.exit(1)
-    
-    console.print(f"Container image: [cyan]{settings.container_image}[/cyan]")
-    console.print(f"CPU: {settings.agent_cpu}, Memory: {settings.agent_memory}")
-    
+    client = get_client()
+    account_name, project_name = parse_endpoint(settings.azure_ai_foundry_endpoint)
+
+    print(f"Deploying hosted agent: {settings.agent_name}")
+    print(f"  Container image: {settings.container_image}")
+    print(f"  CPU: {settings.agent_cpu}, Memory: {settings.agent_memory}")
+    print(f"  Account: {account_name}, Project: {project_name}")
+
+    # Check if agent already exists
+    existing = get_agent_by_name(client, settings.agent_name)
+    if existing:
+        print(f"  Agent already exists")
+        print("  Creating new version...")
+
+    definition = ImageBasedHostedAgentDefinition(
+        container_protocol_versions=[
+            ProtocolVersionRecord(protocol=AgentProtocol.RESPONSES, version="v1")
+        ],
+        cpu=settings.agent_cpu,
+        memory=settings.agent_memory,
+        image=settings.container_image,
+        environment_variables={
+            "AZURE_AI_PROJECT_ENDPOINT": settings.azure_ai_foundry_endpoint,
+            "MODEL_NAME": settings.azure_openai_deployment,
+        },
+    )
+
+    result = client.agents.create_version(
+        agent_name=settings.agent_name,
+        definition=definition,
+    )
+    print(f"✓ Agent version created successfully")
+    print(f"  Agent ID: {result.id}")
+    print(f"  Agent Name: {result.name}")
+    print(f"  Version: {result.version}")
+
+    # Provide instructions for starting the agent
+    print(f"\n" + "=" * 60)
+    print(f"NEXT STEPS - Start the hosted agent:")
+    print(f"=" * 60)
+    print(f"\nOption 1: Azure AI Foundry Portal")
+    print(f"  1. Go to https://ai.azure.com")
+    print(f"  2. Navigate to your project: {project_name}")
+    print(f"  3. Go to Agents > {settings.agent_name}")
+    print(f"  4. Click 'Start hosted agent' button")
+    print(f"\nOption 2: Azure CLI (when available)")
+    print(f"  az cognitiveservices agent start \\")
+    print(f"    --account-name {account_name} \\")
+    print(f"    --project-name {project_name} \\")
+    print(f"    --name {settings.agent_name} \\")
+    print(f"    --agent-version {result.version}")
+    print(f"\n" + "=" * 60)
+
+
+def delete_agent() -> None:
+    """Delete the hosted agent."""
+    settings = get_settings()
     client = get_client()
 
-    with client:
-        # Check for existing agent versions
-        with console.status("Checking for existing agent..."):
-            existing_agents = list(client.agents.list())
-            existing = next((a for a in existing_agents if a.name == AGENT_NAME), None)
-
-        if existing:
-            console.print(f"[yellow]Found existing agent '{AGENT_NAME}', will create new version[/yellow]")
-
-        # Create hosted agent version
-        with console.status(f"Creating {AGENT_DISPLAY_NAME} hosted agent..."):
-            try:
-                agent_def = ImageBasedHostedAgentDefinition(
-                    image=settings.container_image,
-                    cpu=settings.agent_cpu,
-                    memory=settings.agent_memory,
-                    container_protocol_versions=[
-                        ProtocolVersionRecord(
-                            protocol=AgentProtocol.RESPONSES,
-                            version="v1",
-                        )
-                    ],
-                    environment_variables={
-                        "AZURE_AI_PROJECT_ENDPOINT": settings.azure_ai_foundry_endpoint,
-                        "AZURE_AI_MODEL_DEPLOYMENT_NAME": settings.azure_ai_model_deployment_name,
-                    },
-                )
-
-                agent = client.agents.create_version(
-                    agent_name=AGENT_NAME,
-                    definition=agent_def,
-                    description=f"{AGENT_DISPLAY_NAME} - LangGraph-based location analysis agent",
-                )
-
-                console.print(
-                    f"[green]✓[/green] Created [green]{AGENT_DISPLAY_NAME}[/green] "
-                    f"(name: {AGENT_NAME}, version: {agent.version})"
-                )
-                
-            except Exception as e:
-                console.print(f"[red]✗[/red] Failed to create [red]{AGENT_DISPLAY_NAME}[/red]: {e}")
-                raise
+    print(f"Deleting agent: {settings.agent_name}")
+    client.agents.delete_version(name=settings.agent_name)
+    print(f"✓ Agent deleted")
 
 
 def list_agents() -> None:
-    """List all agents in the AI Foundry project."""
-    console.print("[bold blue]Listing Agents[/bold blue]\n")
-
+    """List all agents in the project."""
     client = get_client()
+    settings = get_settings()
+    account_name, project_name = parse_endpoint(settings.azure_ai_foundry_endpoint)
 
-    with client:
-        with console.status("Fetching agents..."):
-            agents = list(client.agents.list())
+    print(f"Listing agents in project: {project_name}")
+    print("-" * 50)
+    
+    agents = list(client.agents.list())
+    
+    if not agents:
+        print("No agents found.")
+        return
 
-        if not agents:
-            console.print("[yellow]No agents found[/yellow]")
-            return
-
-        table = Table(title=f"Found {len(agents)} Agents")
-        table.add_column("Name", style="cyan")
-        table.add_column("ID", style="green")
-        table.add_column("Type", style="magenta")
-
-        for agent in agents:
-            # Try to determine if hosted or prompt-based
-            agent_type = "hosted" if hasattr(agent, 'image') else "prompt"
-            table.add_row(
-                agent.name or "(unnamed)",
-                agent.id,
-                agent_type,
-            )
-
-        console.print(table)
+    for agent in agents:
+        name = getattr(agent, 'name', 'unknown')
+        kind = "hosted" if hasattr(agent, 'versions') else getattr(agent, 'kind', 'unknown')
+        print(f"  - {name}")
+        print(f"    Kind: {kind}")
+        
+        # Try to get version info
+        if hasattr(agent, 'versions') and agent.versions:
+            latest = getattr(agent.versions, 'latest', None)
+            if latest:
+                print(f"    Latest version: {getattr(latest, 'version', 'unknown')}")
 
 
-def destroy_agent() -> None:
-    """Destroy the location-scout agent (all versions)."""
-    console.print(f"[bold red]Destroying {AGENT_DISPLAY_NAME} Agent[/bold red]\n")
-
-    client = get_client()
-
-    with client:
-        with console.status("Fetching agents..."):
-            agents = list(client.agents.list())
-
-        existing = next((a for a in agents if a.name == AGENT_NAME), None)
-
-        if not existing:
-            console.print(f"[yellow]Agent '{AGENT_NAME}' not found[/yellow]")
-            return
-
-        console.print(f"Found agent: {existing.name} ({existing.id})")
-
-        if not console.input("\n[bold]Proceed with deletion? [y/N]: [/bold]").lower().startswith("y"):
-            console.print("[yellow]Cancelled[/yellow]")
-            return
-
-        with console.status(f"Deleting {AGENT_NAME}..."):
-            try:
-                client.agents.delete(agent_name=AGENT_NAME)
-                console.print(f"[green]✓[/green] Deleted [red]{AGENT_NAME}[/red]")
-            except Exception as e:
-                console.print(f"[red]✗[/red] Failed to delete {AGENT_NAME}: {e}")
+def show_status() -> None:
+    """Show current configuration and status."""
+    settings = get_settings()
+    account_name, project_name = parse_endpoint(settings.azure_ai_foundry_endpoint)
+    
+    print("Location Scout Agent - Configuration")
+    print("=" * 50)
+    print(f"Agent Name:       {settings.agent_name}")
+    print(f"Container Image:  {settings.container_image}")
+    print(f"Model:            {settings.azure_openai_deployment}")
+    print(f"CPU:              {settings.agent_cpu}")
+    print(f"Memory:           {settings.agent_memory}")
+    print("-" * 50)
+    print(f"Foundry Account:  {account_name}")
+    print(f"Foundry Project:  {project_name}")
+    print(f"Foundry Endpoint: {settings.azure_ai_foundry_endpoint}")
+    print("=" * 50)
+    
+    # Try to get agent status
+    try:
+        client = get_client()
+        agent = get_agent_by_name(client, settings.agent_name)
+        if agent:
+            print(f"\nAgent Status: Registered")
+            if hasattr(agent, 'versions') and agent.versions:
+                latest = getattr(agent.versions, 'latest', None)
+                if latest:
+                    print(f"Latest Version: {getattr(latest, 'version', 'unknown')}")
+        else:
+            print(f"\nAgent Status: Not deployed")
+    except Exception as e:
+        print(f"\nCould not fetch agent status: {e}")
 
 
 def main() -> None:
-    """CLI entry point."""
-    if len(sys.argv) < 2:
-        console.print("[bold]Usage:[/bold] python provision.py <command>")
-        console.print("\n[bold]Commands:[/bold]")
-        console.print("  create   - Create/update the hosted agent in AI Foundry")
-        console.print("  list     - List all agents in the project")
-        console.print("  destroy  - Destroy the agent (all versions)")
-        console.print("\n[bold]Required Environment Variables:[/bold]")
-        console.print("  AZURE_AI_FOUNDRY_ENDPOINT  - Foundry project endpoint")
-        console.print("  CONTAINER_IMAGE            - GHCR image URL (for create)")
-        sys.exit(1)
+    """Main entry point."""
+    parser = argparse.ArgumentParser(
+        description="Location Scout Agent provisioning via Azure AI Foundry SDK",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Commands:
+  deploy   Create/update hosted agent version (idempotent)
+  delete   Delete the hosted agent
+  list     List all agents in the project
+  status   Show current configuration
 
-    command = sys.argv[1].lower()
+Note: Starting hosted agents requires Azure Portal or CLI.
+Build and push operations are handled by GitHub Actions.
+        """,
+    )
+    parser.add_argument(
+        "command",
+        choices=["deploy", "delete", "list", "status"],
+        help="Command to execute",
+    )
 
-    if command == "create":
-        create_agent()
-    elif command == "list":
-        list_agents()
-    elif command == "destroy":
-        destroy_agent()
-    else:
-        console.print(f"[red]Unknown command: {command}[/red]")
+    args = parser.parse_args()
+
+    commands = {
+        "deploy": deploy_foundry,
+        "delete": delete_agent,
+        "list": list_agents,
+        "status": show_status,
+    }
+
+    try:
+        commands[args.command]()
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

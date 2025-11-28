@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     azure_ai_foundry_endpoint: str
 
     # Model deployment
-    model_deployment_name: str = "gpt-5.1"
+    model_deployment_name: str = "gpt-5"
 
     @property
     def prompts_dir(self) -> Path:

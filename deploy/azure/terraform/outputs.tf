@@ -15,17 +15,17 @@ output "container_app_environment_name" {
 
 output "container_app_name" {
   description = "The name of the Container App"
-  value       = azapi_resource.container_app.name
+  value       = azapi_resource.capp_mcp_scratchpad.name
 }
 
 output "container_app_fqdn" {
   description = "The fully qualified domain name of the Container App"
-  value       = jsondecode(azapi_resource.container_app.output).properties.configuration.ingress.fqdn
+  value       = azapi_resource.capp_mcp_scratchpad.output.properties.configuration.ingress.fqdn
 }
 
 output "container_app_url" {
   description = "The URL to access the MCP Scratchpad server"
-  value       = "https://${jsondecode(azapi_resource.container_app.output).properties.configuration.ingress.fqdn}"
+  value       = "https://${azapi_resource.capp_mcp_scratchpad.output.properties.configuration.ingress.fqdn}"
 }
 
 output "log_analytics_workspace_id" {

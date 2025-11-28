@@ -7,10 +7,9 @@ subscription_id = "your-subscription-id-here"
 # Optional: Customize these values
 resource_group_name = "rg-mcp-scratchpad"
 location            = "westeurope"
-environment         = "dev"
 
 # Container image - update with your GitHub organization
-container_image = "ghcr.io/your-org/mcp-scratchpad:latest"
+mcp_scratchpad_image = "ghcr.io/your-org/mcp-scratchpad:latest"
 
 # Required: Authentication token for MCP server
 # Generate a secure random token, e.g.: openssl rand -hex 32

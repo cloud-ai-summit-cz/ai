@@ -37,9 +37,10 @@ def main() -> None:
     
     try:
         agent = build_agent()
-        logger.info("Agent built successfully, starting server on port 8088...")
+        logger.info("Agent built successfully, starting server on port 8010...")
         
         # The adapter handles all protocol translation and HTTP serving
+        # Default port is 8010
         from_langgraph(agent).run()
         
     except Exception:

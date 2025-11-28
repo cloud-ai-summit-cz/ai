@@ -61,7 +61,7 @@ The orchestrator exposes a REST API with SSE (Server-Sent Events) streaming for 
 2. Set environment variables:
    ```bash
    export FOUNDRY_ENDPOINT="https://your-project.services.ai.azure.com/api/projects/your-project"
-   export MODEL_DEPLOYMENT_NAME="gpt-5.1"
+   export MODEL_DEPLOYMENT_NAME="gpt-5"
    ```
 
 ### Running the Service
@@ -93,7 +93,7 @@ curl -N http://localhost:8000/research/sessions/{session_id}/start
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `FOUNDRY_ENDPOINT` | (required) | Azure AI Foundry project endpoint |
-| `MODEL_DEPLOYMENT_NAME` | `gpt-5.1` | Model deployment name |
+| `MODEL_DEPLOYMENT_NAME` | `gpt-5` | Model deployment name |
 | `API_HOST` | `0.0.0.0` | API server host |
 | `API_PORT` | `8000` | API server port |
 | `AGENT_TIMEOUT_SECONDS` | `60` | Individual agent timeout |
