@@ -8,18 +8,22 @@ only handles remote provisioning via the Azure AI Projects SDK.
 
 Commands:
     deploy  - Create/update hosted agent version in Azure AI Foundry (idempotent)
+    start   - Start the hosted agent container
+    stop    - Stop the hosted agent container
     delete  - Delete the hosted agent
     list    - List all agents
-    status  - Show current configuration
+    status  - Show current configuration and container status
 
-Note: Starting hosted agents requires the Azure Portal or Azure CLI.
-The CLI command `az cognitiveservices agent start` is available in preview.
+Note: Azure CLI command `az cognitiveservices agent start` may not be available.
+This script uses the REST API directly for container operations.
 """
 
 import argparse
 import sys
 import re
+import time
 
+import requests
 from azure.identity import DefaultAzureCredential
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
@@ -29,6 +33,10 @@ from azure.ai.projects.models import (
 )
 
 from config import get_settings
+
+
+# Data plane API version for container operations
+AGENT_API_VERSION = "2025-11-15-preview"
 
 
 def get_client() -> AIProjectClient:
