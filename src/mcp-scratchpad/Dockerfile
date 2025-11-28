@@ -7,8 +7,8 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv
 
 # Copy project files
-COPY pyproject.toml ./
-COPY mcp_scratchpad/ ./mcp_scratchpad/
+COPY pyproject.toml README.md ./
+COPY *.py ./
 
 # Install dependencies using uv
 RUN uv pip install --system --no-cache .
@@ -26,7 +26,7 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages/ /usr/local/lib/pyth
 COPY --from=builder /usr/local/bin/ /usr/local/bin/
 
 # Copy application code
-COPY mcp_scratchpad/ ./mcp_scratchpad/
+COPY *.py ./
 
 # Set ownership to non-root user
 RUN chown -R appuser:appuser /app
@@ -42,9 +42,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
 
 # Environment variables with defaults
-ENV MCP_HOST=0.0.0.0
-ENV MCP_PORT=8080
-ENV MCP_LOG_LEVEL=INFO
+ENV HOST=0.0.0.0
+ENV PORT=8080
 
 # Run the server
-CMD ["python", "-m", "mcp_scratchpad.main"]
+CMD ["python", "main.py"]

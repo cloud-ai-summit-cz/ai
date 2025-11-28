@@ -39,19 +39,15 @@ resource "azapi_resource" "capp_mcp_scratchpad" {
             }
             env = [
               {
-                name  = "MCP_HOST"
+                name  = "HOST"
                 value = "0.0.0.0"
               },
               {
-                name  = "MCP_PORT"
+                name  = "PORT"
                 value = "8080"
               },
               {
-                name  = "MCP_LOG_LEVEL"
-                value = "INFO"
-              },
-              {
-                name      = "MCP_AUTH_TOKEN"
+                name      = "API_KEY"
                 secretRef = "mcp-auth-token"
               }
             ]

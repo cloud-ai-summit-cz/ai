@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Protocol
 
-from mcp_scratchpad.models import (
+from models import (
     ChecklistItem,
     ChecklistStatus,
     Question,

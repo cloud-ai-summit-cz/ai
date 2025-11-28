@@ -1,9 +1,9 @@
 """MCP Scratchpad Server - Shared workspace for inter-agent collaboration."""
 
-from mcp_scratchpad.server import mcp
-from mcp_scratchpad.config import settings
-from mcp_scratchpad.storage import StorageBackend, InMemoryStorage, get_storage, set_storage
-from mcp_scratchpad.models import (
+from server import mcp
+from config import settings
+from storage import StorageBackend, InMemoryStorage, get_storage, set_storage
+from models import (
     ScratchpadSession,
     Section,
     SectionStatus,

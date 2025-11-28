@@ -113,3 +113,96 @@ variable "max_replicas" {
   type        = number
   default     = 3
 }
+
+# ============================================================================
+# Agent Location Scout Variables
+# ============================================================================
+
+variable "agent_location_scout_image" {
+  description = <<-EOT
+    The container image for the Agent Location Scout.
+    
+    This is a LangGraph-based agent hosted via azure-ai-agentserver-langgraph.
+    The GitHub Actions workflow pushes to ghcr.io with tag 'latest'.
+    
+    Example: "ghcr.io/cloud-ai-summit-cz/ai/agent-location-scout:latest"
+  EOT
+  type        = string
+  default     = "ghcr.io/cloud-ai-summit-cz/ai/agent-location-scout:latest"
+}
+
+variable "azure_ai_foundry_endpoint" {
+  description = <<-EOT
+    The Azure AI Foundry project endpoint.
+    
+    Used by the agent to connect to Azure OpenAI models.
+    Format: https://<resource>.services.ai.azure.com/api/projects/<project>
+    
+    Example: "https://my-ai.services.ai.azure.com/api/projects/my-project"
+  EOT
+  type        = string
+  sensitive   = true
+}
+
+variable "azure_ai_model_deployment_name" {
+  description = <<-EOT
+    The Azure OpenAI model deployment name.
+    
+    The name of the deployed model in Azure OpenAI/Foundry.
+    
+    Example: "gpt-4o"
+  EOT
+  type        = string
+  default     = "gpt-4o"
+}
+
+variable "agent_container_cpu" {
+  description = <<-EOT
+    CPU cores allocated to agent containers.
+    
+    Azure Container Apps supports: 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0
+    Agents typically need more resources than MCP servers.
+    
+    Example: 0.5
+  EOT
+  type        = number
+  default     = 0.5
+}
+
+variable "agent_container_memory" {
+  description = <<-EOT
+    Memory allocated to agent containers.
+    
+    Must be compatible with CPU allocation per Azure Container Apps requirements.
+    For 0.5 CPU, use 1.0Gi.
+    
+    Example: "1.0Gi"
+  EOT
+  type        = string
+  default     = "1.0Gi"
+}
+
+variable "agent_min_replicas" {
+  description = <<-EOT
+    Minimum number of agent container replicas.
+    
+    Set to 0 for scale-to-zero (cost savings in dev).
+    Set to 1+ for production to avoid cold starts.
+    
+    Example: 0
+  EOT
+  type        = number
+  default     = 0
+}
+
+variable "agent_max_replicas" {
+  description = <<-EOT
+    Maximum number of agent container replicas.
+    
+    The container app will scale between min and max based on HTTP traffic.
+    
+    Example: 5
+  EOT
+  type        = number
+  default     = 5
+}

@@ -154,12 +154,81 @@ CMD ["uv", "run", "python", "-m", "agent_location_scout"]
 - Azure Container Registry
 - Managed Identity with ACR pull permissions
 - MCP server network connectivity
+- **Capability Hosts** (required for hosted agents - see below)
+
+### Capability Hosts Setup (Critical!)
+
+> **Important**: Hosted agents require Capability Hosts to be configured at BOTH account and project levels before agents can be started. Without this, start commands fail with "Capability Host not found" error.
+
+**Account-level capability host**:
+```bash
+az rest --method PUT \
+  --uri "https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.CognitiveServices/accounts/{accountName}/capabilityHosts/default?api-version=2025-06-01" \
+  --headers "Content-Type=application/json" \
+  --body '{"properties": {"capabilityHostKind": "Agents"}}'
+```
+
+**Project-level capability host**:
+```bash
+az rest --method PUT \
+  --uri "https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.CognitiveServices/accounts/{accountName}/projects/{projectName}/capabilityHosts/default?api-version=2025-06-01" \
+  --headers "Content-Type=application/json" \
+  --body '{"properties": {"capabilityHostKind": "Agents"}}'
+```
+
+Wait for both to reach `provisioningState: Succeeded` before starting agents.
 
 ### IaC Reference
 - Terraform: `infra/services/agent-location-scout.tf`
+
+## REST API Reference (Data Plane)
+
+> **Note**: The `az cognitiveservices agent start/stop` CLI commands may not be available in all CLI versions. Use the data plane REST API directly:
+
+### Start Agent Container
+```bash
+# Get access token for AI Foundry
+TOKEN=$(az account get-access-token --resource "https://ai.azure.com" --query accessToken -o tsv)
+
+# Start the agent container
+curl -X POST \
+  "https://{account}.services.ai.azure.com/api/projects/{project}/agents/{agentName}/versions/{version}/containers/default:start?api-version=2025-11-15-preview" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{}"
+```
+
+### Stop Agent Container
+```bash
+curl -X POST \
+  "https://{account}.services.ai.azure.com/api/projects/{project}/agents/{agentName}/versions/{version}/containers/default:stop?api-version=2025-11-15-preview" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{}"
+```
+
+### Update Agent (replicas)
+```bash
+curl -X POST \
+  "https://{account}.services.ai.azure.com/api/projects/{project}/agents/{agentName}/versions/{version}/containers/default:update?api-version=2025-11-15-preview" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"min_replicas": 1, "max_replicas": 2}'
+```
+
+### Get Agent Version Status
+```bash
+curl -s \
+  "https://{account}.services.ai.azure.com/api/projects/{project}/agents/{agentName}/versions/{version}?api-version=2025-11-15-preview" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Response includes**:
+- `hosted_agent_definition.container.status`: `Starting`, `Running`, `Stopping`, `Stopped`, `Failed`
 
 ## Limitations (Preview)
 
 - **Region**: North Central US only
 - **Max replicas**: 5 (preview limit)
 - **Billing**: Free during preview, expected Feb 2026
+- **CLI**: `az cognitiveservices agent` commands may not be available - use REST API

@@ -8,8 +8,8 @@ from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
 from starlette.responses import JSONResponse
 
-from mcp_scratchpad.config import settings
-from mcp_scratchpad.models import (
+from config import settings
+from models import (
     ChecklistItem,
     ChecklistStatus,
     Question,
@@ -17,7 +17,7 @@ from mcp_scratchpad.models import (
     Section,
     SectionStatus,
 )
-from mcp_scratchpad.storage import get_storage
+from storage import get_storage
 
 # Configure authentication with static token verification
 auth = StaticTokenVerifier(
