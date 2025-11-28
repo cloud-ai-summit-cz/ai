@@ -1,0 +1,110 @@
+# Cofilot AI Platform - Local Development Configuration
+# =====================================================
+# Control which services to start locally.
+# Set to false to disable a service.
+
+# Agents (6 total)
+# ----------------
+# Note: Foundry Native agents (market-analyst, competitor-analyst, synthesizer)
+# are hosted in Azure AI Foundry and don't run locally as processes.
+# MAF and LangGraph agents run as local Python processes.
+
+agents:
+  # MAF-based orchestrator (coordinates research workflow)
+  research-orchestrator:
+    enabled: true
+    # command: "uv run python -m research_orchestrator.main"
+
+  # Foundry Native agents (provision to Azure AI Foundry, then exit)
+  market-analyst:
+    enabled: true
+    provision_only: true  # Runs provisioning script, not a long-running service
+    # command: "uv run python -m market_analyst.provision create"
+
+  competitor-analyst:
+    enabled: true
+    provision_only: true
+    # command: "uv run python -m competitor_analyst.provision create"
+
+  # LangGraph agents (local Python processes)
+  location-scout:
+    enabled: true
+    # command: "uv run python -m location_scout.main"
+
+  finance-analyst:
+    enabled: true
+    # command: "uv run python -m finance_analyst.main"
+
+  # Foundry Native agent (provision to Azure AI Foundry, then exit)
+  synthesizer:
+    enabled: true
+    provision_only: true
+    # command: "uv run python -m synthesizer.provision create"
+
+# MCP Servers (7 total)
+# ---------------------
+# All MCP servers run as local FastAPI/Uvicorn processes.
+
+mcp_servers:
+  scratchpad:
+    enabled: true
+    port: 8010
+    # command: "uv run uvicorn mcp_scratchpad.main:app --host 0.0.0.0 --port {port}"
+
+  web-search:
+    enabled: true
+    port: 8011
+    # command: "uv run uvicorn mcp_web_search.main:app --host 0.0.0.0 --port {port}"
+
+  business-registry:
+    enabled: true
+    port: 8012
+    # command: "uv run uvicorn mcp_business_registry.main:app --host 0.0.0.0 --port {port}"
+
+  government-data:
+    enabled: true
+    port: 8013
+    # command: "uv run uvicorn mcp_government_data.main:app --host 0.0.0.0 --port {port}"
+
+  demographics:
+    enabled: true
+    port: 8014
+    # command: "uv run uvicorn mcp_demographics.main:app --host 0.0.0.0 --port {port}"
+
+  real-estate:
+    enabled: true
+    port: 8015
+    # command: "uv run uvicorn mcp_real_estate.main:app --host 0.0.0.0 --port {port}"
+
+  calculator:
+    enabled: true
+    port: 8016
+    # command: "uv run uvicorn mcp_calculator.main:app --host 0.0.0.0 --port {port}"
+
+# Global Settings
+# ---------------
+
+settings:
+  # Working directory for all services (relative to repo root)
+  src_dir: "../../src"
+  
+  # Log level for all services
+  log_level: "INFO"
+  
+  # Colors for log output tags (ANSI color names)
+  colors:
+    agents:
+      research-orchestrator: "cyan"
+      market-analyst: "bright_cyan"
+      competitor-analyst: "bright_yellow"
+      location-scout: "blue"
+      finance-analyst: "magenta"
+      synthesizer: "bright_magenta"
+    mcp_servers:
+      scratchpad: "green"
+      web-search: "yellow"
+      business-registry: "red"
+      government-data: "bright_blue"
+      demographics: "bright_green"
+      real-estate: "bright_magenta"
+      calculator: "bright_cyan"

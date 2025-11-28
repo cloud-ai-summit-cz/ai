@@ -1,0 +1,25 @@
+# Example terraform.tfvars file
+# Copy this to terraform.tfvars and fill in your values
+
+# Required: Your Azure subscription ID
+subscription_id = "your-subscription-id-here"
+
+# Optional: Customize these values
+resource_group_name = "rg-mcp-scratchpad"
+location            = "westeurope"
+environment         = "dev"
+
+# Container image - update with your GitHub organization
+container_image = "ghcr.io/your-org/mcp-scratchpad:latest"
+
+# Required: Authentication token for MCP server
+# Generate a secure random token, e.g.: openssl rand -hex 32
+mcp_auth_token = "your-secure-token-here"
+
+# Container resources (optional)
+container_cpu    = 0.25
+container_memory = "0.5Gi"
+
+# Scaling (optional)
+min_replicas = 0
+max_replicas = 3

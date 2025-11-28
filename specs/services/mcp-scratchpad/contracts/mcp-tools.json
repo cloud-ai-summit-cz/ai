@@ -1,0 +1,285 @@
+{
+  "name": "mcp-scratchpad",
+  "version": "1.0.0",
+  "description": "Shared workspace for inter-agent collaboration, document building, and human question queue with real-time notifications",
+  "tools": [
+    {
+      "name": "read_section",
+      "description": "Read content from a named section in the scratchpad",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section_name": {
+            "type": "string",
+            "description": "Name of the section to read (e.g., 'market_findings', 'competitor_analysis')"
+          }
+        },
+        "required": ["section_name"]
+      }
+    },
+    {
+      "name": "write_section",
+      "description": "Write or overwrite content to a named section. Use for creating new sections or replacing existing content.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section_name": {
+            "type": "string",
+            "description": "Name of the section to write"
+          },
+          "content": {
+            "type": "string",
+            "description": "Content to write to the section"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["draft", "in_progress", "needs_review", "complete"],
+            "description": "Status of the section. Default: 'draft'"
+          },
+          "outline_position": {
+            "type": "integer",
+            "description": "Position in final report outline (1-based). Null if not part of final report."
+          }
+        },
+        "required": ["section_name", "content"]
+      }
+    },
+    {
+      "name": "append_to_section",
+      "description": "Append content to an existing section without overwriting",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section_name": {
+            "type": "string",
+            "description": "Name of the section to append to"
+          },
+          "content": {
+            "type": "string",
+            "description": "Content to append"
+          }
+        },
+        "required": ["section_name", "content"]
+      }
+    },
+    {
+      "name": "list_sections",
+      "description": "List all sections in the current session scratchpad with their metadata (status, author, version)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "update_checklist",
+      "description": "Update the status of a checklist item",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "description": "ID of the checklist item"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "in_progress", "completed", "failed"],
+            "description": "New status for the item"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Optional notes about the status change"
+          }
+        },
+        "required": ["item_id", "status"]
+      }
+    },
+    {
+      "name": "get_checklist",
+      "description": "Get the current state of the research checklist",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "add_question",
+      "description": "Add a question for human review. Use when you need information from the user to proceed effectively.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The question to ask the human"
+          },
+          "context": {
+            "type": "string",
+            "description": "Why this information is needed (helps user provide better answer)"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["high", "medium", "low"],
+            "description": "Priority of the question. High priority questions may pause the workflow."
+          },
+          "blocking": {
+            "type": "boolean",
+            "description": "If true, indicates the workflow should pause until this is answered. Default: false"
+          },
+          "options": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional multiple choice options. If provided, user selects from these."
+          }
+        },
+        "required": ["question", "context"]
+      }
+    },
+    {
+      "name": "get_pending_questions",
+      "description": "Get all questions that haven't been answered yet",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_answered_questions",
+      "description": "Get questions that have been answered by the human",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "submit_answers",
+      "description": "Submit answers to pending questions. Called by orchestrator after receiving human input.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "answers": {
+            "type": "object",
+            "description": "Map of question_id to answer string",
+            "additionalProperties": { "type": "string" }
+          }
+        },
+        "required": ["answers"]
+      }
+    }
+  ],
+  "notifications": {
+    "description": "Real-time notifications for scratchpad changes. Clients subscribe to receive updates without polling.",
+    "subscription": {
+      "method": "notifications/subscribe",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID to subscribe to"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "scratchpad/section_created",
+                "scratchpad/section_updated",
+                "scratchpad/section_read",
+                "scratchpad/checklist_updated",
+                "scratchpad/question_added",
+                "scratchpad/question_answered"
+              ]
+            },
+            "description": "List of event types to subscribe to. If empty, subscribes to all events."
+          }
+        },
+        "required": ["session_id"]
+      }
+    },
+    "events": [
+      {
+        "name": "scratchpad/section_created",
+        "description": "Emitted when a new section is created",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "session_id": { "type": "string" },
+            "section_name": { "type": "string" },
+            "author": { "type": "string" },
+            "timestamp": { "type": "string", "format": "date-time" }
+          }
+        }
+      },
+      {
+        "name": "scratchpad/section_updated",
+        "description": "Emitted when section content changes",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "session_id": { "type": "string" },
+            "section_name": { "type": "string" },
+            "status": { "type": "string" },
+            "content_preview": { "type": "string", "maxLength": 200 },
+            "version": { "type": "integer" },
+            "timestamp": { "type": "string", "format": "date-time" }
+          }
+        }
+      },
+      {
+        "name": "scratchpad/section_read",
+        "description": "Emitted when a section is read by an agent",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "session_id": { "type": "string" },
+            "section_name": { "type": "string" },
+            "reader_agent": { "type": "string" },
+            "timestamp": { "type": "string", "format": "date-time" }
+          }
+        }
+      },
+      {
+        "name": "scratchpad/checklist_updated",
+        "description": "Emitted when a checklist item status changes",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "session_id": { "type": "string" },
+            "item_id": { "type": "string" },
+            "old_status": { "type": "string" },
+            "new_status": { "type": "string" },
+            "timestamp": { "type": "string", "format": "date-time" }
+          }
+        }
+      },
+      {
+        "name": "scratchpad/question_added",
+        "description": "Emitted when an agent adds a question for human review",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "session_id": { "type": "string" },
+            "question_id": { "type": "string" },
+            "question": { "type": "string" },
+            "asked_by": { "type": "string" },
+            "priority": { "type": "string" },
+            "blocking": { "type": "boolean" },
+            "timestamp": { "type": "string", "format": "date-time" }
+          }
+        }
+      },
+      {
+        "name": "scratchpad/question_answered",
+        "description": "Emitted when a human provides an answer to a question",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "session_id": { "type": "string" },
+            "question_id": { "type": "string" },
+            "answer_preview": { "type": "string", "maxLength": 100 },
+            "timestamp": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    ]
+  }
+}

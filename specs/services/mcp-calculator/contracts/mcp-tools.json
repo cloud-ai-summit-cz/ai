@@ -1,0 +1,140 @@
+{
+  "name": "mcp-calculator",
+  "version": "1.0.0",
+  "description": "Financial calculations and projections",
+  "tools": [
+    {
+      "name": "calculate_startup_costs",
+      "description": "Calculate total startup investment needed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "lease_deposit_months": { "type": "integer", "default": 3 },
+          "monthly_rent": { "type": "number" },
+          "renovation_cost": { "type": "number" },
+          "equipment_cost": { "type": "number" },
+          "initial_inventory": { "type": "number" },
+          "permits_licenses": { "type": "number" },
+          "marketing_launch": { "type": "number" },
+          "working_capital_months": { "type": "integer", "default": 3 },
+          "monthly_operating_cost": { "type": "number" },
+          "contingency_percent": { "type": "number", "default": 10 }
+        },
+        "required": ["monthly_rent", "renovation_cost", "equipment_cost"]
+      }
+    },
+    {
+      "name": "calculate_operating_costs",
+      "description": "Calculate monthly and annual operating costs",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "rent": { "type": "number" },
+          "staff_count": { "type": "integer" },
+          "avg_salary": { "type": "number" },
+          "utilities": { "type": "number" },
+          "inventory_monthly": { "type": "number" },
+          "marketing": { "type": "number" },
+          "insurance": { "type": "number" },
+          "other_costs": { 
+            "type": "object",
+            "additionalProperties": { "type": "number" }
+          }
+        },
+        "required": ["rent", "staff_count", "avg_salary"]
+      }
+    },
+    {
+      "name": "calculate_break_even",
+      "description": "Calculate break-even point",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "startup_investment": { "type": "number" },
+          "monthly_fixed_costs": { "type": "number" },
+          "avg_transaction_value": { "type": "number" },
+          "variable_cost_percent": { "type": "number", "default": 30 },
+          "expected_daily_customers": { "type": "integer" }
+        },
+        "required": ["startup_investment", "monthly_fixed_costs", "avg_transaction_value"]
+      }
+    },
+    {
+      "name": "calculate_roi",
+      "description": "Calculate return on investment",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "initial_investment": { "type": "number" },
+          "annual_profit": { "type": "number" },
+          "years": { "type": "integer", "default": 5 }
+        },
+        "required": ["initial_investment", "annual_profit"]
+      }
+    },
+    {
+      "name": "project_revenue",
+      "description": "Project revenue over multiple years",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "year1_monthly_revenue": { "type": "number" },
+          "growth_rate_percent": { "type": "number", "default": 5 },
+          "years": { "type": "integer", "default": 5 },
+          "seasonality_factor": { "type": "number", "default": 1 }
+        },
+        "required": ["year1_monthly_revenue"]
+      }
+    },
+    {
+      "name": "project_cash_flow",
+      "description": "Project cash flow over time",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "initial_investment": { "type": "number" },
+          "monthly_revenue": { "type": "number" },
+          "monthly_costs": { "type": "number" },
+          "revenue_growth_percent": { "type": "number", "default": 5 },
+          "months": { "type": "integer", "default": 36 }
+        },
+        "required": ["initial_investment", "monthly_revenue", "monthly_costs"]
+      }
+    },
+    {
+      "name": "calculate_npv",
+      "description": "Calculate net present value",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "initial_investment": { "type": "number" },
+          "annual_cash_flows": {
+            "type": "array",
+            "items": { "type": "number" }
+          },
+          "discount_rate_percent": { "type": "number", "default": 10 }
+        },
+        "required": ["initial_investment", "annual_cash_flows"]
+      }
+    },
+    {
+      "name": "sensitivity_analysis",
+      "description": "Analyze sensitivity to variable changes",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "base_profit": { "type": "number" },
+          "variable_name": { "type": "string" },
+          "base_value": { "type": "number" },
+          "impact_per_unit": { "type": "number" },
+          "change_percentages": {
+            "type": "array",
+            "items": { "type": "number" },
+            "default": [-20, -10, 10, 20]
+          }
+        },
+        "required": ["base_profit", "variable_name", "base_value", "impact_per_unit"]
+      }
+    }
+  ]
+}

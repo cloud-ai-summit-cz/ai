@@ -1,0 +1,563 @@
+openapi: 3.1.0
+info:
+  title: Research Orchestrator API
+  description: REST API for the research orchestrator service, providing endpoints for managing research sessions and receiving real-time updates via SSE.
+  version: 1.0.0
+  contact:
+    name: Platform Team
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+  - url: https://research.cofilot.demo
+    description: Production
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /research/sessions:
+    post:
+      summary: Create a new research session
+      operationId: createSession
+      tags:
+        - Research
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResearchRequest'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchSession'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+
+  /research/sessions/{session_id}:
+    get:
+      summary: Get session status
+      operationId: getSession
+      tags:
+        - Research
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchSession'
+        '404':
+          description: Session not found
+
+  /research/sessions/{session_id}/start:
+    post:
+      summary: Start the research workflow
+      operationId: startWorkflow
+      tags:
+        - Research
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '202':
+          description: Workflow started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowStarted'
+        '404':
+          description: Session not found
+        '409':
+          description: Workflow already running
+
+  /research/sessions/{session_id}/answers:
+    post:
+      summary: Submit answers to pending questions
+      operationId: submitAnswers
+      tags:
+        - Research
+        - Human-in-the-Loop
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnswersRequest'
+      responses:
+        '200':
+          description: Answers submitted and workflow resumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnswersResponse'
+        '404':
+          description: Session not found
+        '409':
+          description: No pending questions or workflow not paused
+
+  /research/sessions/{session_id}/questions:
+    get:
+      summary: Get pending questions for the session
+      operationId: getPendingQuestions
+      tags:
+        - Research
+        - Human-in-the-Loop
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of pending questions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionsResponse'
+        '404':
+          description: Session not found
+
+  /research/sessions/{session_id}/resume:
+    post:
+      summary: Resume a paused workflow (after answers submitted)
+      operationId: resumeWorkflow
+      tags:
+        - Research
+        - Human-in-the-Loop
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '202':
+          description: Workflow resumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowResumed'
+        '404':
+          description: Session not found
+        '409':
+          description: Workflow not paused or blocking questions unanswered
+
+  /research/sessions/{session_id}/checkpoint:
+    get:
+      summary: Get current checkpoint status
+      operationId: getCheckpoint
+      tags:
+        - Research
+        - Human-in-the-Loop
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Checkpoint status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckpointStatus'
+        '404':
+          description: Session not found
+
+  /research/sessions/{session_id}/events:
+    get:
+      summary: Subscribe to session events (SSE)
+      operationId: subscribeEvents
+      tags:
+        - Research
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/AgentActivityEvent'
+        '404':
+          description: Session not found
+
+  /research/sessions/{session_id}/cancel:
+    post:
+      summary: Cancel a running workflow
+      operationId: cancelWorkflow
+      tags:
+        - Research
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Workflow cancelled
+        '404':
+          description: Session not found
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - version
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        version:
+          type: string
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+
+    ResearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          minLength: 10
+          maxLength: 1000
+          description: Research question
+          example: "Should Cofilot expand to Vienna?"
+        context:
+          type: object
+          additionalProperties: true
+          description: Optional context for the research
+
+    ResearchSession:
+      type: object
+      required:
+        - id
+        - query
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        query:
+          type: string
+        status:
+          type: string
+          enum: [created, running, waiting_input, completed, failed]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        current_agent:
+          type: string
+          nullable: true
+        checklist:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChecklistItem'
+        pending_questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Question'
+        final_report:
+          type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+
+    ChecklistItem:
+      type: object
+      required:
+        - id
+        - task
+        - agent
+        - status
+      properties:
+        id:
+          type: integer
+        task:
+          type: string
+        agent:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, completed, skipped]
+        notes:
+          type: string
+          nullable: true
+
+    Question:
+      type: object
+      required:
+        - id
+        - question
+        - context
+        - asked_by
+        - priority
+        - blocking
+        - created_at
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+        context:
+          type: string
+          description: Why this information is needed
+        asked_by:
+          type: string
+          description: Agent that asked this question
+        priority:
+          type: string
+          enum: [high, medium, low]
+        blocking:
+          type: boolean
+          description: If true, workflow is paused waiting for this answer
+        options:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: Optional multiple choice options
+        answer:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        answered_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    QuestionsResponse:
+      type: object
+      required:
+        - session_id
+        - questions
+        - has_blocking
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Question'
+        has_blocking:
+          type: boolean
+          description: True if any blocking questions are unanswered
+        workflow_paused:
+          type: boolean
+          description: True if workflow is currently paused
+
+    AnswersResponse:
+      type: object
+      required:
+        - session_id
+        - answers_received
+        - workflow_status
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        answers_received:
+          type: integer
+        workflow_status:
+          type: string
+          enum: [resumed, still_waiting, completed]
+        remaining_questions:
+          type: integer
+          description: Number of unanswered questions remaining
+
+    WorkflowResumed:
+      type: object
+      required:
+        - session_id
+        - status
+        - checkpoint_id
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [resumed]
+        checkpoint_id:
+          type: string
+        message:
+          type: string
+
+    CheckpointStatus:
+      type: object
+      required:
+        - session_id
+        - has_checkpoint
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        has_checkpoint:
+          type: boolean
+        checkpoint_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+          description: Why the checkpoint was created (e.g., "blocking_questions")
+        can_resume:
+          type: boolean
+          description: True if all blocking questions are answered
+
+    WorkflowStarted:
+      type: object
+      required:
+        - session_id
+        - status
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [started]
+        message:
+          type: string
+
+    AnswersRequest:
+      type: object
+      required:
+        - answers
+      properties:
+        answers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Map of question_id to answer
+
+    AgentActivityEvent:
+      type: object
+      required:
+        - event_type
+        - session_id
+        - timestamp
+        - sequence
+      properties:
+        event_type:
+          type: string
+          enum:
+            - workflow_started
+            - agent_invoked
+            - agent_completed
+            - sub_agent_tool_call
+            - scratchpad_updated
+            - question_added
+            - questions_pending
+            - workflow_paused
+            - workflow_resumed
+            - thinking
+            - workflow_completed
+            - error
+        session_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        sequence:
+          type: integer
+          description: Monotonic sequence number for event ordering
+        agent:
+          type: string
+          nullable: true
+        message:
+          type: string
+          nullable: true
+        data:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Event-specific payload (see SSE Event Types in ARCHITECTURE.md)
+
+    ValidationError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  type: string
+              msg:
+                type: string
+              type:
+                type: string

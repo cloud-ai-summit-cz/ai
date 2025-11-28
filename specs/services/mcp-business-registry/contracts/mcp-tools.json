@@ -1,0 +1,120 @@
+{
+  "name": "mcp-business-registry",
+  "version": "1.0.0",
+  "description": "Business registry and company data tools",
+  "tools": [
+    {
+      "name": "search_companies",
+      "description": "Search for companies by name, industry, or location",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Company name or keyword"
+          },
+          "industry": {
+            "type": "string",
+            "description": "Industry filter (e.g., 'food_and_beverage', 'coffee')"
+          },
+          "location": {
+            "type": "string",
+            "description": "City or country filter"
+          },
+          "max_results": {
+            "type": "integer",
+            "default": 20
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "get_company_profile",
+      "description": "Get detailed profile of a company",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "description": "Company ID from search results"
+          }
+        },
+        "required": ["company_id"]
+      }
+    },
+    {
+      "name": "get_company_financials",
+      "description": "Get financial data for a company",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "description": "Company ID"
+          }
+        },
+        "required": ["company_id"]
+      }
+    },
+    {
+      "name": "get_company_locations",
+      "description": "Get all locations/branches of a company",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "description": "Company ID"
+          },
+          "city": {
+            "type": "string",
+            "description": "Optional city filter"
+          }
+        },
+        "required": ["company_id"]
+      }
+    },
+    {
+      "name": "get_industry_players",
+      "description": "Get top companies in an industry and region",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "industry": {
+            "type": "string",
+            "description": "Industry (e.g., 'coffee_shops', 'cafes')"
+          },
+          "region": {
+            "type": "string",
+            "description": "City or country"
+          },
+          "limit": {
+            "type": "integer",
+            "default": 10,
+            "description": "Number of top players to return"
+          }
+        },
+        "required": ["industry", "region"]
+      }
+    },
+    {
+      "name": "get_company_news",
+      "description": "Get recent news about a specific company",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "description": "Company ID"
+          },
+          "days_back": {
+            "type": "integer",
+            "default": 90
+          }
+        },
+        "required": ["company_id"]
+      }
+    }
+  ]
+}
