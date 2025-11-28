@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
 
+from jinja2 import Template
 from agent_framework import ChatAgent, FunctionInvocationContext, MCPStreamableHTTPTool
 from agent_framework_azure_ai import AzureAIAgentClient
 from azure.identity.aio import DefaultAzureCredential
@@ -49,66 +50,6 @@ from models import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Orchestrator system prompt for dynamic agent coordination
-ORCHESTRATOR_SYSTEM_PROMPT = """You are a Research Orchestrator agent that coordinates multi-agent research workflows.
-
-You have access to specialist agents as tools:
-1. **market_analysis** - Analyzes market opportunities, trends, customer segments, and market sizing
-2. **competitor_analysis** - Analyzes competitive landscape, competitor strengths/weaknesses, market positioning
-3. **synthesize_findings** - Combines research insights into cohesive, actionable recommendations
-
-You also have access to a shared scratchpad for collaboration:
-- **write_section** - Store findings in named sections (e.g., 'market_findings', 'competitor_analysis')
-- **read_section** - Read content from a named section
-- **list_sections** - List all available sections
-- **add_question** - Queue questions for human review if you need clarification
-- **get_answered_questions** - Check if humans have answered your questions
-
-Your role is to:
-- Understand the user's research query deeply
-- Call the appropriate specialist agents to gather comprehensive insights
-- Store important findings in the scratchpad for reference and synthesis
-- You may call each agent MULTIPLE TIMES if needed to explore different aspects
-- You may call agents in any order based on your reasoning
-- After gathering sufficient information, call synthesize_findings to create the final report
-
-Guidelines:
-- Start by breaking down the query into key research areas
-- For complex queries, gather both market AND competitor insights before synthesizing
-- Use the scratchpad to store key findings as you go - this helps with synthesis
-- If initial results raise new questions, call agents again to dig deeper
-- If you need human input, use add_question to queue questions
-- Always end by calling synthesize_findings with all the gathered information
-- Be thorough - it's better to gather more insights than to miss important aspects
-
-Remember: You have FULL AUTONOMY to decide how to approach the research. Use your judgment."""
-
-
-# Orchestrator system prompt when scratchpad is not available
-ORCHESTRATOR_SYSTEM_PROMPT_NO_SCRATCHPAD = """You are a Research Orchestrator agent that coordinates multi-agent research workflows.
-
-You have access to specialist agents as tools:
-1. **market_analysis** - Analyzes market opportunities, trends, customer segments, and market sizing
-2. **competitor_analysis** - Analyzes competitive landscape, competitor strengths/weaknesses, market positioning
-3. **synthesize_findings** - Combines research insights into cohesive, actionable recommendations
-
-Your role is to:
-- Understand the user's research query deeply
-- Call the appropriate specialist agents to gather comprehensive insights
-- You may call each agent MULTIPLE TIMES if needed to explore different aspects
-- You may call agents in any order based on your reasoning
-- After gathering sufficient information, call synthesize_findings to create the final report
-
-Guidelines:
-- Start by breaking down the query into key research areas
-- For complex queries, gather both market AND competitor insights before synthesizing
-- If initial results raise new questions, call agents again to dig deeper
-- Always end by calling synthesize_findings with all the gathered information
-- Be thorough - it's better to gather more insights than to miss important aspects
-
-Remember: You have FULL AUTONOMY to decide how to approach the research. Use your judgment."""
-
 
 # === Tool Call Event Queue ===
 
@@ -647,11 +588,13 @@ class AgentOrchestrator:
                 tools_list.append(self._mcp_scratchpad)
                 logger.info("Added MCP Scratchpad tools to orchestrator")
             
-            # Select appropriate system prompt
-            system_prompt = (
-                ORCHESTRATOR_SYSTEM_PROMPT 
-                if self._mcp_scratchpad 
-                else ORCHESTRATOR_SYSTEM_PROMPT_NO_SCRATCHPAD
+            # Load and render system prompt
+            prompt_template = self.settings.get_prompt("system_prompt")
+            template = Template(prompt_template)
+            system_prompt = template.render(
+                query=session.query,
+                context=session.context,
+                scratchpad_enabled=self._mcp_scratchpad is not None
             )
 
             # Create the main orchestrator agent with specialist agents as tools

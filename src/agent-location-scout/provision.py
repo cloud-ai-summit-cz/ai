@@ -2,20 +2,25 @@
 """
 Provision script for Location Scout Agent.
 
-Manages Azure AI Foundry hosted agent deployment using SDK v2.
+Manages Azure AI Foundry hosted agent deployment using SDK and REST API.
 Build and push operations are handled by GitHub Actions - this script
 only handles remote provisioning via the Azure AI Projects SDK.
 
 Commands:
-    deploy  - Create/update hosted agent version in Azure AI Foundry (idempotent)
-    start   - Start the hosted agent container
-    stop    - Stop the hosted agent container
-    delete  - Delete the hosted agent
-    list    - List all agents
-    status  - Show current configuration and container status
+    deploy           - Create/update hosted agent version in Azure AI Foundry
+    start            - Start the hosted agent container
+    stop             - Stop the hosted agent container
+    restart          - Stop, wait, then start the container
+    redeploy         - Full redeployment cycle (stop → delete-container → deploy → start)
+    delete-container - Delete the hosted container (keeps agent definition)
+    delete           - Delete the hosted agent version
+    list             - List all agents in the project
+    show             - Show detailed agent information (versions, definition)
+    status           - Show current configuration and container status
+    invoke           - Test invoke the agent with a simple message
 
-Note: Azure CLI command `az cognitiveservices agent start` may not be available.
-This script uses the REST API directly for container operations.
+Note: Azure CLI `az cognitiveservices agent` commands are in preview and may
+not be available in your CLI version. This script uses REST API directly.
 """
 
 import argparse
@@ -422,6 +427,243 @@ def show_status() -> None:
         print(f"\nCould not fetch agent status: {e}")
 
 
+def show_agent() -> None:
+    """Show detailed agent information including all versions."""
+    settings = get_settings()
+    base_url = get_data_plane_base_url(settings.azure_ai_foundry_endpoint)
+    token = get_data_plane_token()
+    account_name, project_name = parse_endpoint(settings.azure_ai_foundry_endpoint)
+    
+    print(f"Agent Details: {settings.agent_name}")
+    print("=" * 60)
+    
+    # Get agent info via REST API for more details
+    url = f"{base_url}/agents/{settings.agent_name}"
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"api-version": AGENT_API_VERSION}
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        if response.status_code == 404:
+            print(f"Agent '{settings.agent_name}' not found.")
+            return
+        response.raise_for_status()
+        agent_data = response.json()
+        
+        print(f"ID: {agent_data.get('id', 'N/A')}")
+        print(f"Name: {agent_data.get('name', 'N/A')}")
+        
+        # Show versions
+        versions = agent_data.get('versions', {})
+        print(f"\nVersions:")
+        for version_key, version_data in versions.items():
+            print(f"\n  [{version_key}]")
+            print(f"    Version: {version_data.get('version', 'N/A')}")
+            print(f"    Description: {version_data.get('description', 'N/A')}")
+            print(f"    Created: {version_data.get('created_at', 'N/A')}")
+            
+            definition = version_data.get('definition', {})
+            kind = definition.get('kind', 'N/A')
+            print(f"    Kind: {kind}")
+            
+            if kind == 'hosted':
+                print(f"    Image: {definition.get('image', 'N/A')}")
+                print(f"    CPU: {definition.get('cpu', 'N/A')}")
+                print(f"    Memory: {definition.get('memory', 'N/A')}")
+                protocols = definition.get('container_protocol_versions', [])
+                if protocols:
+                    for p in protocols:
+                        print(f"    Protocol: {p.get('protocol', 'N/A')} {p.get('version', '')}")
+                env_vars = definition.get('environment_variables', {})
+                if env_vars:
+                    print(f"    Environment Variables:")
+                    for k, v in env_vars.items():
+                        # Mask sensitive values
+                        if 'key' in k.lower() or 'secret' in k.lower():
+                            v = '***'
+                        print(f"      {k}: {v}")
+            elif kind == 'prompt':
+                print(f"    Model: {definition.get('model', 'N/A')}")
+                instructions = definition.get('instructions', '')
+                if instructions:
+                    preview = instructions[:100] + '...' if len(instructions) > 100 else instructions
+                    print(f"    Instructions: {preview}")
+        
+        # Get container status for hosted agents
+        container = get_container_status()
+        if container:
+            print(f"\nContainer:")
+            print(f"  Status: {container.get('status', 'Unknown')}")
+            print(f"  Replicas: {container.get('min_replicas', 'N/A')}-{container.get('max_replicas', 'N/A')}")
+            error_msg = container.get('error_message', '')
+            if error_msg:
+                print(f"  Error: {error_msg}")
+                
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching agent details: {e}")
+
+
+def restart_agent() -> None:
+    """Restart the hosted agent container (stop + start)."""
+    settings = get_settings()
+    print(f"Restarting agent: {settings.agent_name}")
+    print("-" * 40)
+    
+    # Stop
+    print("\n[1/3] Stopping container...")
+    try:
+        stop_agent()
+    except Exception as e:
+        print(f"  Warning: Stop failed (may already be stopped): {e}")
+    
+    # Wait for stop
+    print("\n[2/3] Waiting for container to stop...")
+    for i in range(12):  # Wait up to 2 minutes
+        time.sleep(10)
+        status = get_container_status()
+        if status:
+            container_status = status.get('status', 'Unknown')
+            print(f"  [{i+1}] Status: {container_status}")
+            if container_status == "Stopped":
+                break
+        else:
+            print(f"  [{i+1}] Container not found")
+            break
+    
+    # Start
+    print("\n[3/3] Starting container...")
+    start_agent()
+    print("\n✓ Restart complete!")
+
+
+def redeploy_agent() -> None:
+    """Full redeployment cycle: stop → delete-container → deploy → start.
+    
+    Use this when you've pushed a new container image and need to update
+    the running agent to use the new image.
+    """
+    settings = get_settings()
+    print(f"Redeploying agent: {settings.agent_name}")
+    print("=" * 50)
+    print("This will:")
+    print("  1. Stop the running container")
+    print("  2. Delete the container deployment")
+    print("  3. Create a new agent version")
+    print("  4. Start the new container")
+    print("=" * 50)
+    
+    # Check current state
+    container = get_container_status()
+    
+    # Step 1: Stop if running
+    if container and container.get('status') == 'Running':
+        print("\n[1/4] Stopping container...")
+        try:
+            stop_agent()
+            # Wait for stop
+            for i in range(12):
+                time.sleep(10)
+                status = get_container_status()
+                if status and status.get('status') == 'Stopped':
+                    print("  Container stopped.")
+                    break
+                print(f"  Waiting... ({i+1})")
+        except Exception as e:
+            print(f"  Warning: {e}")
+    else:
+        print("\n[1/4] Container not running, skipping stop.")
+    
+    # Step 2: Delete container
+    print("\n[2/4] Deleting container deployment...")
+    try:
+        delete_container()
+        time.sleep(5)  # Brief wait
+    except Exception as e:
+        print(f"  Warning: {e}")
+    
+    # Step 3: Deploy new version
+    print("\n[3/4] Deploying new agent version...")
+    deploy_foundry()
+    
+    # Step 4: Start
+    print("\n[4/4] Starting container...")
+    start_agent()
+    
+    print("\n" + "=" * 50)
+    print("✓ Redeployment complete!")
+    print("=" * 50)
+
+
+def invoke_agent() -> None:
+    """Test invoke the agent with a simple message."""
+    settings = get_settings()
+    
+    print(f"Invoking agent: {settings.agent_name}")
+    print("-" * 40)
+    
+    # Check container status first
+    container = get_container_status()
+    if not container or container.get('status') != 'Running':
+        print("Error: Container is not running.")
+        print("Start it with: uv run python provision.py start")
+        sys.exit(1)
+    
+    try:
+        from azure.ai.projects import AIProjectClient
+        from azure.ai.projects.models import AgentReference
+        from azure.identity import DefaultAzureCredential
+        
+        client = AIProjectClient(
+            endpoint=settings.azure_ai_foundry_endpoint,
+            credential=DefaultAzureCredential()
+        )
+        
+        # Get latest version
+        agent = get_agent_by_name(client, settings.agent_name)
+        version = "1"
+        if agent and hasattr(agent, 'versions') and agent.versions:
+            latest = getattr(agent.versions, 'latest', None)
+            if latest:
+                version = str(getattr(latest, 'version', '1'))
+        
+        print(f"  Version: {version}")
+        print(f"  Sending test message...")
+        
+        # Use the AIProjectClient's built-in OpenAI client
+        # It handles auth and API version automatically
+        openai_client = client.get_openai_client()
+        
+        agent_ref = AgentReference(name=settings.agent_name, version=version)
+        
+        response = openai_client.responses.create(
+            input=[{"role": "user", "content": "Hello! What can you help me with?"}],
+            extra_body={"agent": agent_ref.as_dict()}
+        )
+        
+        print(f"\n  Response Status: {response.status}")
+        
+        if response.error:
+            print(f"  Error Code: {response.error.code}")
+            print(f"  Error Message: {response.error.message}")
+        elif hasattr(response, 'output_text') and response.output_text:
+            print(f"\n  Agent Response:")
+            print(f"  {response.output_text}")
+        elif response.output:
+            print(f"\n  Output: {response.output}")
+        else:
+            print(f"\n  (No output text returned)")
+            
+    except ImportError as e:
+        print(f"Error: Missing required package: {e}")
+        print("Install with: uv add azure-ai-projects")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error invoking agent: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -432,25 +674,45 @@ Commands:
   deploy           Create/update hosted agent version (idempotent)
   start            Start the hosted agent container
   stop             Stop the hosted agent container
-  delete-container Delete the hosted container (required before delete)
+  restart          Stop and start the container (picks up RBAC changes)
+  redeploy         Full cycle: stop → delete-container → deploy → start
+  delete-container Delete the hosted container (keeps agent version)
   delete           Delete the hosted agent version
   list             List all agents in the project
+  show             Show detailed agent info (versions, definition, env vars)
   status           Show current configuration and container status
+  invoke           Test invoke the agent with a simple message
 
-Typical workflow:
+Typical workflow (first deployment):
   1. uv run python provision.py deploy   # Create agent version
   2. uv run python provision.py start    # Start the container
   3. uv run python provision.py status   # Check status
+  4. uv run python provision.py invoke   # Test the agent
+
+Update workflow (new container image):
+  uv run python provision.py redeploy    # Full redeployment cycle
   
-To remove an agent:
-  1. uv run python provision.py stop              # Stop container
-  2. uv run python provision.py delete-container  # Delete container
-  3. uv run python provision.py delete            # Delete agent version
+  Or step by step:
+  1. uv run python provision.py stop
+  2. uv run python provision.py delete-container
+  3. uv run python provision.py deploy
+  4. uv run python provision.py start
+
+To remove an agent completely:
+  1. uv run python provision.py stop
+  2. uv run python provision.py delete-container
+  3. uv run python provision.py delete
+
+Note: Container logs are sent to Application Insights via OpenTelemetry.
+View them in the Foundry portal under Monitoring → Traces.
         """,
     )
     parser.add_argument(
         "command",
-        choices=["deploy", "start", "stop", "delete-container", "delete", "list", "status"],
+        choices=[
+            "deploy", "start", "stop", "restart", "redeploy",
+            "delete-container", "delete", "list", "show", "status", "invoke"
+        ],
         help="Command to execute",
     )
 
@@ -460,10 +722,14 @@ To remove an agent:
         "deploy": deploy_foundry,
         "start": start_agent,
         "stop": stop_agent,
+        "restart": restart_agent,
+        "redeploy": redeploy_agent,
         "delete-container": delete_container,
         "delete": delete_agent,
         "list": list_agents,
+        "show": show_agent,
         "status": show_status,
+        "invoke": invoke_agent,
     }
 
     try:
