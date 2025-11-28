@@ -1,10 +1,10 @@
-name: BUILD mcp-scratchpad
+name: BUILD agent-location-scout
 
 on:
   push:
     paths:
-      - 'src/mcp-scratchpad/**'
-      - '.github/workflows/mcp-scratchpad.yml'
+      - 'src/agent-location-scout/**'
+      - '.github/workflows/agent-location-scout.yml'
   workflow_dispatch:
 
 permissions:
@@ -29,6 +29,6 @@ jobs:
     - name: Build and push Docker image
       uses: docker/build-push-action@v2
       with:
-        context: src/mcp-scratchpad
+        context: src/agent-location-scout
         push: true
-        tags: ghcr.io/${{ github.repository }}/mcp-scratchpad:latest
+        tags: ghcr.io/${{ github.repository }}/agent-location-scout:latest

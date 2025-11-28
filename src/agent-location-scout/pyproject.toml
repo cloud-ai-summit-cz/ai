@@ -1,0 +1,61 @@
+[project]
+name = "agent-location-scout"
+version = "0.1.0"
+description = "LangGraph-based agent for location and regulation analysis, deployed as a Foundry Hosted Agent"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # LangGraph stack
+    "langgraph>=0.2",
+    "langchain>=0.3",
+    "langchain-openai>=0.3",
+    
+    # Foundry hosting adapter
+    "azure-ai-agentserver-langgraph>=1.0.0b5",
+    
+    # Azure authentication
+    "azure-identity>=1.19.0",
+    
+    # Azure AI Projects SDK (for provision.py)
+    "azure-ai-projects>=1.0.0b5",
+    
+    # Observability
+    "azure-monitor-opentelemetry>=1.6",
+    
+    # Configuration
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "python-dotenv>=1.0.0",
+    
+    # CLI output
+    "rich>=13.7.0",
+    
+    # Templating
+    "jinja2>=3.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
