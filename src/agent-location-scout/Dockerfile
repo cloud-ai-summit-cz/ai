@@ -14,8 +14,8 @@ RUN pip install --no-cache-dir uv
 # Copy dependency files first (for better layer caching)
 COPY pyproject.toml .
 
-# Install dependencies using uv
-RUN uv pip install --system .
+# Install dependencies using uv (--prerelease=allow needed for azure-ai-agentserver-* packages)
+RUN uv pip install --system --prerelease=allow .
 
 # Copy application code
 COPY . .
