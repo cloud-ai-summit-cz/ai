@@ -12,13 +12,13 @@ import {
   Wrench, 
   Cpu,
   AlertCircle,
-  CheckCircle2,
-  Loader2
+  CheckCircle2
 } from 'lucide-react';
 import type { ChatMessage, MessageType } from '../types';
 
 interface ChatPanelProps {
   messages: ChatMessage[];
+  onNavigate?: (panel: 'plan' | 'notes' | 'draft') => void;
 }
 
 function getMessageIcon(type: MessageType, status?: string) {
@@ -30,11 +30,13 @@ function getMessageIcon(type: MessageType, status?: string) {
     case 'orchestrator':
       return <Bot className={iconClass} />;
     case 'agent':
-      if (status === 'started') return <Loader2 className={`${iconClass} animate-spin`} />;
-      if (status === 'completed') return <CheckCircle2 className={iconClass} />;
+      // Use static icons - no spinners in message log
+      if (status === 'completed') return <CheckCircle2 className={`${iconClass} text-green-400`} />;
       return <Bot className={iconClass} />;
     case 'tool':
-      if (status === 'started') return <Loader2 className={`${iconClass} animate-spin`} />;
+      // Wrench icon with color variation for status
+      if (status === 'completed') return <Wrench className={`${iconClass} text-green-400`} />;
+      if (status === 'started') return <Wrench className={`${iconClass} text-yellow-400`} />;
       return <Wrench className={iconClass} />;
     case 'user':
       return <User className={iconClass} />;
@@ -91,7 +93,88 @@ function formatTime(timestamp: string): string {
   });
 }
 
-function ChatMessageItem({ message }: { message: ChatMessage }) {
+/**
+ * Parse message content and make actionable phrases clickable.
+ * E.g., "📝 Added note" becomes a link to the Notes tab.
+ */
+function renderMessageContent(
+  content: string, 
+  onNavigate?: (panel: 'plan' | 'notes' | 'draft') => void
+): React.ReactNode {
+  if (!onNavigate) {
+    return content;
+  }
+
+  // Patterns that link to specific tabs
+  const patterns: Array<{ regex: RegExp; panel: 'plan' | 'notes' | 'draft' }> = [
+    { regex: /(Added \d+ tasks?|Added.*to plan)/gi, panel: 'plan' },
+    { regex: /(Task updated.*|✅ Task)/gi, panel: 'plan' },
+    { regex: /(Added note|📝 Added note)/gi, panel: 'notes' },
+    { regex: /(Updated draft|📝 Updated draft)/gi, panel: 'draft' },
+  ];
+
+  // Find all matches and their positions
+  interface Match { start: number; end: number; text: string; panel: 'plan' | 'notes' | 'draft' }
+  const matches: Match[] = [];
+  
+  for (const { regex, panel } of patterns) {
+    let match;
+    const r = new RegExp(regex.source, regex.flags);
+    while ((match = r.exec(content)) !== null) {
+      matches.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        text: match[0],
+        panel,
+      });
+    }
+  }
+
+  if (matches.length === 0) {
+    return content;
+  }
+
+  // Sort matches by start position
+  matches.sort((a, b) => a.start - b.start);
+
+  // Build result with clickable parts
+  const result: React.ReactNode[] = [];
+  let lastEnd = 0;
+
+  for (const match of matches) {
+    // Add text before this match
+    if (match.start > lastEnd) {
+      result.push(content.slice(lastEnd, match.start));
+    }
+    
+    // Add clickable match
+    result.push(
+      <button
+        key={match.start}
+        onClick={() => onNavigate(match.panel)}
+        className="text-accent hover:text-accent-light underline underline-offset-2 cursor-pointer transition-colors"
+      >
+        {match.text}
+      </button>
+    );
+    
+    lastEnd = match.end;
+  }
+
+  // Add remaining text
+  if (lastEnd < content.length) {
+    result.push(content.slice(lastEnd));
+  }
+
+  return result;
+}
+
+interface ChatMessageItemProps {
+  message: ChatMessage;
+  onNavigate?: (panel: 'plan' | 'notes' | 'draft') => void;
+}
+
+function ChatMessageItem({ message, onNavigate }: ChatMessageItemProps) {
   const status = message.metadata?.status;
   
   return (
@@ -115,7 +198,7 @@ function ChatMessageItem({ message }: { message: ChatMessage }) {
             )}
           </div>
           <p className="text-text text-sm leading-relaxed">
-            {message.content}
+            {renderMessageContent(message.content, onNavigate)}
           </p>
         </div>
       </div>
@@ -123,7 +206,7 @@ function ChatMessageItem({ message }: { message: ChatMessage }) {
   );
 }
 
-export function ChatPanel({ messages }: ChatPanelProps) {
+export function ChatPanel({ messages, onNavigate }: ChatPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   
   // Auto-scroll to bottom on new messages
@@ -136,7 +219,7 @@ export function ChatPanel({ messages }: ChatPanelProps) {
       <div className="flex-1 overflow-y-auto">
         <div className="divide-y divide-border/30">
           {messages.map((message) => (
-            <ChatMessageItem key={message.id} message={message} />
+            <ChatMessageItem key={message.id} message={message} onNavigate={onNavigate} />
           ))}
         </div>
         <div ref={bottomRef} />

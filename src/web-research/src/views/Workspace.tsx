@@ -1,10 +1,9 @@
 /**
  * Research Workspace Component
- * 
+ *
  * Main workspace layout with tabbed panels and live updates.
  */
 
-import { useEffect } from 'react';
 import { useResearchStore } from '../store';
 import {
   Header,
@@ -15,9 +14,12 @@ import {
   DraftPanel,
   QuestionsPanel,
 } from '../components';
-import { createMockEventStream } from '../mocks/data';
 
-export function Workspace() {
+interface WorkspaceProps {
+  onNewSession?: () => void;
+}
+
+export function Workspace({ onNewSession }: WorkspaceProps) {
   const {
     session,
     scratchpad,
@@ -27,35 +29,17 @@ export function Workspace() {
     setActivePanel,
     showQuestionModal,
     setShowQuestionModal,
-    addMessage,
-    addNote,
-    updateTask,
     answerQuestion,
     resetState,
   } = useResearchStore();
 
-  // Start mock event stream for demo
-  useEffect(() => {
-    const cleanup = createMockEventStream((event) => {
-      switch (event.type) {
-        case 'message':
-          addMessage(event.data as any);
-          break;
-        case 'note_added':
-          addNote(event.data as any);
-          break;
-        case 'task_update':
-          const taskUpdate = event.data as any;
-          updateTask(taskUpdate.id, taskUpdate);
-          break;
-      }
-    });
-
-    return cleanup;
-  }, [addMessage, addNote, updateTask]);
-
   const pendingQuestionsCount = scratchpad.questions.filter(q => !q.answer).length;
   const completedTasksCount = scratchpad.plan.filter(t => t.status === 'completed').length;
+
+  const handleReset = () => {
+    resetState();
+    onNewSession?.();
+  };
 
   return (
     <div className="flex flex-col h-screen bg-surface-dark">
@@ -64,7 +48,7 @@ export function Workspace() {
         query={session?.query}
         status={session?.status || 'idle'}
         isConnected={isConnected}
-        onReset={resetState}
+        onReset={handleReset}
       />
 
       {/* Tab Navigation */}
@@ -80,7 +64,7 @@ export function Workspace() {
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden bg-surface">
-        {activePanel === 'chat' && <ChatPanel messages={messages} />}
+        {activePanel === 'chat' && <ChatPanel messages={messages} onNavigate={setActivePanel} />}
         {activePanel === 'plan' && <PlanPanel tasks={scratchpad.plan} />}
         {activePanel === 'notes' && <NotesPanel notes={scratchpad.notes} />}
         {activePanel === 'draft' && <DraftPanel sections={scratchpad.draft} />}

@@ -200,7 +200,6 @@ flowchart LR
     subgraph Producers["Event Producers"]
         MW[MAF Middleware]
         RS[Run Steps Poller]
-        MCP[MCP Subscription Handler]
     end
     
     subgraph Bus["Event Bus"]
@@ -211,12 +210,19 @@ flowchart LR
         SSE[SSE Endpoint]
     end
     
-    MW -->|tool_called, tool_completed| Q
+    subgraph Polling["Polling (after SSE events)"]
+        POLL[Scratchpad Proxy API]
+    end
+    
+    MW -->|tool_called, tool_completed, agent_response| Q
     RS -->|sub_agent_tool_call| Q
-    MCP -->|scratchpad_updated| Q
     Q --> SSE
     SSE -->|Server-Sent Events| UI[React UI]
+    UI -->|GET /scratchpad/*| POLL
+    POLL -->|MCP| MCP[mcp-scratchpad]
 ```
+
+> **Design Decision**: Scratchpad state is fetched via polling rather than SSE because subagents invoke MCP tools directly, bypassing the orchestrator's event middleware.
 
 ### Event Flow
 
@@ -226,27 +232,48 @@ flowchart LR
 
 ### MCP Scratchpad Integration
 
-The orchestrator subscribes to scratchpad notifications to provide real-time visibility into inter-agent communication:
+The orchestrator provides proxy endpoints for the frontend to poll scratchpad state. This is necessary because subagents invoke MCP tools directly (not through the orchestrator's middleware), so SSE events from subagent scratchpad writes are not reliably captured.
 
 ```mermaid
 sequenceDiagram
     participant UI as React UI
-    participant Orch as Orchestrator
+    participant API as Orchestrator API
     participant MCP as mcp-scratchpad
     participant Agent as Specialist Agent
     
-    Orch->>MCP: subscribe(session_id, events)
-    MCP-->>Orch: subscription_id
+    Note over Agent,MCP: Agent writes findings directly
+    Agent->>MCP: add_note("Market size: €450M")
+    Agent->>MCP: write_draft_section("market_analysis", ...)
     
-    Note over Agent,MCP: Agent writes findings
-    Agent->>MCP: write_section("market_analysis", data)
-    MCP-->>Orch: notification: section_updated
-    Orch->>UI: SSE: scratchpad_updated
+    Note over UI,API: After receiving SSE event
+    API-->>UI: SSE: agent_response
+    UI->>API: GET /sessions/{id}/scratchpad/plan
+    API->>MCP: read_plan()
+    MCP-->>API: {tasks: [...]}
+    API-->>UI: {tasks: [...], total_tasks: 5}
     
-    Note over UI: UI shows real-time update
+    UI->>API: GET /sessions/{id}/scratchpad/notes
+    API->>MCP: read_notes()
+    MCP-->>API: {notes: [...]}
+    API-->>UI: {notes: [...], total_notes: 3}
+    
+    UI->>API: GET /sessions/{id}/scratchpad/draft
+    API->>MCP: read_draft()
+    MCP-->>API: {sections: {...}}
+    API-->>UI: {sections: [...], total_sections: 2}
 ```
 
+#### Scratchpad Polling Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/sessions/{id}/scratchpad/plan` | GET | Get all tasks with IDs, statuses, assignments |
+| `/sessions/{id}/scratchpad/notes` | GET | Get all notes with authors and content |
+| `/sessions/{id}/scratchpad/draft` | GET | Get all draft sections |
+
 ### SSE Event Types
+
+> **Note**: Scratchpad state events (`scratchpad_updated`, `scratchpad_snapshot`) are deprecated. Frontend should poll scratchpad endpoints after receiving key events.
 
 | Event Type | Source | Payload |
 |------------|--------|---------|
@@ -254,7 +281,8 @@ sequenceDiagram
 | `agent_invoked` | MAF Middleware | `{agent_name, input_preview}` |
 | `agent_completed` | MAF Middleware | `{agent_name, output_preview, duration_ms}` |
 | `sub_agent_tool_call` | Run Steps Poller | `{agent_name, tool_name, arguments, output}` |
-| `scratchpad_updated` | MCP Subscription | `{section_name, content_preview, status, version}` |
+| `agent_response` | Orchestrator | `{agent_name, response_summary, execution_time_ms}` |
+| `scratchpad_updated` | MCP Subscription | `{section_name, content_preview, status, version}` (DEPRECATED) |
 | `question_added` | MCP Subscription | `{question_id, question, asked_by, priority, blocking}` |
 | `questions_pending` | Orchestrator | `{checkpoint_id, questions: [...], can_continue: bool}` |
 | `workflow_paused` | Orchestrator | `{checkpoint_id, reason, pending_questions_count}` |

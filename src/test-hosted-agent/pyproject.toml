@@ -1,0 +1,16 @@
+[project]
+name = "test-hosted-agent"
+version = "0.1.0"
+description = "Minimal test agent for Azure AI Foundry hosted agents"
+requires-python = ">=3.11"
+dependencies = [
+    # For provision.py (local deployment script)
+    "azure-ai-projects>=2.0.0b2",
+    "azure-identity>=1.19.0",
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "openai>=1.0.0",
+]
+
+[tool.uv]
+dev-dependencies = []

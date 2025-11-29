@@ -4,7 +4,38 @@ info:
   description: |
     Documentation of Server-Sent Events emitted by the Research Orchestrator.
     These events are consumed by the web-research frontend via the `/research/sessions/{id}/start` endpoint.
-  version: 1.0.0
+    
+    ## Event Design Philosophy
+    
+    Events are designed for **discrete status updates**, not state synchronization:
+    - SSE events notify the UI that something happened (agent called, tool used, message received)
+    - UI should poll scratchpad state via REST API after each event to get current plan/notes/draft
+    - This separates "what happened" (SSE) from "current state" (REST polling)
+    
+    ## Why Polling for Scratchpad State?
+    
+    Scratchpad updates from subagents are not reliably captured via SSE because:
+    - Subagents run their own tool calls internally (not intercepted by orchestrator)
+    - Only orchestrator's direct tool calls trigger SSE events
+    - Polling ensures UI always has accurate state regardless of which agent made changes
+    
+    ## Typical Event Flow
+    
+    1. `session_started` - Workflow begins → UI polls scratchpad
+    2. `agent_started` - Orchestrator/agent starts
+    3. `tool_call_started` / `tool_call_completed` - Tool invocation (orchestrator only)
+    4. `agent_response` - Subagent returned a message → UI polls scratchpad
+    5. `agent_completed` - Agent finished
+    6. `workflow_completed` - Workflow done → UI polls final scratchpad state
+    
+    ## Scratchpad Polling
+    
+    After receiving any SSE event, UI should call:
+    - `GET /research/sessions/{id}/scratchpad/plan` - Get current tasks with IDs and statuses
+    - `GET /research/sessions/{id}/scratchpad/notes` - Get all notes
+    - `GET /research/sessions/{id}/scratchpad/draft` - Get all draft sections
+    
+  version: 2.0.0
 
 components:
   schemas:
@@ -58,11 +89,20 @@ components:
             data:
               type: object
               properties:
-                final_synthesis:
+                synthesis:
                   type: string
-                  description: Final research report
-                duration_seconds:
-                  type: number
+                  description: Complete final research report (full content)
+                total_tool_calls:
+                  type: integer
+                  description: Number of tool calls made during workflow
+                agent_call_counts:
+                  type: object
+                  additionalProperties:
+                    type: integer
+                  description: Count of calls per agent tool
+                total_time_ms:
+                  type: integer
+                  description: Total workflow execution time in milliseconds
 
     WorkflowFailedEvent:
       allOf:
@@ -111,7 +151,12 @@ components:
                   type: string
                 chunk:
                   type: string
-                  description: Streaming text chunk from agent
+                  description: Text chunk from agent (deprecated - use agent_completed instead)
+          deprecated: true
+          description: |
+            DEPRECATED: This event type is no longer emitted by the orchestrator.
+            Use `agent_completed` with full content instead.
+            Kept for backwards compatibility documentation only.
 
     AgentThinkingEvent:
       allOf:
@@ -138,11 +183,18 @@ components:
               const: agent_completed
             data:
               type: object
+              required:
+                - agent_name
+                - content
               properties:
                 agent_name:
                   type: string
+                content:
+                  type: string
+                  description: Full accumulated content from the agent (not streamed)
                 result_summary:
                   type: string
+                  description: Optional brief summary (deprecated, use content)
                 execution_time_ms:
                   type: integer
 
@@ -236,70 +288,72 @@ components:
                 error_type:
                   type: string
 
-    # === Scratchpad Events ===
+    # === Agent Response Events ===
+    
+    AgentResponseEvent:
+      allOf:
+        - $ref: '#/components/schemas/SSEEvent'
+        - type: object
+          properties:
+            event_type:
+              const: agent_response
+            data:
+              type: object
+              required:
+                - agent_name
+                - response_summary
+              properties:
+                agent_name:
+                  type: string
+                  description: Name of the subagent that responded
+                  enum: [market-analyst, competitor-analyst, location-scout, finance-analyst, synthesizer]
+                response_summary:
+                  type: string
+                  description: Brief summary or status from the agent (not the full analysis - that goes in scratchpad)
+                task_id:
+                  type: string
+                  description: The task ID this agent was working on (if applicable)
+                notes_added:
+                  type: integer
+                  description: Number of notes the agent added to scratchpad
+                draft_sections_written:
+                  type: array
+                  items:
+                    type: string
+                  description: Draft section IDs the agent wrote to
+          description: |
+            Emitted when a subagent completes and returns a response to the orchestrator.
+            This event indicates the UI should poll scratchpad for updated notes/draft.
+            The agent's factual findings are stored in scratchpad, not in this event.
+
+    # === Scratchpad Events (DEPRECATED) ===
+    # These events are deprecated in favor of polling.
+    # UI should poll /scratchpad/plan, /scratchpad/notes, /scratchpad/draft after each SSE event.
 
     ScratchpadUpdatedEvent:
+      deprecated: true
+      description: |
+        DEPRECATED: This event is no longer reliably emitted.
+        Scratchpad state should be polled via REST API instead.
+        Subagent tool calls are not intercepted by SSE, making this unreliable.
       allOf:
         - $ref: '#/components/schemas/SSEEvent'
         - type: object
           properties:
             event_type:
               const: scratchpad_updated
-            data:
-              type: object
-              required:
-                - section_name
-                - operation
-                - updated_by
-              properties:
-                section_name:
-                  type: string
-                  description: Name of the scratchpad section
-                operation:
-                  type: string
-                  enum: [created, updated, appended, deleted]
-                updated_by:
-                  type: string
-                  description: Agent that made the change
-                content_preview:
-                  type: string
-                  description: First 500 chars of new content
-                appended_content:
-                  type: string
-                  description: Content appended (for append operation)
 
     ScratchpadSnapshotEvent:
+      deprecated: true
+      description: |
+        DEPRECATED: Use REST API polling instead.
+        Poll /scratchpad/plan, /scratchpad/notes, /scratchpad/draft for current state.
       allOf:
         - $ref: '#/components/schemas/SSEEvent'
         - type: object
           properties:
             event_type:
               const: scratchpad_snapshot
-            data:
-              type: object
-              properties:
-                sections:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      name:
-                        type: string
-                      content:
-                        type: string
-                      updated_by:
-                        type: string
-                      updated_at:
-                        type: string
-                        format: date-time
-                total_sections:
-                  type: integer
-                iteration:
-                  type: integer
-                triggered_by:
-                  type: string
-                  description: What triggered this snapshot
-                  examples: [iteration_complete, agent_finished, manual_refresh]
 
     # === Question Events ===
 
@@ -387,7 +441,11 @@ components:
               properties:
                 chunk:
                   type: string
-                  description: Streaming text from synthesizer
+                  description: Text chunk from synthesizer (deprecated - not emitted)
+          deprecated: true
+          description: |
+            DEPRECATED: This event type is no longer emitted.
+            Synthesis content is delivered via workflow_completed.synthesis field.
 
     SynthesisCompletedEvent:
       allOf:
@@ -412,21 +470,28 @@ components:
   x-event-types:
     description: All possible SSE event types
     enum:
+      # Session lifecycle
       - session_started
       - workflow_completed
       - workflow_failed
+      # Agent events
       - agent_started
-      - agent_progress
+      - agent_progress      # deprecated
       - agent_thinking
       - agent_completed
       - agent_failed
+      - agent_response      # NEW: subagent returned result → poll scratchpad
+      # Tool events (orchestrator only)
       - tool_call_started
       - tool_call_completed
       - tool_call_failed
-      - scratchpad_updated
-      - scratchpad_snapshot
+      # Scratchpad events (deprecated - use polling)
+      - scratchpad_updated  # deprecated
+      - scratchpad_snapshot # deprecated
+      # Question events
       - question_added
       - question_answered
+      # Synthesis events
       - synthesis_started
-      - synthesis_progress
+      - synthesis_progress  # deprecated
       - synthesis_completed

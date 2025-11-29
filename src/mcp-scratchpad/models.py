@@ -36,6 +36,7 @@ class Task(BaseModel):
     status: str = "todo"  # todo, in_progress, completed, blocked
     assigned_to: Optional[str] = None
     dependencies: List[str] = Field(default_factory=list)  # IDs of other tasks
+    created_at: datetime = Field(default_factory=datetime.now)
 
 
 class WorkspaceState(BaseModel):

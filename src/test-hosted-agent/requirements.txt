@@ -1,0 +1,9 @@
+# Minimal dependencies for hosted agent test
+# Based on official SDK samples
+
+azure-ai-agentserver-langgraph>=1.0.0b1
+langchain-openai>=0.3
+langchain>=0.3
+langgraph>=0.2.60
+azure-identity>=1.19.0
+python-dotenv>=1.0.0

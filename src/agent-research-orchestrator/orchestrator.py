@@ -18,7 +18,7 @@ Uses middleware to intercept tool calls for real-time SSE streaming.
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
 
@@ -82,9 +82,12 @@ class ToolCallEventQueue:
 
 
 # Scratchpad tool names for tracking updates
-SCRATCHPAD_WRITE_TOOLS = {"write_section", "append_to_section"}
+SCRATCHPAD_WRITE_TOOLS = {"write_draft_section", "add_note", "add_task", "add_tasks", "update_task"}
 SCRATCHPAD_READ_TOOLS = {"read_section", "list_sections"}
 SCRATCHPAD_QUESTION_TOOLS = {"add_question", "get_pending_questions", "get_answered_questions", "submit_answers"}
+
+# Agent tool names (subagents exposed as tools to orchestrator)
+AGENT_TOOL_NAMES = {"market_analysis", "competitor_analysis", "synthesize_findings"}
 
 
 def _serialize_tool_output(output: Any) -> Any:
@@ -175,13 +178,13 @@ def create_tool_call_middleware(
                 input_args=input_args,
             ),
             "call_number": call_number,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "is_scratchpad_write": function_name in SCRATCHPAD_WRITE_TOOLS,
             "is_scratchpad_question": function_name in SCRATCHPAD_QUESTION_TOOLS,
         })
         
         logger.info(f"Tool call started: {function_name} (call #{call_number}) args={input_args}")
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         error_occurred = False
         error_message = ""
@@ -197,7 +200,7 @@ def create_tool_call_middleware(
             logger.error(f"Tool call failed: {function_name} - {error_message}")
             raise
         finally:
-            end_time = datetime.utcnow()
+            end_time = datetime.now(timezone.utc)
             execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
             
             if error_occurred:
@@ -212,13 +215,24 @@ def create_tool_call_middleware(
                         error_type=error_type,
                     ),
                     "call_number": call_number,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
             else:
                 # Extract full result and ensure it's JSON-serializable
                 output: Any = None
                 if hasattr(context, "result") and context.result is not None:
                     output = _serialize_tool_output(context.result)
+                
+                # Determine section name based on tool type
+                section_name = None
+                if function_name == "write_draft_section":
+                    section_name = input_args.get("section_id") or "draft"
+                elif function_name == "add_note":
+                    section_name = "notes"  # All notes go to the notes pillar
+                elif function_name in ("add_task", "add_tasks", "update_task"):
+                    section_name = "plan"  # All task operations go to the plan pillar
+                else:
+                    section_name = input_args.get("section_name") or input_args.get("name") or "unknown"
                 
                 # Emit detailed tool call completed event
                 await event_queue.put({
@@ -231,9 +245,10 @@ def create_tool_call_middleware(
                         execution_time_ms=execution_time_ms,
                     ),
                     "call_number": call_number,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "is_scratchpad_write": function_name in SCRATCHPAD_WRITE_TOOLS,
-                    "section_name": input_args.get("section_name") or input_args.get("name"),
+                    "section_name": section_name,
+                    "tool_type": function_name,  # Include tool type for frontend routing
                 })
                 
                 logger.info(f"Tool call completed: {function_name} in {execution_time_ms}ms")
@@ -306,78 +321,281 @@ class AgentOrchestrator:
         """Fetch current scratchpad state for snapshot events.
         
         Returns:
-            ScratchpadSnapshotData with all sections, or None if scratchpad unavailable.
+            ScratchpadSnapshotData with all sections (draft, notes, plan), or None if unavailable.
         """
         if not self._mcp_scratchpad:
             return None
         
         try:
-            # Find the list_sections function
-            list_sections_fn = None
-            for fn in self._mcp_scratchpad.functions:
-                if fn.name == "list_sections":
-                    list_sections_fn = fn
-                    break
-            
-            if not list_sections_fn:
-                logger.warning("list_sections tool not found in scratchpad")
-                return None
-            
-            # Call list_sections to get all section names
-            result = await list_sections_fn()
-            
-            # Parse result to extract section names
             sections: list[ScratchpadSection] = []
             
-            # Handle list of content blocks (standard MAF tool output)
-            full_text = ""
-            if isinstance(result, list):
-                for block in result:
-                    if hasattr(block, "text"):
-                        full_text += block.text
-                    elif isinstance(block, dict) and "text" in block:
-                        full_text += block["text"]
-                    elif isinstance(block, str):
-                        full_text += block
-            elif isinstance(result, str):
-                full_text = result
+            # Find the MCP functions we need
+            read_draft_fn = None
+            read_notes_fn = None
+            read_plan_fn = None
+            for fn in self._mcp_scratchpad.functions:
+                if fn.name == "read_draft":
+                    read_draft_fn = fn
+                elif fn.name == "read_notes":
+                    read_notes_fn = fn
+                elif fn.name == "read_plan":
+                    read_plan_fn = fn
             
-            if full_text:
-                # Try parsing as JSON first (new format)
-                try:
-                    data = json.loads(full_text)
-                    if isinstance(data, dict) and "sections" in data:
-                        for s in data["sections"]:
+            # Helper to parse MCP result
+            def parse_result(result: Any) -> str:
+                full_text = ""
+                if isinstance(result, list):
+                    for block in result:
+                        if hasattr(block, "text"):
+                            full_text += block.text
+                        elif isinstance(block, dict) and "text" in block:
+                            full_text += block["text"]
+                        elif isinstance(block, str):
+                            full_text += block
+                elif isinstance(result, str):
+                    full_text = result
+                return full_text
+            
+            # Read draft sections
+            if read_draft_fn:
+                result = await read_draft_fn(session_id="default")
+                full_text = parse_result(result)
+                if full_text:
+                    try:
+                        data = json.loads(full_text)
+                        if isinstance(data, dict) and "sections" in data:
+                            for section_id, section_data in data["sections"].items():
+                                sections.append(ScratchpadSection(
+                                    name=section_id,
+                                    content=section_data.get("content", "")[:500],
+                                    updated_by=section_data.get("author"),
+                                    updated_at=datetime.fromisoformat(section_data["last_updated"]) if section_data.get("last_updated") else None,
+                                ))
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        pass
+            
+            # Read notes
+            if read_notes_fn:
+                result = await read_notes_fn(session_id="default")
+                full_text = parse_result(result)
+                if full_text:
+                    try:
+                        data = json.loads(full_text)
+                        notes = data.get("notes", [])
+                        for note in notes:
                             sections.append(ScratchpadSection(
-                                name=s.get("name", "unknown"),
-                                content="",  # Content not fetched for performance
+                                name=f"note:{note.get('id', 'unknown')}",
+                                content=note.get("content", "")[:500],
+                                updated_by=note.get("author"),
+                                updated_at=datetime.fromisoformat(note["timestamp"]) if note.get("timestamp") else None,
                             ))
-                        return ScratchpadSnapshotData(
-                            sections=sections,
-                            total_sections=len(sections),
-                        )
-                except json.JSONDecodeError:
-                    # Fallback to parsing markdown list (old format)
-                    pass
-                
-                # Parse markdown list format
-                lines = full_text.strip().split("\n")
-                for line in lines:
-                    line = line.strip()
-                    if line.startswith("- "):
-                        section_name = line[2:].strip()
-                        sections.append(ScratchpadSection(
-                            name=section_name,
-                            content="",
-                        ))
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        pass
+            
+            # Read plan/tasks
+            if read_plan_fn:
+                result = await read_plan_fn(session_id="default")
+                full_text = parse_result(result)
+                if full_text:
+                    try:
+                        data = json.loads(full_text)
+                        tasks = data.get("tasks", [])
+                        for task in tasks:
+                            sections.append(ScratchpadSection(
+                                name=f"task:{task.get('id', 'unknown')}",
+                                content=f"[{task.get('status', 'todo')}] {task.get('description', '')}",
+                                updated_by=task.get("assigned_to"),
+                                updated_at=datetime.fromisoformat(task["created_at"]) if task.get("created_at") else None,
+                            ))
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        pass
             
             return ScratchpadSnapshotData(
                 sections=sections,
                 total_sections=len(sections),
             )
         except Exception as e:
-            logger.warning(f"Failed to get scratchpad snapshot: {e}")
+            logger.debug(f"Failed to get scratchpad snapshot: {e}")
             return None
+
+    def _parse_mcp_result(self, result: Any) -> str:
+        """Parse MCP tool result into text.
+        
+        Args:
+            result: The result from an MCP tool call.
+            
+        Returns:
+            Parsed text content.
+        """
+        full_text = ""
+        if isinstance(result, list):
+            for block in result:
+                if hasattr(block, "text"):
+                    full_text += block.text
+                elif isinstance(block, dict) and "text" in block:
+                    full_text += block["text"]
+                elif isinstance(block, str):
+                    full_text += block
+        elif isinstance(result, str):
+            full_text = result
+        return full_text
+
+    async def get_scratchpad_plan(self, session_id: str = "default") -> dict[str, Any]:
+        """Get the current research plan with all tasks.
+        
+        Args:
+            session_id: The scratchpad session ID.
+            
+        Returns:
+            Dict with tasks array and metadata.
+            
+        Raises:
+            RuntimeError: If scratchpad not available.
+        """
+        if not self._mcp_scratchpad:
+            raise RuntimeError("MCP Scratchpad not configured")
+        
+        # Find read_plan function
+        read_plan_fn = None
+        for fn in self._mcp_scratchpad.functions:
+            if fn.name == "read_plan":
+                read_plan_fn = fn
+                break
+        
+        if not read_plan_fn:
+            raise RuntimeError("read_plan tool not available")
+        
+        result = await read_plan_fn(session_id=session_id)
+        full_text = self._parse_mcp_result(result)
+        
+        if not full_text:
+            return {"tasks": [], "total_tasks": 0, "tasks_by_status": {}}
+        
+        try:
+            data = json.loads(full_text)
+            tasks = data.get("tasks", [])
+            
+            # Count by status
+            by_status = {"todo": 0, "in-progress": 0, "done": 0, "blocked": 0}
+            for task in tasks:
+                status = task.get("status", "todo")
+                if status in by_status:
+                    by_status[status] += 1
+            
+            return {
+                "tasks": tasks,
+                "total_tasks": len(tasks),
+                "tasks_by_status": by_status,
+            }
+        except json.JSONDecodeError:
+            return {"tasks": [], "total_tasks": 0, "tasks_by_status": {}}
+
+    async def get_scratchpad_notes(self, session_id: str = "default") -> dict[str, Any]:
+        """Get all research notes.
+        
+        Args:
+            session_id: The scratchpad session ID.
+            
+        Returns:
+            Dict with notes array and metadata.
+            
+        Raises:
+            RuntimeError: If scratchpad not available.
+        """
+        if not self._mcp_scratchpad:
+            raise RuntimeError("MCP Scratchpad not configured")
+        
+        # Find read_notes function
+        read_notes_fn = None
+        for fn in self._mcp_scratchpad.functions:
+            if fn.name == "read_notes":
+                read_notes_fn = fn
+                break
+        
+        if not read_notes_fn:
+            raise RuntimeError("read_notes tool not available")
+        
+        result = await read_notes_fn(session_id=session_id)
+        full_text = self._parse_mcp_result(result)
+        
+        if not full_text:
+            return {"notes": [], "total_notes": 0, "notes_by_author": {}}
+        
+        try:
+            data = json.loads(full_text)
+            notes = data.get("notes", [])
+            
+            # Count by author
+            by_author: dict[str, int] = {}
+            for note in notes:
+                author = note.get("author", "unknown")
+                by_author[author] = by_author.get(author, 0) + 1
+            
+            return {
+                "notes": notes,
+                "total_notes": len(notes),
+                "notes_by_author": by_author,
+            }
+        except json.JSONDecodeError:
+            return {"notes": [], "total_notes": 0, "notes_by_author": {}}
+
+    async def get_scratchpad_draft(self, session_id: str = "default") -> dict[str, Any]:
+        """Get all draft report sections.
+        
+        Args:
+            session_id: The scratchpad session ID.
+            
+        Returns:
+            Dict with sections array and metadata.
+            
+        Raises:
+            RuntimeError: If scratchpad not available.
+        """
+        if not self._mcp_scratchpad:
+            raise RuntimeError("MCP Scratchpad not configured")
+        
+        # Find read_draft function
+        read_draft_fn = None
+        for fn in self._mcp_scratchpad.functions:
+            if fn.name == "read_draft":
+                read_draft_fn = fn
+                break
+        
+        if not read_draft_fn:
+            raise RuntimeError("read_draft tool not available")
+        
+        result = await read_draft_fn(session_id=session_id)
+        full_text = self._parse_mcp_result(result)
+        
+        if not full_text:
+            return {"sections": [], "total_sections": 0}
+        
+        try:
+            data = json.loads(full_text)
+            raw_sections = data.get("sections", {})
+            
+            # Convert to array format
+            sections = []
+            for section_id, section_data in raw_sections.items():
+                sections.append({
+                    "section_id": section_id,
+                    "title": section_data.get("title", section_id),
+                    "content": section_data.get("content", ""),
+                    "author": section_data.get("author", "unknown"),
+                    "order": section_data.get("order", 0),
+                    "created_at": section_data.get("last_updated"),
+                    "updated_at": section_data.get("last_updated"),
+                })
+            
+            # Sort by order
+            sections.sort(key=lambda s: s.get("order", 0))
+            
+            return {
+                "sections": sections,
+                "total_sections": len(sections),
+            }
+        except json.JSONDecodeError:
+            return {"sections": [], "total_sections": 0}
 
     def _ensure_credential(self) -> DefaultAzureCredential:
         """Ensure credential is initialized."""
@@ -391,15 +609,17 @@ class AgentOrchestrator:
         self,
         agent_name: str,
         description: str = "",
-    ) -> ChatAgent:
+        tools: list[Any] | None = None,
+    ) -> tuple[ChatAgent, AzureAIAgentClient]:
         """Create a ChatAgent wrapper for a Foundry agent.
 
         Args:
             agent_name: Name of the agent in Foundry (used as identifier in new API).
             description: Description of what this agent does (for tool conversion).
+            tools: Optional list of tools (e.g., MCP scratchpad) to give to the agent.
 
         Returns:
-            Configured ChatAgent.
+            Tuple of (ChatAgent, AzureAIAgentClient) for cleanup tracking.
         """
         credential = self._ensure_credential()
 
@@ -411,12 +631,15 @@ class AgentOrchestrator:
             should_cleanup_agent=False,
         )
 
-        return ChatAgent(
+        agent = ChatAgent(
             chat_client=client,
             name=agent_name,
             description=description,
             instructions="",  # Use agent's existing instructions
+            tools=tools or [],
         )
+        
+        return agent, client
 
     def _create_orchestrator_client(self) -> AzureAIAgentClient:
         """Create the chat client for the main orchestrator agent.
@@ -453,6 +676,7 @@ class AgentOrchestrator:
         session = ResearchSession(
             session_id=session_id,
             query=query,
+            context=context,
             status=ResearchSessionStatus.PENDING,
         )
         self._sessions[session_id] = session
@@ -515,7 +739,7 @@ class AgentOrchestrator:
             raise ValueError(f"Session {session_id} not found")
 
         session.status = ResearchSessionStatus.RUNNING
-        session.started_at = datetime.utcnow()
+        session.started_at = datetime.now(timezone.utc)
         self._tool_call_log = []
 
         yield SSEEvent(
@@ -527,20 +751,38 @@ class AgentOrchestrator:
             },
         )
 
+        # Track clients for cleanup - initialized before try block
+        agents_to_cleanup: list[ChatAgent] = []
+        clients_to_cleanup: list[AzureAIAgentClient] = []
+
         try:
-            # Create specialist agents
-            market_agent = self._create_foundry_agent(
+            # Create specialist agents with MCP scratchpad access - track them for cleanup
+            # All agents share the same scratchpad so they can collaborate
+            subagent_tools = [self._mcp_scratchpad] if self._mcp_scratchpad else []
+            
+            market_agent, market_client = self._create_foundry_agent(
                 agent_name=MARKET_ANALYST_AGENT_NAME,
                 description="Analyzes market opportunities, trends, customer segments, TAM/SAM/SOM, and market dynamics.",
+                tools=subagent_tools,
             )
-            competitor_agent = self._create_foundry_agent(
+            agents_to_cleanup.append(market_agent)
+            clients_to_cleanup.append(market_client)
+            
+            competitor_agent, competitor_client = self._create_foundry_agent(
                 agent_name=COMPETITOR_ANALYST_AGENT_NAME,
                 description="Analyzes competitive landscape, competitor strengths and weaknesses, market positioning, and competitive threats.",
+                tools=subagent_tools,
             )
-            synthesizer_agent = self._create_foundry_agent(
+            agents_to_cleanup.append(competitor_agent)
+            clients_to_cleanup.append(competitor_client)
+            
+            synthesizer_agent, synthesizer_client = self._create_foundry_agent(
                 agent_name=SYNTHESIZER_AGENT_NAME,
                 description="Synthesizes research findings into cohesive reports with actionable recommendations.",
+                tools=subagent_tools,
             )
+            agents_to_cleanup.append(synthesizer_agent)
+            clients_to_cleanup.append(synthesizer_client)
 
             # Convert specialist agents to tools
             # The .as_tool() method converts a ChatAgent into a callable function tool
@@ -599,18 +841,19 @@ class AgentOrchestrator:
 
             # Create the main orchestrator agent with specialist agents as tools
             chat_client = self._create_orchestrator_client()
+            clients_to_cleanup.append(chat_client)
             orchestrator_agent = ChatAgent(
                 chat_client=chat_client,
                 name="research-orchestrator",
                 instructions=system_prompt,
                 tools=tools_list,
             )
+            agents_to_cleanup.append(orchestrator_agent)
 
             # Run the orchestrator with streaming
-            start_time = datetime.utcnow()
+            start_time = datetime.now(timezone.utc)
             orchestrator_thread = orchestrator_agent.get_new_thread()
             accumulated_content = ""
-            iteration_count = 0
             scratchpad_sections_seen: set[str] = set()
 
             # Stream the orchestrator's execution with middleware for tool call interception
@@ -648,11 +891,13 @@ class AgentOrchestrator:
                     
                     elif tool_event["type"] == "tool_completed":
                         event_data_completed: ToolCallCompletedData = tool_event["event_data"]
+                        tool_name = event_data_completed.tool_name
+                        
                         yield SSEEvent(
                             event_type=SSEEventType.TOOL_CALL_COMPLETED,
                             session_id=session_id,
                             data={
-                                "tool_name": event_data_completed.tool_name,
+                                "tool_name": tool_name,
                                 "tool_call_id": event_data_completed.tool_call_id,
                                 "agent_name": event_data_completed.agent_name,
                                 "output": event_data_completed.output,
@@ -661,15 +906,74 @@ class AgentOrchestrator:
                             },
                         )
                         
+                        # Check if this was a subagent tool - emit agent_response
+                        # so UI knows to poll scratchpad for updated notes/draft
+                        if tool_name in AGENT_TOOL_NAMES:
+                            # Extract a response summary from the tool output
+                            output = event_data_completed.output
+                            response_summary = ""
+                            if isinstance(output, str):
+                                response_summary = output[:200] + ("..." if len(output) > 200 else "")
+                            elif isinstance(output, dict):
+                                response_summary = output.get("summary", output.get("response", str(output)))[:200]
+                            
+                            yield SSEEvent(
+                                event_type=SSEEventType.AGENT_RESPONSE,
+                                session_id=session_id,
+                                data={
+                                    "agent_name": tool_name.replace("_", "-"),
+                                    "response_summary": response_summary,
+                                    "execution_time_ms": event_data_completed.execution_time_ms,
+                                },
+                            )
+                        
                         # If this was a scratchpad write, emit a scratchpad updated event
                         if tool_event.get("is_scratchpad_write"):
                             section_name = tool_event.get("section_name", "unknown")
+                            tool_type = tool_event.get("tool_type")
                             operation = "created" if section_name not in scratchpad_sections_seen else "updated"
                             scratchpad_sections_seen.add(section_name)
                             
                             # Extract content preview from input args
                             input_args = self._tool_call_log[-1].get("input_args", {}) if self._tool_call_log else {}
-                            content_preview = str(input_args.get("content", ""))[:500] if input_args.get("content") else None
+                            content_preview = None
+                            tasks_created = None
+                            tasks_list = None
+                            task_update = None
+                            
+                            if tool_type == "add_note":
+                                content_preview = str(input_args.get("content", ""))[:500]
+                            elif tool_type == "add_tasks":
+                                tasks = input_args.get("tasks", [])
+                                tasks_created = len(tasks) if isinstance(tasks, list) else 0
+                                
+                                # Try to extract created tasks with IDs from tool output
+                                tool_output = event_data_completed.output
+                                if isinstance(tool_output, dict):
+                                    created_tasks = tool_output.get("tasks", [])
+                                    if created_tasks:
+                                        # Use output tasks (have server-assigned IDs)
+                                        tasks_list = created_tasks
+                                    else:
+                                        # Fallback to input tasks
+                                        tasks_list = tasks if isinstance(tasks, list) else []
+                                else:
+                                    tasks_list = tasks if isinstance(tasks, list) else []
+                                    
+                                # Create preview from task descriptions (still useful for logging)
+                                if tasks:
+                                    descriptions = [t.get("description", "") for t in tasks if isinstance(t, dict)]
+                                    content_preview = "; ".join(descriptions)[:500]
+                            elif tool_type == "update_task":
+                                # Send the task update details
+                                task_update = {
+                                    "task_id": input_args.get("task_id"),
+                                    "status": input_args.get("status"),
+                                    "assigned_to": input_args.get("assigned_to"),
+                                }
+                                content_preview = f"Task {input_args.get('task_id')} → {input_args.get('status')}"
+                            elif tool_type == "write_draft_section":
+                                content_preview = str(input_args.get("content", ""))[:500]
                             
                             yield SSEEvent(
                                 event_type=SSEEventType.SCRATCHPAD_UPDATED,
@@ -679,6 +983,10 @@ class AgentOrchestrator:
                                     operation=operation,
                                     updated_by=event_data_completed.agent_name,
                                     content_preview=content_preview,
+                                    tool_type=tool_type,
+                                    tasks_created=tasks_created,
+                                    tasks=tasks_list,
+                                    task_update=task_update,
                                 ).model_dump(),
                             )
                     
@@ -697,30 +1005,10 @@ class AgentOrchestrator:
                             },
                         )
 
-                # Stream text output
+                # Accumulate text output silently - no streaming events
+                # We'll emit one final message when the workflow completes
                 if update.text:
                     accumulated_content += update.text
-                    iteration_count += 1
-                    yield SSEEvent(
-                        event_type=SSEEventType.AGENT_PROGRESS,
-                        session_id=session_id,
-                        data={
-                            "agent": "research-orchestrator",
-                            "text": update.text,
-                        },
-                    )
-                    
-                    # Emit scratchpad snapshot periodically (every 10 iterations with content)
-                    if self._mcp_scratchpad and iteration_count % 10 == 0:
-                        snapshot = await self._get_scratchpad_snapshot()
-                        if snapshot:
-                            snapshot.iteration = iteration_count
-                            snapshot.triggered_by = "iteration_checkpoint"
-                            yield SSEEvent(
-                                event_type=SSEEventType.SCRATCHPAD_SNAPSHOT,
-                                session_id=session_id,
-                                data=snapshot.model_dump(),
-                            )
 
             # Drain any remaining events from the queue
             event_queue.close()
@@ -757,8 +1045,19 @@ class AgentOrchestrator:
                         },
                     )
 
-            end_time = datetime.utcnow()
+            end_time = datetime.now(timezone.utc)
             execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
+
+            # Emit agent completed event with full accumulated content
+            yield SSEEvent(
+                event_type=SSEEventType.AGENT_COMPLETED,
+                session_id=session_id,
+                data={
+                    "agent_name": "research-orchestrator",
+                    "content": accumulated_content,
+                    "execution_time_ms": execution_time_ms,
+                },
+            )
 
             # Emit final scratchpad snapshot
             if self._mcp_scratchpad:
@@ -800,7 +1099,7 @@ class AgentOrchestrator:
 
             # Workflow complete
             session.status = ResearchSessionStatus.COMPLETED
-            session.completed_at = datetime.utcnow()
+            session.completed_at = datetime.now(timezone.utc)
 
             yield SSEEvent(
                 event_type=SSEEventType.WORKFLOW_COMPLETED,
@@ -818,7 +1117,7 @@ class AgentOrchestrator:
         except Exception as e:
             session.status = ResearchSessionStatus.FAILED
             session.error_message = str(e)
-            session.completed_at = datetime.utcnow()
+            session.completed_at = datetime.now(timezone.utc)
             logger.exception(f"Workflow failed for session {session_id}")
 
             yield SSEEvent(
@@ -829,6 +1128,19 @@ class AgentOrchestrator:
                     "tool_calls_before_failure": self._tool_call_log,
                 },
             )
+        
+        finally:
+            # Clean up agent clients to prevent unclosed aiohttp sessions
+            for client in clients_to_cleanup:
+                try:
+                    if hasattr(client, 'close'):
+                        await client.close()
+                    elif hasattr(client, '_session') and client._session:
+                        await client._session.close()
+                except Exception as cleanup_error:
+                    logger.debug(f"Error closing client: {cleanup_error}")
+            
+            logger.info(f"Workflow cleanup completed for session {session_id}")
 
     # === Health Check ===
 

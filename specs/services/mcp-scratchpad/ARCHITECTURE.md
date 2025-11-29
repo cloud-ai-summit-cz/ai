@@ -65,7 +65,7 @@ flowchart TB
     MA -->|add_note| Notes
     SY -->|read_notes| Notes
     SY -->|write_draft_section| Draft
-    Orch -->|add_task| Plan
+    Orch -->|add_tasks| Plan
 ```
 
 ## MCP Tools
@@ -88,7 +88,7 @@ flowchart TB
 
 | Tool | Description |
 |------|-------------|
-| `add_task` | Add a new task to the plan |
+| `add_tasks` | Add one or more tasks to the plan (batch) |
 | `update_task` | Update status or assignment of a task |
 | `read_plan` | Get the current state of the plan |
 

@@ -30,10 +30,10 @@ function getStatusIndicator(status: SessionStatus) {
         text: 'Researching...',
         color: 'text-accent',
       };
-    case 'paused':
+    case 'pending':
       return {
         icon: <AlertCircle className="w-4 h-4" />,
-        text: 'Waiting for input',
+        text: 'Pending',
         color: 'text-yellow-400',
       };
     case 'completed':

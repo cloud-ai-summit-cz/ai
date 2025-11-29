@@ -16,7 +16,10 @@ Definitive schema catalog for Cofilot AI Platform. All persistent and transient 
 | Name | Type | Partition Key | Description | Version |
 |------|------|---------------|-------------|---------|
 | `ResearchSession` | Cosmos Document | `/session_id` | Research scenario session state | 1.0 |
-| `Scratchpad` | Cosmos Document | `/session_id` | Shared memory for research agents | 1.0 |
+| `Scratchpad` | Cosmos Document | `/session_id` | Shared memory for research agents | 1.1 |
+| `ScratchpadPlanResponse` | API Response | - | Plan/tasks from scratchpad polling | 1.0 |
+| `ScratchpadNotesResponse` | API Response | - | Notes from scratchpad polling | 1.0 |
+| `ScratchpadDraftResponse` | API Response | - | Draft sections from scratchpad polling | 1.0 |
 | `ChecklistItem` | Embedded | - | Research checklist item | 1.0 |
 | `UserQuestion` | Embedded | - | Question from agent to user | 1.0 |
 | `InvoiceWorkflow` | Cosmos Document | `/workflow_id` | Invoice processing workflow state | 1.0 |
@@ -27,7 +30,7 @@ Definitive schema catalog for Cofilot AI Platform. All persistent and transient 
 | `MarketData` | JSON File | - | Mock market statistics | 1.0 |
 | `LocationData` | JSON File | - | Mock neighborhood data | 1.0 |
 | `AgentDefinition` | Python Config | - | AI Foundry agent configuration | 1.0 |
-| `SSEEvent` | Transient | - | Server-Sent Event payload | 1.0 |
+| `SSEEvent` | Transient | - | Server-Sent Event payload | 1.1 |
 
 ---
 
@@ -211,6 +214,123 @@ class Scratchpad(BaseModel):
     created_at: datetime
     updated_at: datetime
     sections: dict[str, ScratchpadSection]
+```
+
+---
+
+### Scratchpad Polling API Responses
+
+These are the response schemas for the scratchpad polling endpoints. Frontend polls these after receiving SSE events to get current scratchpad state.
+
+#### `ScratchpadPlanResponse`
+
+- **Owner**: Orchestrator API
+- **Type**: API Response
+- **Consumers**: Frontend
+- **Producers**: Orchestrator (proxies to mcp-scratchpad)
+
+```json
+{
+  "session_id": "sess_abc123",
+  "tasks": [
+    {
+      "task_id": "task_001",
+      "description": "Analyze Vienna coffee market size and trends",
+      "priority": "high",
+      "assigned_to": "market-analyst",
+      "status": "done",
+      "created_at": "2025-12-01T10:00:00Z",
+      "updated_at": "2025-12-01T10:05:00Z"
+    },
+    {
+      "task_id": "task_002",
+      "description": "Identify top 5 competitors in target area",
+      "priority": "high",
+      "assigned_to": "competitor-analyst",
+      "status": "in-progress",
+      "created_at": "2025-12-01T10:00:00Z",
+      "updated_at": "2025-12-01T10:10:00Z"
+    }
+  ],
+  "total_tasks": 5,
+  "tasks_by_status": {
+    "todo": 2,
+    "in-progress": 1,
+    "done": 2,
+    "blocked": 0
+  }
+}
+```
+
+#### `ScratchpadNotesResponse`
+
+- **Owner**: Orchestrator API
+- **Type**: API Response
+- **Consumers**: Frontend
+- **Producers**: Orchestrator (proxies to mcp-scratchpad)
+
+```json
+{
+  "session_id": "sess_abc123",
+  "notes": [
+    {
+      "note_id": "note_001",
+      "content": "Vienna coffee market size: €450M annually with 3.5% YoY growth",
+      "author": "market-analyst",
+      "section": "market_size",
+      "source_url": null,
+      "created_at": "2025-12-01T10:05:00Z"
+    },
+    {
+      "note_id": "note_002",
+      "content": "Specialty coffee segment growing 12% annually, now 28% of market",
+      "author": "market-analyst",
+      "section": "trends",
+      "source_url": "https://example.com/report",
+      "created_at": "2025-12-01T10:06:00Z"
+    }
+  ],
+  "total_notes": 8,
+  "notes_by_author": {
+    "market-analyst": 4,
+    "competitor-analyst": 3,
+    "synthesizer": 1
+  }
+}
+```
+
+#### `ScratchpadDraftResponse`
+
+- **Owner**: Orchestrator API
+- **Type**: API Response
+- **Consumers**: Frontend
+- **Producers**: Orchestrator (proxies to mcp-scratchpad)
+
+```json
+{
+  "session_id": "sess_abc123",
+  "sections": [
+    {
+      "section_id": "executive_summary",
+      "title": "Executive Summary",
+      "content": "## Executive Summary\n\nVienna presents a compelling...",
+      "author": "synthesizer",
+      "order": 1,
+      "created_at": "2025-12-01T10:15:00Z",
+      "updated_at": "2025-12-01T10:15:00Z"
+    },
+    {
+      "section_id": "market_analysis",
+      "title": "Market Analysis",
+      "content": "## Market Analysis\n\n### Market Size\nThe Vienna coffee market...",
+      "author": "market-analyst",
+      "order": 2,
+      "created_at": "2025-12-01T10:08:00Z",
+      "updated_at": "2025-12-01T10:08:00Z"
+    }
+  ],
+  "total_sections": 4
+}
 ```
 
 ---
@@ -424,36 +544,35 @@ class WorkflowEvent(BaseModel):
 
 ```json
 {
-  "event": "agent_activity",
+  "event": "agent_response",
   "data": {
     "session_id": "sess_abc123",
     "timestamp": "2025-12-01T10:05:00Z",
-    "agent": "market-analyst",
-    "action": "tool_call",
-    "tool": "get_market_overview",
-    "status": "completed",
-    "message": "Retrieved Vienna market data: €450M market size",
-    "details": {
-      "market_size_eur": 450000000,
-      "source": "mcp-market-data"
-    }
+    "agent_name": "market-analyst",
+    "response_summary": "Completed market analysis for Vienna. Key findings stored in notes.",
+    "execution_time_ms": 3500
   }
 }
 ```
 
 **Event Types**:
-| Event | Description | Payload |
-|-------|-------------|---------|
-| `session_created` | Research session started | `{session_id, query}` |
-| `agent_activity` | Agent performed action | `{agent, action, tool, status, message}` |
-| `scratchpad_updated` | Scratchpad section changed | `{section, agent, summary}` |
-| `checklist_updated` | Checklist item status changed | `{item_id, status, notes}` |
-| `questions_pending` | Agent needs user input | `{questions: [...]}` |
-| `research_complete` | Research finished | `{session_id, report}` |
-| `invoice_received` | Invoice upload received | `{workflow_id, filename}` |
-| `workflow_event` | Invoice workflow step | `{event_type, agent, message}` |
-| `workflow_complete` | Invoice processing done | `{workflow_id, recommendation}` |
-| `error` | Error occurred | `{error_type, message}` |
+
+> **Note**: `scratchpad_updated` and `scratchpad_snapshot` are deprecated. Frontend should poll `/scratchpad/*` endpoints after receiving key events.
+
+| Event | Description | Payload | Poll After? |
+|-------|-------------|---------|-------------|
+| `session_started` | Research session started | `{session_id, query}` | Yes |
+| `agent_started` | Agent invoked | `{agent_name, task_description}` | No |
+| `agent_response` | Subagent returned result | `{agent_name, response_summary, execution_time_ms}` | Yes |
+| `agent_completed` | Agent finished | `{agent_name, content, execution_time_ms}` | Yes |
+| `tool_call_started` | Tool invocation started | `{tool_name, tool_call_id, agent_name, input_args}` | No |
+| `tool_call_completed` | Tool completed | `{tool_name, tool_call_id, agent_name, output, execution_time_ms}` | Yes |
+| `scratchpad_updated` | Scratchpad section changed (DEPRECATED) | `{section_name, operation, updated_by}` | - |
+| `question_added` | Agent needs user input | `{question_id, question, asked_by, priority, blocking}` | No |
+| `synthesis_started` | Synthesizer started | `{message}` | No |
+| `synthesis_completed` | Synthesis finished | `{final_report, sections_used}` | Yes |
+| `workflow_completed` | Research finished | `{synthesis, total_tool_calls, total_time_ms}` | Yes |
+| `workflow_failed` | Error occurred | `{error, error_type}` | No |
 
 ---
 

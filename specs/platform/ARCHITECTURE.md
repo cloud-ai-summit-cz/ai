@@ -273,7 +273,7 @@ Tools:
 ├── read_notes(query: str, tag: str) -> list[Note]
 ├── write_draft_section(section_id: str, title: str, content: str) -> bool
 ├── read_draft(section_id: str) -> dict
-├── add_task(description: str, dependencies: list[str]) -> str
+├── add_tasks(tasks: list[dict]) -> dict
 ├── update_task(task_id: str, status: str, assigned_to: str) -> bool
 └── read_plan() -> list[Task]
 ```

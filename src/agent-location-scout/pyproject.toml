@@ -10,7 +10,7 @@ dependencies = [
     "langchain>=0.3",
     "langchain-openai>=0.3",
     
-    # Azure AI Projects SDK v2 (has ImageBasedHostedAgentDefinition for deployment)
+    # Azure AI Projects SDK v2 (for provision.py - ImageBasedHostedAgentDefinition)
     "azure-ai-projects>=2.0.0b2",
     
     # Azure authentication

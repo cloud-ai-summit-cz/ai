@@ -204,32 +204,52 @@ def read_draft(
 # =============================================================================
 
 @mcp.tool
-def add_task(
-    description: str,
-    dependencies: List[str] = [],
+def add_tasks(
+    tasks: List[dict],
     session_id: str = "default"
 ) -> dict[str, Any]:
-    """Add a task to the shared plan.
+    """Add one or more tasks to the shared plan.
     
     Args:
-        description: What needs to be done.
-        dependencies: List of task IDs that must be completed first.
+        tasks: List of task objects, each containing:
+            - description (required): What needs to be done
+            - dependencies (optional): List of task IDs that must be completed first
         session_id: Session ID.
+        
+    Example:
+        add_tasks(tasks=[
+            {"description": "Research market size"},
+            {"description": "Analyze competitors", "dependencies": ["task-1"]},
+            {"description": "Write executive summary", "dependencies": ["task-1", "task-2"]}
+        ])
     """
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
-    task = Task(
-        description=description,
-        dependencies=dependencies
-    )
-    session.state.plan.append(task)
+    created_tasks = []
+    for task_data in tasks:
+        description = task_data.get("description", "")
+        if not description:
+            continue
+        dependencies = task_data.get("dependencies", [])
+        
+        task = Task(
+            description=description,
+            dependencies=dependencies
+        )
+        session.state.plan.append(task)
+        created_tasks.append({
+            "task_id": task.id,
+            "description": description
+        })
+    
     storage.save_session(session)
     
     return {
         "success": True,
-        "task_id": task.id,
-        "message": "Task added to plan."
+        "tasks_created": len(created_tasks),
+        "tasks": created_tasks,
+        "message": f"Added {len(created_tasks)} task(s) to plan."
     }
 
 @mcp.tool

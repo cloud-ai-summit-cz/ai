@@ -17,18 +17,18 @@ agents:
 
   # Foundry Native agents (provision to Azure AI Foundry, then exit)
   market-analyst:
-    enabled: true
+    enabled: false
     provision_only: true  # Runs provisioning script, not a long-running service
     # command: "uv run python -m market_analyst.provision create"
 
   competitor-analyst:
-    enabled: true
+    enabled: false
     provision_only: true
     # command: "uv run python -m competitor_analyst.provision create"
 
   # LangGraph agents (local Python processes)
   location-scout:
-    enabled: true
+    enabled: false
     # command: "uv run python -m location_scout.main"
 
   finance-analyst:
@@ -37,7 +37,7 @@ agents:
 
   # Foundry Native agent (provision to Azure AI Foundry, then exit)
   synthesizer:
-    enabled: true
+    enabled: false
     provision_only: true
     # command: "uv run python -m synthesizer.provision create"
 

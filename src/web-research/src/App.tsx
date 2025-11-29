@@ -1,45 +1,46 @@
 /**
  * Main App Component
- * 
+ *
  * Entry point that handles routing between landing page and workspace.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useResearchStore } from './store';
 import { QueryInput } from './components';
 import { Workspace } from './views';
 
 function App() {
-  const { session, loadMockData, setSession, setConnected } = useResearchStore();
+  const { session, startResearchSession, resetState } = useResearchStore();
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Check if we should show workspace or landing
   const showWorkspace = session !== null;
 
   const handleQuerySubmit = async (query: string) => {
     setIsLoading(true);
-    
-    // Simulate API call delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // For demo: load mock data and set session
-    loadMockData();
-    setIsLoading(false);
+    setError(null);
+
+    try {
+      await startResearchSession(query);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start research session');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  // Auto-load mock data in development for quick preview
-  // Comment this out to see the landing page first
-  useEffect(() => {
-    // Uncomment below to auto-load mock data on startup:
-    // loadMockData();
-  }, []);
+  const handleNewSession = () => {
+    resetState();
+    setError(null);
+  };
 
   return (
     <div className="min-h-screen bg-surface-dark">
       {showWorkspace ? (
-        <Workspace />
+        <Workspace onNewSession={handleNewSession} />
       ) : (
-        <QueryInput onSubmit={handleQuerySubmit} isLoading={isLoading} />
+        <QueryInput onSubmit={handleQuerySubmit} isLoading={isLoading} error={error} />
       )}
     </div>
   );

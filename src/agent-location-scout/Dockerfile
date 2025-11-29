@@ -12,11 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir uv
 
 # Copy dependency files first (for better layer caching)
-# README.md is required by hatchling during package build
-COPY pyproject.toml README.md ./
+COPY requirements-container.txt ./
 
 # Install dependencies using uv (--prerelease=allow needed for azure-ai-agentserver-* packages)
-RUN uv pip install --system --prerelease=allow .
+# Use requirements-container.txt to avoid conflicts with azure-ai-projects 2.x
+RUN uv pip install --system --prerelease=allow -r requirements-container.txt
 
 # Copy application code
 COPY . .

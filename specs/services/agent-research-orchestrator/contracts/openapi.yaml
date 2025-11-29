@@ -230,6 +230,100 @@ paths:
         '404':
           description: Session not found
 
+  # === Scratchpad Proxy Endpoints ===
+  # These endpoints proxy to the MCP scratchpad service.
+  # Frontend should poll these after each SSE event to get current state.
+
+  /research/sessions/{session_id}/scratchpad/plan:
+    get:
+      summary: Get current research plan (tasks)
+      description: |
+        Returns the current plan with all tasks, their statuses, assignments, and priorities.
+        Frontend should poll this endpoint after each SSE event to get the current state.
+        This proxies to the MCP scratchpad read_plan tool.
+      operationId: getPlan
+      tags:
+        - Research
+        - Scratchpad
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Current plan with tasks
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanResponse'
+        '404':
+          description: Session not found
+        '503':
+          description: Scratchpad service unavailable
+
+  /research/sessions/{session_id}/scratchpad/notes:
+    get:
+      summary: Get all research notes
+      description: |
+        Returns all notes collected during research, organized by section/topic.
+        Frontend should poll this endpoint after each SSE event to get current state.
+        This proxies to the MCP scratchpad read_notes tool.
+      operationId: getNotes
+      tags:
+        - Research
+        - Scratchpad
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: All research notes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotesResponse'
+        '404':
+          description: Session not found
+        '503':
+          description: Scratchpad service unavailable
+
+  /research/sessions/{session_id}/scratchpad/draft:
+    get:
+      summary: Get current draft report sections
+      description: |
+        Returns all draft sections written so far.
+        Frontend should poll this endpoint after each SSE event to get current state.
+        This proxies to the MCP scratchpad read_draft tool.
+      operationId: getDraft
+      tags:
+        - Research
+        - Scratchpad
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Current draft sections
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DraftResponse'
+        '404':
+          description: Session not found
+        '503':
+          description: Scratchpad service unavailable
+
   /research/sessions/{session_id}/cancel:
     post:
       summary: Cancel a running workflow
@@ -561,3 +655,156 @@ components:
                 type: string
               type:
                 type: string
+
+    # === Scratchpad Response Schemas ===
+
+    PlanResponse:
+      type: object
+      required:
+        - session_id
+        - tasks
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanTask'
+        total_tasks:
+          type: integer
+        tasks_by_status:
+          type: object
+          properties:
+            todo:
+              type: integer
+            in_progress:
+              type: integer
+            done:
+              type: integer
+            blocked:
+              type: integer
+
+    PlanTask:
+      type: object
+      required:
+        - task_id
+        - description
+        - status
+      properties:
+        task_id:
+          type: string
+          description: Server-assigned unique task ID
+        description:
+          type: string
+        priority:
+          type: string
+          enum: [low, medium, high]
+          default: medium
+        assigned_to:
+          type: string
+          nullable: true
+          description: Agent assigned to this task
+        status:
+          type: string
+          enum: [todo, in-progress, done, blocked]
+          default: todo
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    NotesResponse:
+      type: object
+      required:
+        - session_id
+        - notes
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        notes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Note'
+        total_notes:
+          type: integer
+        notes_by_author:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Count of notes per agent
+
+    Note:
+      type: object
+      required:
+        - note_id
+        - content
+        - author
+        - created_at
+      properties:
+        note_id:
+          type: string
+        content:
+          type: string
+        author:
+          type: string
+          description: Agent that created this note
+        section:
+          type: string
+          nullable: true
+          description: Topic or section this note belongs to
+        source_url:
+          type: string
+          nullable: true
+          description: URL source if from web search
+        created_at:
+          type: string
+          format: date-time
+
+    DraftResponse:
+      type: object
+      required:
+        - session_id
+        - sections
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        sections:
+          type: array
+          items:
+            $ref: '#/components/schemas/DraftSection'
+        total_sections:
+          type: integer
+
+    DraftSection:
+      type: object
+      required:
+        - section_id
+        - title
+        - content
+        - author
+      properties:
+        section_id:
+          type: string
+          description: Unique section identifier (e.g., executive_summary, market_analysis)
+        title:
+          type: string
+        content:
+          type: string
+          description: Markdown content of this section
+        author:
+          type: string
+          description: Agent that wrote this section
+        order:
+          type: integer
+          description: Display order in final report
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time

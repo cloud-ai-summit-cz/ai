@@ -1,10 +1,15 @@
 """Data models for Research Orchestrator API."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+
+def utcnow() -> datetime:
+    """Return current UTC time as timezone-aware datetime."""
+    return datetime.now(timezone.utc)
 
 
 class ResearchSessionStatus(str, Enum):
@@ -32,7 +37,6 @@ class CreateSessionRequest(BaseModel):
 
     query: str = Field(
         description="The research query to investigate",
-        min_length=10,
         max_length=2000,
         examples=["Analyze the market opportunity for a new coffee shop in Prague 2"],
     )
@@ -59,7 +63,7 @@ class AgentResult(BaseModel):
     agent_name: str
     content: str
     execution_time_ms: int
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=utcnow)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -68,8 +72,9 @@ class ResearchSession(BaseModel):
 
     session_id: str = Field(description="Unique session identifier")
     query: str = Field(description="The original research query")
+    context: dict[str, Any] | None = Field(default=None, description="Optional context for agents")
     status: ResearchSessionStatus = Field(description="Current session status")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = Field(default=None)
     completed_at: datetime | None = Field(default=None)
     agent_results: list[AgentResult] = Field(default_factory=list)
@@ -101,15 +106,16 @@ class SSEEventType(str, Enum):
     AGENT_THINKING = "agent_thinking"       # Agent is processing
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
+    AGENT_RESPONSE = "agent_response"       # Subagent returned result → UI should poll scratchpad
     
     # Tool events (detailed tool invocation tracking)
     TOOL_CALL_STARTED = "tool_call_started"     # Tool invocation started (with input)
     TOOL_CALL_COMPLETED = "tool_call_completed" # Tool completed (with output)
     TOOL_CALL_FAILED = "tool_call_failed"       # Tool failed (with error)
     
-    # Scratchpad events (collaborative workspace updates)
-    SCRATCHPAD_UPDATED = "scratchpad_updated"   # Section added/modified
-    SCRATCHPAD_SNAPSHOT = "scratchpad_snapshot" # Full scratchpad state
+    # Scratchpad events (DEPRECATED: use polling instead)
+    SCRATCHPAD_UPDATED = "scratchpad_updated"   # DEPRECATED: Section added/modified
+    SCRATCHPAD_SNAPSHOT = "scratchpad_snapshot" # DEPRECATED: Full scratchpad state
     QUESTION_ADDED = "question_added"           # Human question queued
     QUESTION_ANSWERED = "question_answered"     # Human answered a question
     
@@ -124,7 +130,7 @@ class SSEEvent(BaseModel):
 
     event_type: SSEEventType
     session_id: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=utcnow)
     data: dict[str, Any] = Field(default_factory=dict)
 
     def to_sse(self) -> str:
@@ -182,16 +188,28 @@ class ScratchpadSection(BaseModel):
 class ScratchpadUpdatedData(BaseModel):
     """Data for SCRATCHPAD_UPDATED event."""
     
-    section_name: str = Field(description="Name of the section that changed")
+    section_name: str = Field(description="Pillar/section that changed: 'notes', 'plan', or section ID")
     operation: str = Field(description="Operation: 'created', 'updated', 'appended', 'deleted'")
     updated_by: str = Field(description="Agent that made the change")
     content_preview: str | None = Field(
         default=None,
-        description="First 500 chars of new content (for 'created'/'updated')"
+        description="First 500 chars of new content"
     )
-    appended_content: str | None = Field(
+    tool_type: str | None = Field(
         default=None, 
-        description="Content that was appended (for 'appended' operation)"
+        description="MCP tool that triggered this: 'add_note', 'add_tasks', 'write_draft_section', 'update_task'"
+    )
+    tasks_created: int | None = Field(
+        default=None,
+        description="Number of tasks created (for add_tasks only)"
+    )
+    tasks: list[dict] | None = Field(
+        default=None,
+        description="Full task list for add_tasks tool (not truncated)"
+    )
+    task_update: dict | None = Field(
+        default=None,
+        description="Task update details for update_task (task_id, status, assigned_to)"
     )
 
 

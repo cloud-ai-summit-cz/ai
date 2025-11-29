@@ -150,14 +150,13 @@ async def get_session(session_id: str) -> ResearchSession:
     return session
 
 
-@app.post("/research/sessions/{session_id}/start", tags=["Research"])
+@app.get("/research/sessions/{session_id}/start", tags=["Research"])
 async def start_session(session_id: str, request: Request) -> EventSourceResponse:
     """Start executing a research session with SSE progress streaming.
 
     This endpoint initiates the research workflow and streams progress
-    events using Server-Sent Events (SSE). The workflow:
-    1. Runs market-analyst and competitor-analyst concurrently
-    2. Passes results to synthesizer for final recommendations
+    events using Server-Sent Events (SSE). Uses GET because EventSource
+    API only supports GET requests.
 
     Args:
         session_id: The session ID to start.
@@ -202,6 +201,108 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
             }
 
     return EventSourceResponse(event_generator())
+
+
+# === Scratchpad Proxy Endpoints ===
+
+
+@app.get("/research/sessions/{session_id}/scratchpad/plan", tags=["Research", "Scratchpad"])
+async def get_plan(session_id: str) -> dict[str, Any]:
+    """Get current research plan with all tasks.
+    
+    Returns the current plan with all tasks, their statuses, assignments, and priorities.
+    Frontend should poll this endpoint after each SSE event to get the current state.
+    This proxies to the MCP scratchpad read_plan tool.
+
+    Args:
+        session_id: The session ID.
+
+    Returns:
+        Plan with tasks array and metadata.
+
+    Raises:
+        HTTPException: If session not found or scratchpad unavailable.
+    """
+    orchestrator = get_orchestrator()
+    session = orchestrator.get_session(session_id)
+
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    try:
+        plan_data = await orchestrator.get_scratchpad_plan(session_id="default")
+        return {
+            "session_id": session_id,
+            **plan_data,
+        }
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/research/sessions/{session_id}/scratchpad/notes", tags=["Research", "Scratchpad"])
+async def get_notes(session_id: str) -> dict[str, Any]:
+    """Get all research notes.
+    
+    Returns all notes collected during research, organized by author.
+    Frontend should poll this endpoint after each SSE event to get current state.
+    This proxies to the MCP scratchpad read_notes tool.
+
+    Args:
+        session_id: The session ID.
+
+    Returns:
+        Notes array with metadata.
+
+    Raises:
+        HTTPException: If session not found or scratchpad unavailable.
+    """
+    orchestrator = get_orchestrator()
+    session = orchestrator.get_session(session_id)
+
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    try:
+        notes_data = await orchestrator.get_scratchpad_notes(session_id="default")
+        return {
+            "session_id": session_id,
+            **notes_data,
+        }
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/research/sessions/{session_id}/scratchpad/draft", tags=["Research", "Scratchpad"])
+async def get_draft(session_id: str) -> dict[str, Any]:
+    """Get current draft report sections.
+    
+    Returns all draft sections written so far.
+    Frontend should poll this endpoint after each SSE event to get current state.
+    This proxies to the MCP scratchpad read_draft tool.
+
+    Args:
+        session_id: The session ID.
+
+    Returns:
+        Draft sections array with metadata.
+
+    Raises:
+        HTTPException: If session not found or scratchpad unavailable.
+    """
+    orchestrator = get_orchestrator()
+    session = orchestrator.get_session(session_id)
+
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    try:
+        draft_data = await orchestrator.get_scratchpad_draft(session_id="default")
+        return {
+            "session_id": session_id,
+            **draft_data,
+        }
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 # === Error Handlers ===
