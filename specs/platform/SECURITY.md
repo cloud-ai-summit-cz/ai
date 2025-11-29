@@ -161,6 +161,96 @@ MOCK_PO_OWNER = {
 
 ---
 
+## Session Isolation (Multi-Agent Workloads)
+
+### Problem Statement
+
+In multi-agent orchestration, multiple AI agents collaborate on shared resources (scratchpad, notes, etc.). Without proper isolation:
+
+- Session A's agent could accidentally access Session B's data
+- Malicious prompts could trick agents into cross-session data access
+- Debugging becomes difficult without clear session boundaries
+
+### Security Principle
+
+**Session IDs are infrastructure-controlled, not AI-controlled.**
+
+AI agents CANNOT set or modify session IDs. The orchestrator (trusted application code) injects session context via HTTP headers that agents cannot manipulate.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           TRUST BOUNDARY                                     │
+│                                                                              │
+│  ┌─────────────────┐              ┌─────────────────────────────────────┐   │
+│  │   AI Agent      │              │   Orchestrator (Trusted Code)       │   │
+│  │                 │              │                                      │   │
+│  │ • Receives MCP  │  MCP Call    │ • Creates session-scoped tool       │   │
+│  │   tool wrapper  │──────────────▶   wrappers                          │   │
+│  │ • Cannot access │  (no         │ • Injects X-Session-ID header       │   │
+│  │   session_id    │   session_id)│ • Controls session lifecycle        │   │
+│  │                 │              │                                      │   │
+│  └─────────────────┘              └──────────────────┬──────────────────┘   │
+│                                                      │                       │
+└──────────────────────────────────────────────────────┼───────────────────────┘
+                                                       │ X-Session-ID: sess_xxx
+                                                       ▼
+                                        ┌───────────────────────────┐
+                                        │   MCP Server              │
+                                        │   (e.g., scratchpad)      │
+                                        │                           │
+                                        │   • Validates header      │
+                                        │   • Rejects if missing    │
+                                        │   • Isolates data storage │
+                                        └───────────────────────────┘
+```
+
+### Implementation Requirements
+
+| Component | Responsibility |
+|-----------|----------------|
+| **Orchestrator** | Create session-scoped MCP tool wrappers that inject `X-Session-ID` header |
+| **MCP Servers** | Validate `X-Session-ID` header on every request; reject if missing/invalid |
+| **Agent Prompts** | Do NOT include session_id as a tool parameter; agents are unaware of session mechanics |
+| **Audit Logging** | Log session_id with every operation for traceability |
+
+### Session ID Requirements
+
+| Requirement | Specification |
+|-------------|---------------|
+| Format | UUID v4 (e.g., `sess_a1b2c3d4-5678-90ab-cdef-1234567890ab`) |
+| Lifetime | Created at session start, valid for 24 hours |
+| Uniqueness | Globally unique across all sessions |
+| Exposure | Never exposed to end users or AI agents as a settable parameter |
+
+### Validation Matrix
+
+| Scenario | Expected Behavior |
+|----------|-------------------|
+| Request without X-Session-ID | 400 Bad Request |
+| Request with invalid format | 400 Bad Request |
+| Request with unknown session | 404 Not Found |
+| Request with expired session | 410 Gone |
+| Request with valid session | Process normally |
+
+### Audit Requirements
+
+All session-scoped operations must log:
+
+```python
+logger.info(
+    "session_operation",
+    session_id="sess_abc123",           # Which session
+    caller_agent="market-analyst",      # Which agent (from X-Caller-Agent header)
+    operation="add_note",               # What was done
+    resource="scratchpad",              # Which resource
+    timestamp="2025-12-01T10:05:00Z"    # When
+)
+```
+
+---
+
 ## Secure Coding & Dependencies
 
 ### SAST/DAST Tools

@@ -213,6 +213,8 @@ async def get_plan(session_id: str) -> dict[str, Any]:
     Returns the current plan with all tasks, their statuses, assignments, and priorities.
     Frontend should poll this endpoint after each SSE event to get the current state.
     This proxies to the MCP scratchpad read_plan tool.
+    
+    SECURITY: Uses session-scoped MCP tool with X-Session-ID header for isolation.
 
     Args:
         session_id: The session ID.
@@ -230,7 +232,8 @@ async def get_plan(session_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
     try:
-        plan_data = await orchestrator.get_scratchpad_plan(session_id="default")
+        # Pass actual session_id for isolation
+        plan_data = await orchestrator.get_scratchpad_plan(session_id=session_id)
         return {
             "session_id": session_id,
             **plan_data,
@@ -246,6 +249,8 @@ async def get_notes(session_id: str) -> dict[str, Any]:
     Returns all notes collected during research, organized by author.
     Frontend should poll this endpoint after each SSE event to get current state.
     This proxies to the MCP scratchpad read_notes tool.
+    
+    SECURITY: Uses session-scoped MCP tool with X-Session-ID header for isolation.
 
     Args:
         session_id: The session ID.
@@ -263,7 +268,8 @@ async def get_notes(session_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
     try:
-        notes_data = await orchestrator.get_scratchpad_notes(session_id="default")
+        # Pass actual session_id for isolation
+        notes_data = await orchestrator.get_scratchpad_notes(session_id=session_id)
         return {
             "session_id": session_id,
             **notes_data,
@@ -279,6 +285,8 @@ async def get_draft(session_id: str) -> dict[str, Any]:
     Returns all draft sections written so far.
     Frontend should poll this endpoint after each SSE event to get current state.
     This proxies to the MCP scratchpad read_draft tool.
+    
+    SECURITY: Uses session-scoped MCP tool with X-Session-ID header for isolation.
 
     Args:
         session_id: The session ID.
@@ -296,7 +304,8 @@ async def get_draft(session_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
     try:
-        draft_data = await orchestrator.get_scratchpad_draft(session_id="default")
+        # Pass actual session_id for isolation
+        draft_data = await orchestrator.get_scratchpad_draft(session_id=session_id)
         return {
             "session_id": session_id,
             **draft_data,

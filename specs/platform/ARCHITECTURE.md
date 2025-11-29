@@ -484,10 +484,115 @@ Tools:
 
 ## Cross-Cutting Concerns
 
+### Session Isolation Architecture
+
+All research sessions must be isolated from each other. The scratchpad must enforce that agents can only read/write data for their assigned session.
+
+#### The Problem
+
+Agents cannot be trusted to "remember" to pass session IDs - this must be enforced programmatically:
+
+```mermaid
+flowchart LR
+    subgraph WRONG["❌ WRONG: AI Passes Session ID"]
+        A1[Agent] -->|"add_note(session_id=X, content)"| S1[Scratchpad]
+    end
+    
+    subgraph RIGHT["✅ RIGHT: Code Enforces Session ID"]
+        O[Orchestrator] -->|"Create scoped MCP wrapper"| W[Session-Scoped MCP]
+        A2[Agent] -->|"add_note(content)"| W
+        W -->|"add_note(session_id=X, content)"| S2[Scratchpad]
+    end
+```
+
+#### Solution: Session-Scoped MCP Tool Wrappers
+
+The orchestrator creates **session-scoped MCP tool instances** that automatically inject the session ID into every request:
+
+```mermaid
+sequenceDiagram
+    participant UI as React UI
+    participant Orch as Orchestrator
+    participant MCP as mcp-scratchpad
+    participant Agent as Subagent
+    
+    UI->>Orch: POST /research/sessions
+    Orch->>Orch: Generate session_id = "sess_abc123"
+    Orch->>MCP: create_session(session_id)
+    MCP-->>Orch: OK
+    
+    Note over Orch: Create session-scoped MCP wrapper
+    Orch->>Orch: scoped_mcp = ScopedMCPTool(mcp, session_id)
+    
+    Orch->>Agent: Invoke with tools=[scoped_mcp]
+    
+    Note over Agent,MCP: Agent calls tool normally (no session_id)
+    Agent->>MCP: add_note(content="Market is €500M")
+    Note over MCP: Request intercepted by wrapper
+    MCP->>MCP: Inject session_id header
+    MCP->>MCP: Validate session exists
+    MCP->>MCP: Store note under session_id
+    MCP-->>Agent: OK
+```
+
+#### Implementation Pattern
+
+```python
+class ScopedMCPTool:
+    """Wrapper that injects session_id into all MCP requests.
+    
+    This ensures session isolation is enforced programmatically,
+    not by trusting AI agents to pass the correct session_id.
+    """
+    
+    def __init__(self, base_mcp: MCPStreamableHTTPTool, session_id: str):
+        self._base = base_mcp
+        self._session_id = session_id
+        
+    @property
+    def functions(self):
+        # Wrap each function to inject session_id
+        return [self._wrap_function(f) for f in self._base.functions]
+    
+    def _wrap_function(self, fn):
+        """Wrap function to inject session_id as first argument."""
+        async def wrapped(*args, **kwargs):
+            # Session ID is injected by wrapper, not passed by AI
+            return await fn(session_id=self._session_id, *args, **kwargs)
+        return wrapped
+```
+
+#### Scratchpad Server Validation
+
+The scratchpad MCP server validates session context on every request:
+
+| Check | Failure Mode | Response |
+|-------|--------------|----------|
+| Session ID present in header | Missing | 400 Bad Request |
+| Session exists | Unknown session | 404 Not Found |
+| Session not expired | Expired | 410 Gone |
+| Request matches session context | Mismatch | 403 Forbidden |
+
+#### Headers for Session Context
+
+```http
+# Request to scratchpad MCP
+POST /mcp HTTP/1.1
+X-Session-ID: sess_abc123
+X-Caller-Agent: market-analyst
+Authorization: Bearer <api_key>
+Content-Type: application/json
+
+{"method": "add_note", "params": {"content": "Market is €500M", "tags": ["pricing"]}}
+```
+
+> **Note**: The `session_id` parameter is NOT passed in the MCP tool arguments. It's injected via HTTP headers by the session-scoped wrapper.
+
 ### Security Posture
 - **Authentication**: None for demo (open access)
 - **Data Classification**: All data is mock/synthetic - no PII
 - **Network**: Container Apps with internal VNet for MCP servers
+- **Session Isolation**: Enforced programmatically via scoped MCP wrappers
 - See `SECURITY.md` for details
 
 ### Performance Characteristics

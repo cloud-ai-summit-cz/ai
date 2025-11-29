@@ -203,12 +203,100 @@ The orchestrator uses these heuristics:
 
 > **Future**: Add Cosmos DB persistence for production (session recovery, multi-instance).
 
-## Session Management
+## Session Management & Isolation
 
-Scratchpad is session-scoped:
-- Each research session gets isolated storage
-- Session ID passed via MCP context
-- Data retained for 24 hours then archived
+Scratchpad enforces strict session isolation - this is a **security-critical** feature.
+
+### Session Lifecycle
+
+```mermaid
+sequenceDiagram
+    participant Orch as Orchestrator
+    participant SP as Scratchpad
+    participant Store as Session Store
+    
+    Orch->>SP: create_session(session_id)
+    SP->>Store: Initialize empty workspace
+    Store-->>SP: OK
+    SP-->>Orch: {session_id, created_at}
+    
+    Note over Orch,SP: All subsequent requests include X-Session-ID header
+    
+    Orch->>SP: add_note(...) [X-Session-ID: sess_abc]
+    SP->>SP: Validate session exists
+    SP->>Store: Store under sess_abc
+    
+    Note over SP: 24h TTL
+    SP->>Store: Expire session
+```
+
+### Session ID Injection (Security Critical)
+
+> ⚠️ **The AI agent NEVER passes session_id as a tool parameter.** Session ID is injected by the orchestrator's MCP wrapper via HTTP headers.
+
+This design ensures:
+1. **Agents cannot access other sessions** - they don't control the session ID
+2. **Session isolation is enforced by code** - not by trusting AI behavior
+3. **Audit trail is reliable** - session ID comes from authenticated source
+
+#### Request Flow
+
+```
+┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
+│   AI Agent      │     │  Session-Scoped MCP  │     │   Scratchpad    │
+│                 │     │      Wrapper         │     │     Server      │
+│ add_note(       │────▶│ Inject header:       │────▶│ Validate header │
+│   content="..."│     │ X-Session-ID: sess_X │     │ Store in sess_X │
+│ )               │     │                      │     │                 │
+└─────────────────┘     └──────────────────────┘     └─────────────────┘
+        │                         │                          │
+        │  No session_id param    │   Header injection       │   Enforce isolation
+```
+
+#### Required HTTP Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `X-Session-ID` | ✅ Yes | Session identifier (injected by wrapper) |
+| `X-Caller-Agent` | Optional | Name of calling agent (for audit) |
+| `Authorization` | ✅ Yes | API key for service auth |
+
+#### Validation Rules
+
+| Check | HTTP Status | Error Code |
+|-------|-------------|------------|
+| `X-Session-ID` header missing | 400 | `MISSING_SESSION_ID` |
+| Session not found | 404 | `SESSION_NOT_FOUND` |
+| Session expired (>24h) | 410 | `SESSION_EXPIRED` |
+| Invalid session format | 400 | `INVALID_SESSION_ID` |
+
+### Storage Isolation
+
+Each session has completely isolated storage:
+
+```python
+# In-memory structure
+sessions: dict[str, ScratchpadSession] = {
+    "sess_abc123": ScratchpadSession(
+        session_id="sess_abc123",
+        state=WorkspaceState(
+            notes=[...],
+            draft_sections={...},
+            plan=[...]
+        ),
+        created_at=datetime(...),
+        expires_at=datetime(...),
+    ),
+    "sess_xyz789": ScratchpadSession(...),  # Completely separate
+}
+```
+
+### Session Expiry
+
+- Sessions expire 24 hours after creation
+- Expired sessions return `410 Gone` on any access attempt
+- Background cleanup removes expired sessions periodically
+- Data retained for 24 hours then archived (future: Cosmos DB)
 
 ## MCP Notifications (Subscriptions)
 

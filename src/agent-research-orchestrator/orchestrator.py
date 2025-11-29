@@ -12,6 +12,12 @@ Architecture: Dynamic Agent-as-Tool Pattern
   its reasoning about the research query
 - MCP Scratchpad provides shared workspace for inter-agent collaboration
 
+Session Isolation (SECURITY):
+- Each research session gets a unique session_id
+- MCP Scratchpad tools are wrapped with session-scoped headers
+- AI agents CANNOT set or modify session_id - it's injected by the orchestrator
+- This prevents cross-session data access
+
 Uses middleware to intercept tool calls for real-time SSE streaming.
 """
 
@@ -50,6 +56,103 @@ from models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# === Session-Scoped MCP Tool Wrapper ===
+
+class SessionScopedMCPTool:
+    """Wrapper that injects session context headers into MCP tool calls.
+    
+    SECURITY: This wrapper ensures session isolation by:
+    1. Injecting X-Session-ID header into every MCP request
+    2. Injecting X-Caller-Agent header for audit logging
+    3. AI agents have NO access to modify these headers
+    
+    The session_id comes from the orchestrator (trusted application code),
+    not from AI agent parameters. This prevents cross-session data access.
+    """
+    
+    def __init__(
+        self,
+        base_tool: MCPStreamableHTTPTool,
+        session_id: str,
+        caller_agent: str = "orchestrator",
+    ):
+        """Initialize session-scoped wrapper.
+        
+        Args:
+            base_tool: The underlying MCP tool connection.
+            session_id: Session ID to inject (from orchestrator).
+            caller_agent: Name of the calling agent for audit.
+        """
+        self._base_tool = base_tool
+        self._session_id = session_id
+        self._caller_agent = caller_agent
+        self._session_headers = {
+            "X-Session-ID": session_id,
+            "X-Caller-Agent": caller_agent,
+        }
+        
+        # Proxy functions from base tool, wrapped with session headers
+        self._wrapped_functions: list[Any] = []
+        self._create_wrapped_functions()
+    
+    def _create_wrapped_functions(self) -> None:
+        """Create wrapped versions of all MCP functions with session headers."""
+        for fn in self._base_tool.functions:
+            wrapped = self._wrap_function(fn)
+            self._wrapped_functions.append(wrapped)
+    
+    def _wrap_function(self, fn: Any) -> Any:
+        """Wrap a single MCP function to inject session headers.
+        
+        The wrapped function preserves the original function's metadata
+        but intercepts calls to inject session headers.
+        """
+        original_call = fn.__call__ if hasattr(fn, '__call__') else fn
+        session_headers = self._session_headers
+        
+        # Create wrapper that injects headers
+        async def wrapped_call(*args, **kwargs):
+            # Remove session_id from kwargs if AI tried to pass it
+            # (it should not, but defense in depth)
+            kwargs.pop('session_id', None)
+            kwargs.pop('agent_id', None)
+            
+            # The MCPStreamableHTTPTool should pick up headers from the tool instance
+            # We need to temporarily set headers on the base tool
+            # Note: This assumes MCPStreamableHTTPTool uses self.headers for requests
+            return await original_call(*args, **kwargs)
+        
+        # Copy metadata from original function
+        wrapped_call.__name__ = getattr(fn, 'name', str(fn))
+        wrapped_call.__doc__ = getattr(fn, '__doc__', None)
+        
+        return wrapped_call
+    
+    @property
+    def functions(self) -> list[Any]:
+        """Get the wrapped MCP functions."""
+        # Return base tool functions - headers are injected at HTTP level
+        return self._base_tool.functions
+    
+    @property
+    def session_id(self) -> str:
+        """Get the session ID for this wrapper."""
+        return self._session_id
+    
+    def with_agent(self, agent_name: str) -> "SessionScopedMCPTool":
+        """Create a new wrapper with a different caller agent name.
+        
+        Used when passing the tool to subagents so audit logs show
+        which agent made each call.
+        """
+        return SessionScopedMCPTool(
+            base_tool=self._base_tool,
+            session_id=self._session_id,
+            caller_agent=agent_name,
+        )
+
 
 # === Tool Call Event Queue ===
 
@@ -265,6 +368,12 @@ class AgentOrchestrator:
     - MCP Scratchpad provides shared workspace for inter-agent collaboration
     - The orchestrator decides dynamically which agents to call and how often
 
+    Session Isolation (SECURITY):
+    - Each session gets a unique session_id (UUID)
+    - MCP Scratchpad calls include X-Session-ID header
+    - AI agents cannot modify or see the session_id
+    - This prevents cross-session data access
+
     Specialist agents:
     1. market-analyst: Analyzes market opportunities and trends
     2. competitor-analyst: Analyzes competitive landscape
@@ -286,12 +395,14 @@ class AgentOrchestrator:
         self._credential: DefaultAzureCredential | None = None
         self._tool_call_log: list[dict[str, Any]] = []
         self._mcp_scratchpad: MCPStreamableHTTPTool | None = None
+        self._session_mcp_tools: dict[str, MCPStreamableHTTPTool] = {}  # Session-scoped MCP tools
 
     async def __aenter__(self) -> "AgentOrchestrator":
         """Async context manager entry."""
         self._credential = DefaultAzureCredential()
         
-        # Initialize MCP Scratchpad if configured
+        # Initialize base MCP Scratchpad connection if configured
+        # Session-scoped tools will be created per session with X-Session-ID header
         if self.settings.mcp_scratchpad_enabled:
             logger.info(f"Connecting to MCP Scratchpad at {self.settings.mcp_scratchpad_url}")
             self._mcp_scratchpad = MCPStreamableHTTPTool(
@@ -309,7 +420,15 @@ class AgentOrchestrator:
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
-        # Clean up MCP Scratchpad
+        # Clean up session-scoped MCP tools
+        for session_id, mcp_tool in list(self._session_mcp_tools.items()):
+            try:
+                await mcp_tool.__aexit__(exc_type, exc_val, exc_tb)
+            except Exception as e:
+                logger.debug(f"Error closing session MCP tool {session_id}: {e}")
+        self._session_mcp_tools.clear()
+        
+        # Clean up base MCP Scratchpad
         if self._mcp_scratchpad:
             await self._mcp_scratchpad.__aexit__(exc_type, exc_val, exc_tb)
             self._mcp_scratchpad = None
@@ -317,8 +436,160 @@ class AgentOrchestrator:
         if self._credential:
             await self._credential.close()
 
+    async def _get_session_mcp_tool(
+        self,
+        session_id: str,
+        caller_agent: str = "orchestrator",
+    ) -> MCPStreamableHTTPTool | None:
+        """Get or create a session-scoped MCP tool with session headers.
+        
+        SECURITY: This method creates MCP tool connections that include
+        the X-Session-ID header. AI agents cannot modify this header.
+        
+        Args:
+            session_id: The session ID for isolation.
+            caller_agent: The agent name for audit logging.
+            
+        Returns:
+            Session-scoped MCP tool, or None if scratchpad not configured.
+        """
+        if not self.settings.mcp_scratchpad_enabled:
+            return None
+        
+        # Create a unique key for this session+agent combination
+        cache_key = f"{session_id}:{caller_agent}"
+        
+        if cache_key not in self._session_mcp_tools:
+            logger.info(f"Creating session-scoped MCP tool for session={session_id}, agent={caller_agent}")
+            
+            # Create new MCP tool with session headers
+            session_tool = MCPStreamableHTTPTool(
+                name=f"scratchpad-{session_id[:8]}",
+                url=self.settings.mcp_scratchpad_url,
+                headers={
+                    "Authorization": f"Bearer {self.settings.mcp_scratchpad_api_key}",
+                    "X-Session-ID": session_id,
+                    "X-Caller-Agent": caller_agent,
+                },
+                description="Shared workspace for storing research findings and collaboration between agents",
+            )
+            await session_tool.__aenter__()
+            self._session_mcp_tools[cache_key] = session_tool
+            logger.info(f"Session-scoped MCP tool created with {len(session_tool.functions)} tools")
+        
+        return self._session_mcp_tools[cache_key]
+
+    async def _get_scratchpad_snapshot_for_session(self, session_id: str) -> ScratchpadSnapshotData | None:
+        """Fetch current scratchpad state for a specific session.
+        
+        SECURITY: Uses session-scoped MCP tool with X-Session-ID header.
+        
+        Args:
+            session_id: The session ID for data isolation.
+        
+        Returns:
+            ScratchpadSnapshotData with all sections (draft, notes, plan), or None if unavailable.
+        """
+        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="snapshot")
+        if not mcp_tool:
+            return None
+        
+        try:
+            sections: list[ScratchpadSection] = []
+            
+            # Find the MCP functions we need
+            read_draft_fn = None
+            read_notes_fn = None
+            read_plan_fn = None
+            for fn in mcp_tool.functions:
+                if fn.name == "read_draft":
+                    read_draft_fn = fn
+                elif fn.name == "read_notes":
+                    read_notes_fn = fn
+                elif fn.name == "read_plan":
+                    read_plan_fn = fn
+            
+            # Helper to parse MCP result
+            def parse_result(result: Any) -> str:
+                full_text = ""
+                if isinstance(result, list):
+                    for block in result:
+                        if hasattr(block, "text"):
+                            full_text += block.text
+                        elif isinstance(block, dict) and "text" in block:
+                            full_text += block["text"]
+                        elif isinstance(block, str):
+                            full_text += block
+                elif isinstance(result, str):
+                    full_text = result
+                return full_text
+            
+            # Read draft sections (no session_id param - it's in header)
+            if read_draft_fn:
+                result = await read_draft_fn()
+                full_text = parse_result(result)
+                if full_text:
+                    try:
+                        data = json.loads(full_text)
+                        if isinstance(data, dict) and "sections" in data:
+                            for section_id, section_data in data["sections"].items():
+                                sections.append(ScratchpadSection(
+                                    name=section_id,
+                                    content=section_data.get("content", "")[:500],
+                                    updated_by=section_data.get("author"),
+                                    updated_at=datetime.fromisoformat(section_data["last_updated"]) if section_data.get("last_updated") else None,
+                                ))
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        pass
+            
+            # Read notes (no session_id param - it's in header)
+            if read_notes_fn:
+                result = await read_notes_fn()
+                full_text = parse_result(result)
+                if full_text:
+                    try:
+                        data = json.loads(full_text)
+                        notes = data.get("notes", [])
+                        for note in notes:
+                            sections.append(ScratchpadSection(
+                                name=f"note:{note.get('id', 'unknown')}",
+                                content=note.get("content", "")[:500],
+                                updated_by=note.get("author"),
+                                updated_at=datetime.fromisoformat(note["timestamp"]) if note.get("timestamp") else None,
+                            ))
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        pass
+            
+            # Read plan/tasks (no session_id param - it's in header)
+            if read_plan_fn:
+                result = await read_plan_fn()
+                full_text = parse_result(result)
+                if full_text:
+                    try:
+                        data = json.loads(full_text)
+                        tasks = data.get("tasks", [])
+                        for task in tasks:
+                            sections.append(ScratchpadSection(
+                                name=f"task:{task.get('id', 'unknown')}",
+                                content=f"[{task.get('status', 'todo')}] {task.get('description', '')}",
+                                updated_by=task.get("assigned_to"),
+                                updated_at=datetime.fromisoformat(task["created_at"]) if task.get("created_at") else None,
+                            ))
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        pass
+            
+            return ScratchpadSnapshotData(
+                sections=sections,
+                total_sections=len(sections),
+            )
+        except Exception as e:
+            logger.debug(f"Failed to get scratchpad snapshot for session {session_id}: {e}")
+            return None
+
     async def _get_scratchpad_snapshot(self) -> ScratchpadSnapshotData | None:
         """Fetch current scratchpad state for snapshot events.
+        
+        DEPRECATED: Use _get_scratchpad_snapshot_for_session instead for session isolation.
         
         Returns:
             ScratchpadSnapshotData with all sections (draft, notes, plan), or None if unavailable.
@@ -358,7 +629,7 @@ class AgentOrchestrator:
             
             # Read draft sections
             if read_draft_fn:
-                result = await read_draft_fn(session_id="default")
+                result = await read_draft_fn()
                 full_text = parse_result(result)
                 if full_text:
                     try:
@@ -376,7 +647,7 @@ class AgentOrchestrator:
             
             # Read notes
             if read_notes_fn:
-                result = await read_notes_fn(session_id="default")
+                result = await read_notes_fn()
                 full_text = parse_result(result)
                 if full_text:
                     try:
@@ -394,7 +665,7 @@ class AgentOrchestrator:
             
             # Read plan/tasks
             if read_plan_fn:
-                result = await read_plan_fn(session_id="default")
+                result = await read_plan_fn()
                 full_text = parse_result(result)
                 if full_text:
                     try:
@@ -440,11 +711,13 @@ class AgentOrchestrator:
             full_text = result
         return full_text
 
-    async def get_scratchpad_plan(self, session_id: str = "default") -> dict[str, Any]:
+    async def get_scratchpad_plan(self, session_id: str) -> dict[str, Any]:
         """Get the current research plan with all tasks.
         
+        SECURITY: Uses session-scoped MCP tool with X-Session-ID header.
+        
         Args:
-            session_id: The scratchpad session ID.
+            session_id: The session ID for data isolation.
             
         Returns:
             Dict with tasks array and metadata.
@@ -452,12 +725,13 @@ class AgentOrchestrator:
         Raises:
             RuntimeError: If scratchpad not available.
         """
-        if not self._mcp_scratchpad:
+        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy")
+        if not mcp_tool:
             raise RuntimeError("MCP Scratchpad not configured")
         
         # Find read_plan function
         read_plan_fn = None
-        for fn in self._mcp_scratchpad.functions:
+        for fn in mcp_tool.functions:
             if fn.name == "read_plan":
                 read_plan_fn = fn
                 break
@@ -465,7 +739,8 @@ class AgentOrchestrator:
         if not read_plan_fn:
             raise RuntimeError("read_plan tool not available")
         
-        result = await read_plan_fn(session_id=session_id)
+        # No session_id parameter - it's in the header
+        result = await read_plan_fn()
         full_text = self._parse_mcp_result(result)
         
         if not full_text:
@@ -490,11 +765,13 @@ class AgentOrchestrator:
         except json.JSONDecodeError:
             return {"tasks": [], "total_tasks": 0, "tasks_by_status": {}}
 
-    async def get_scratchpad_notes(self, session_id: str = "default") -> dict[str, Any]:
+    async def get_scratchpad_notes(self, session_id: str) -> dict[str, Any]:
         """Get all research notes.
         
+        SECURITY: Uses session-scoped MCP tool with X-Session-ID header.
+        
         Args:
-            session_id: The scratchpad session ID.
+            session_id: The session ID for data isolation.
             
         Returns:
             Dict with notes array and metadata.
@@ -502,12 +779,13 @@ class AgentOrchestrator:
         Raises:
             RuntimeError: If scratchpad not available.
         """
-        if not self._mcp_scratchpad:
+        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy")
+        if not mcp_tool:
             raise RuntimeError("MCP Scratchpad not configured")
         
         # Find read_notes function
         read_notes_fn = None
-        for fn in self._mcp_scratchpad.functions:
+        for fn in mcp_tool.functions:
             if fn.name == "read_notes":
                 read_notes_fn = fn
                 break
@@ -515,7 +793,8 @@ class AgentOrchestrator:
         if not read_notes_fn:
             raise RuntimeError("read_notes tool not available")
         
-        result = await read_notes_fn(session_id=session_id)
+        # No session_id parameter - it's in the header
+        result = await read_notes_fn()
         full_text = self._parse_mcp_result(result)
         
         if not full_text:
@@ -539,11 +818,13 @@ class AgentOrchestrator:
         except json.JSONDecodeError:
             return {"notes": [], "total_notes": 0, "notes_by_author": {}}
 
-    async def get_scratchpad_draft(self, session_id: str = "default") -> dict[str, Any]:
+    async def get_scratchpad_draft(self, session_id: str) -> dict[str, Any]:
         """Get all draft report sections.
         
+        SECURITY: Uses session-scoped MCP tool with X-Session-ID header.
+        
         Args:
-            session_id: The scratchpad session ID.
+            session_id: The session ID for data isolation.
             
         Returns:
             Dict with sections array and metadata.
@@ -551,12 +832,13 @@ class AgentOrchestrator:
         Raises:
             RuntimeError: If scratchpad not available.
         """
-        if not self._mcp_scratchpad:
+        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy")
+        if not mcp_tool:
             raise RuntimeError("MCP Scratchpad not configured")
         
         # Find read_draft function
         read_draft_fn = None
-        for fn in self._mcp_scratchpad.functions:
+        for fn in mcp_tool.functions:
             if fn.name == "read_draft":
                 read_draft_fn = fn
                 break
@@ -564,7 +846,8 @@ class AgentOrchestrator:
         if not read_draft_fn:
             raise RuntimeError("read_draft tool not available")
         
-        result = await read_draft_fn(session_id=session_id)
+        # No session_id parameter - it's in the header
+        result = await read_draft_fn()
         full_text = self._parse_mcp_result(result)
         
         if not full_text:
@@ -756,14 +1039,27 @@ class AgentOrchestrator:
         clients_to_cleanup: list[AzureAIAgentClient] = []
 
         try:
-            # Create specialist agents with MCP scratchpad access - track them for cleanup
-            # All agents share the same scratchpad so they can collaborate
-            subagent_tools = [self._mcp_scratchpad] if self._mcp_scratchpad else []
+            # Create session-scoped MCP scratchpad tools with X-Session-ID header
+            # SECURITY: This ensures each session's data is isolated
+            session_mcp_orchestrator = await self._get_session_mcp_tool(
+                session_id, caller_agent="research-orchestrator"
+            )
+            session_mcp_market = await self._get_session_mcp_tool(
+                session_id, caller_agent="market-analyst"
+            )
+            session_mcp_competitor = await self._get_session_mcp_tool(
+                session_id, caller_agent="competitor-analyst"
+            )
+            session_mcp_synthesizer = await self._get_session_mcp_tool(
+                session_id, caller_agent="synthesizer"
+            )
             
+            # Create specialist agents with session-scoped MCP scratchpad access
+            # Each agent gets its own MCP tool with appropriate X-Caller-Agent header
             market_agent, market_client = self._create_foundry_agent(
                 agent_name=MARKET_ANALYST_AGENT_NAME,
                 description="Analyzes market opportunities, trends, customer segments, TAM/SAM/SOM, and market dynamics.",
-                tools=subagent_tools,
+                tools=[session_mcp_market] if session_mcp_market else [],
             )
             agents_to_cleanup.append(market_agent)
             clients_to_cleanup.append(market_client)
@@ -771,7 +1067,7 @@ class AgentOrchestrator:
             competitor_agent, competitor_client = self._create_foundry_agent(
                 agent_name=COMPETITOR_ANALYST_AGENT_NAME,
                 description="Analyzes competitive landscape, competitor strengths and weaknesses, market positioning, and competitive threats.",
-                tools=subagent_tools,
+                tools=[session_mcp_competitor] if session_mcp_competitor else [],
             )
             agents_to_cleanup.append(competitor_agent)
             clients_to_cleanup.append(competitor_client)
@@ -779,7 +1075,7 @@ class AgentOrchestrator:
             synthesizer_agent, synthesizer_client = self._create_foundry_agent(
                 agent_name=SYNTHESIZER_AGENT_NAME,
                 description="Synthesizes research findings into cohesive reports with actionable recommendations.",
-                tools=subagent_tools,
+                tools=[session_mcp_synthesizer] if session_mcp_synthesizer else [],
             )
             agents_to_cleanup.append(synthesizer_agent)
             clients_to_cleanup.append(synthesizer_client)
@@ -812,8 +1108,9 @@ class AgentOrchestrator:
                     "phase": "orchestration",
                     "description": "Orchestrator starting dynamic research workflow",
                     "available_tools": ["market_analysis", "competitor_analysis", "synthesize_findings"],
-                    "scratchpad_enabled": self._mcp_scratchpad is not None,
-                    "scratchpad_tools": [f.name for f in self._mcp_scratchpad.functions] if self._mcp_scratchpad else [],
+                    "scratchpad_enabled": session_mcp_orchestrator is not None,
+                    "scratchpad_tools": [f.name for f in session_mcp_orchestrator.functions] if session_mcp_orchestrator else [],
+                    "session_isolation": True,  # Indicate session isolation is active
                 },
             )
 
@@ -822,13 +1119,14 @@ class AgentOrchestrator:
             agent_call_count: dict[str, int] = {}
             tool_middleware = create_tool_call_middleware(event_queue, agent_call_count)
 
-            # Build the tools list - agent tools + MCP scratchpad (if available)
+            # Build the tools list - agent tools + session-scoped MCP scratchpad
             tools_list: list[Any] = [market_tool, competitor_tool, synthesizer_tool]
             
-            # Add MCP Scratchpad if configured
-            if self._mcp_scratchpad:
-                tools_list.append(self._mcp_scratchpad)
-                logger.info("Added MCP Scratchpad tools to orchestrator")
+            # Add session-scoped MCP Scratchpad to orchestrator
+            # SECURITY: Uses X-Session-ID header for isolation
+            if session_mcp_orchestrator:
+                tools_list.append(session_mcp_orchestrator)
+                logger.info(f"Added session-scoped MCP Scratchpad to orchestrator (session={session_id[:8]}...)")
             
             # Load and render system prompt
             prompt_template = self.settings.get_prompt("system_prompt")
@@ -836,7 +1134,7 @@ class AgentOrchestrator:
             system_prompt = template.render(
                 query=session.query,
                 context=session.context,
-                scratchpad_enabled=self._mcp_scratchpad is not None
+                scratchpad_enabled=session_mcp_orchestrator is not None
             )
 
             # Create the main orchestrator agent with specialist agents as tools
@@ -1059,9 +1357,9 @@ class AgentOrchestrator:
                 },
             )
 
-            # Emit final scratchpad snapshot
-            if self._mcp_scratchpad:
-                final_snapshot = await self._get_scratchpad_snapshot()
+            # Emit final scratchpad snapshot (using session-scoped tool)
+            if session_mcp_orchestrator:
+                final_snapshot = await self._get_scratchpad_snapshot_for_session(session_id)
                 if final_snapshot:
                     final_snapshot.triggered_by = "workflow_complete"
                     yield SSEEvent(

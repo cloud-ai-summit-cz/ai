@@ -1,9 +1,9 @@
 # Copyright (c) Microsoft. All rights reserved.
 """
 Minimal test agent for Azure AI Foundry Hosted Agents.
-Based on official SDK calculator-agent sample.
+Based on official SDK samples.
 
-This uses the official pattern with init_chat_model and token provider.
+This uses AzureChatOpenAI with explicit token provider for managed identity auth.
 """
 
 import os
@@ -11,8 +11,8 @@ import logging
 
 from dotenv import load_dotenv
 from importlib.metadata import version
-from langchain.chat_models import init_chat_model
 from langchain_core.tools import tool
+from langchain_openai import AzureChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 
 from azure.ai.agentserver.langgraph import from_langgraph
@@ -22,20 +22,18 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 memory = MemorySaver()
-deployment_name = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
+deployment_name = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT_NAME", "gpt-4o")
 
-try:
-    credential = DefaultAzureCredential()
-    token_provider = get_bearer_token_provider(
-        credential, "https://cognitiveservices.azure.com/.default"
-    )
-    model = init_chat_model(
-        f"azure_openai:{deployment_name}",
-        azure_ad_token_provider=token_provider,
-    )
-except Exception:
-    logger.exception("Failed to initialize chat model")
-    raise
+# Use managed identity for authentication
+credential = DefaultAzureCredential()
+token_provider = get_bearer_token_provider(
+    credential, "https://cognitiveservices.azure.com/.default"
+)
+
+model = AzureChatOpenAI(
+    model=deployment_name,
+    azure_ad_token_provider=token_provider,
+)
 
 
 @tool

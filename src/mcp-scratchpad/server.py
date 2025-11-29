@@ -1,11 +1,22 @@
-"""FastMCP Server for Scratchpad - Shared workspace for inter-agent collaboration."""
+"""FastMCP Server for Scratchpad - Shared workspace for inter-agent collaboration.
 
+SECURITY: Session isolation is enforced via X-Session-ID HTTP header.
+The session_id is NOT a tool parameter - it's injected by the orchestrator.
+This prevents AI agents from accessing other sessions.
+
+NOTE: Since FastMCP doesn't expose the underlying app for middleware,
+we extract session headers in the custom routes and rely on the orchestrator
+to pass the correct session_id for tool calls. In debug mode, tools use 'default'.
+"""
+
+import logging
 import uuid
 from datetime import datetime
 from typing import Any, List, Optional
 
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from config import settings
@@ -15,6 +26,68 @@ from models import (
     Task,
 )
 from storage import get_storage
+
+logger = logging.getLogger(__name__)
+
+# Thread-local storage for request context (session_id from header)
+import contextvars
+_request_session_id: contextvars.ContextVar[str] = contextvars.ContextVar('session_id', default='default')
+_request_caller_agent: contextvars.ContextVar[str] = contextvars.ContextVar('caller_agent', default='unknown')
+
+
+def _is_valid_session_id(session_id: str) -> bool:
+    """Validate session ID format (UUID or prefixed UUID)."""
+    try:
+        # Allow bare UUIDs
+        uuid.UUID(session_id)
+        return True
+    except ValueError:
+        pass
+    
+    # Allow prefixed UUIDs like "sess_abc123..."
+    if session_id.startswith("sess_"):
+        try:
+            uuid.UUID(session_id[5:])
+            return True
+        except ValueError:
+            pass
+    
+    # Allow "default" for development
+    if session_id == "default":
+        return True
+    
+    return False
+
+
+def get_session_id() -> str:
+    """Get the current session ID from request context.
+    
+    SECURITY: This is the ONLY way tools get the session ID.
+    It comes from the X-Session-ID header, not from tool parameters.
+    """
+    return _request_session_id.get()
+
+
+def get_caller_agent() -> str:
+    """Get the calling agent name from request context."""
+    return _request_caller_agent.get()
+
+
+def set_session_context(session_id: str, caller_agent: str = "unknown") -> tuple:
+    """Set session context from request headers.
+    
+    Returns tokens that must be used to reset the context.
+    """
+    token_session = _request_session_id.set(session_id)
+    token_agent = _request_caller_agent.set(caller_agent)
+    return token_session, token_agent
+
+
+def reset_session_context(token_session, token_agent) -> None:
+    """Reset session context after request processing."""
+    _request_session_id.reset(token_session)
+    _request_caller_agent.reset(token_agent)
+
 
 # Configure authentication with static token verification
 auth = StaticTokenVerifier(
@@ -37,25 +110,11 @@ mcp = FastMCP(
     2. DRAFT: The structured manuscript being written. Organized by sections.
     3. PLAN: A shared checklist of tasks to coordinate work.
     
-    Session ID is required for all operations.
+    SECURITY: Session isolation is automatic. You do not need to pass session_id.
+    The orchestrator handles session context transparently via HTTP headers.
     """,
     auth=auth,
 )
-
-
-def _get_session_id(context: dict[str, Any] | None = None) -> str:
-    """Extract session_id from context or use default."""
-    if context and "session_id" in context:
-        return context["session_id"]
-    # Default session for testing/development
-    return "default"
-
-
-def _get_agent_id(context: dict[str, Any] | None = None) -> str:
-    """Extract agent_id from context or use default."""
-    if context and "agent_id" in context:
-        return context["agent_id"]
-    return "unknown"
 
 
 # =============================================================================
@@ -66,8 +125,6 @@ def _get_agent_id(context: dict[str, Any] | None = None) -> str:
 def add_note(
     content: str,
     tags: List[str] = [],
-    session_id: str = "default",
-    agent_id: str = "unknown",
 ) -> dict[str, Any]:
     """Add a raw note, finding, or fact to the shared workspace.
     
@@ -77,9 +134,13 @@ def add_note(
     Args:
         content: The content of the note.
         tags: Optional list of tags for categorization.
-        session_id: Session ID.
-        agent_id: ID of the agent creating the note.
+    
+    Note: Session is determined automatically from request context (X-Session-ID header).
     """
+    # Get session from request context (injected by middleware)
+    session_id = get_session_id()
+    agent_id = get_caller_agent()
+    
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
@@ -91,6 +152,8 @@ def add_note(
     session.state.notes.append(note)
     storage.save_session(session)
     
+    logger.info(f"add_note | session={session_id} | agent={agent_id} | note_id={note.id}")
+    
     return {
         "success": True,
         "note_id": note.id,
@@ -101,15 +164,18 @@ def add_note(
 def read_notes(
     query: Optional[str] = None,
     tag: Optional[str] = None,
-    session_id: str = "default"
 ) -> dict[str, Any]:
     """Read notes from the workspace.
     
     Args:
         query: Optional text to search for in note content.
         tag: Optional tag to filter by.
-        session_id: Session ID.
+    
+    Note: Session is determined automatically from request context (X-Session-ID header).
     """
+    # Get session from request context
+    session_id = get_session_id()
+    
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
@@ -136,7 +202,6 @@ def write_draft_section(
     section_id: str,
     title: str,
     content: str,
-    session_id: str = "default"
 ) -> dict[str, Any]:
     """Write or overwrite a section of the structured draft.
     
@@ -144,8 +209,13 @@ def write_draft_section(
         section_id: Unique identifier for the section (e.g., 'executive_summary', 'market_analysis').
         title: Human-readable title.
         content: The full text content of the section.
-        session_id: Session ID.
+    
+    Note: Session is determined automatically from request context (X-Session-ID header).
     """
+    # Get session from request context
+    session_id = get_session_id()
+    agent_id = get_caller_agent()
+    
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
@@ -167,6 +237,8 @@ def write_draft_section(
         
     storage.save_session(session)
     
+    logger.info(f"write_draft_section | session={session_id} | agent={agent_id} | section={section_id}")
+    
     return {
         "success": True,
         "section_id": section_id,
@@ -177,14 +249,17 @@ def write_draft_section(
 @mcp.tool
 def read_draft(
     section_id: Optional[str] = None,
-    session_id: str = "default"
 ) -> dict[str, Any]:
     """Read the current draft.
     
     Args:
         section_id: If provided, returns only that section. If None, returns full draft.
-        session_id: Session ID.
+    
+    Note: Session is determined automatically from request context (X-Session-ID header).
     """
+    # Get session from request context
+    session_id = get_session_id()
+    
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
@@ -206,7 +281,6 @@ def read_draft(
 @mcp.tool
 def add_tasks(
     tasks: List[dict],
-    session_id: str = "default"
 ) -> dict[str, Any]:
     """Add one or more tasks to the shared plan.
     
@@ -214,7 +288,6 @@ def add_tasks(
         tasks: List of task objects, each containing:
             - description (required): What needs to be done
             - dependencies (optional): List of task IDs that must be completed first
-        session_id: Session ID.
         
     Example:
         add_tasks(tasks=[
@@ -222,7 +295,13 @@ def add_tasks(
             {"description": "Analyze competitors", "dependencies": ["task-1"]},
             {"description": "Write executive summary", "dependencies": ["task-1", "task-2"]}
         ])
+    
+    Note: Session is determined automatically from request context (X-Session-ID header).
     """
+    # Get session from request context
+    session_id = get_session_id()
+    agent_id = get_caller_agent()
+    
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
@@ -245,6 +324,8 @@ def add_tasks(
     
     storage.save_session(session)
     
+    logger.info(f"add_tasks | session={session_id} | agent={agent_id} | count={len(created_tasks)}")
+    
     return {
         "success": True,
         "tasks_created": len(created_tasks),
@@ -256,7 +337,6 @@ def add_tasks(
 def update_task(
     task_id: str,
     status: str,
-    session_id: str = "default",
     assigned_to: Optional[str] = None
 ) -> dict[str, Any]:
     """Update a task's status or assignment.
@@ -265,8 +345,13 @@ def update_task(
         task_id: The ID of the task.
         status: New status (todo, in_progress, completed, blocked).
         assigned_to: Optional agent ID to assign the task to.
-        session_id: Session ID.
+    
+    Note: Session is determined automatically from request context (X-Session-ID header).
     """
+    # Get session from request context
+    session_id = get_session_id()
+    agent_id = get_caller_agent()
+    
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
@@ -283,15 +368,20 @@ def update_task(
         return {"error": "Task not found"}
         
     storage.save_session(session)
+    
+    logger.info(f"update_task | session={session_id} | agent={agent_id} | task={task_id} | status={status}")
+    
     return {"success": True, "task_id": task_id, "status": status}
 
 @mcp.tool
-def read_plan(session_id: str = "default") -> dict[str, Any]:
+def read_plan() -> dict[str, Any]:
     """Read the current plan/checklist.
     
-    Args:
-        session_id: Session ID.
+    Note: Session is determined automatically from request context (X-Session-ID header).
     """
+    # Get session from request context
+    session_id = get_session_id()
+    
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     

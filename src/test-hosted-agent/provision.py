@@ -158,10 +158,10 @@ def deploy_foundry() -> None:
     # Using token-based auth (DefaultAzureCredential) - NO API KEY NEEDED
     # The container's managed identity will get tokens automatically
     
-    # Environment variables - matches official SDK samples
+    # Environment variables - for AzureChatOpenAI with token provider
     env_vars = {
         "AZURE_OPENAI_ENDPOINT": azure_openai_endpoint,
-        "AZURE_AI_MODEL_DEPLOYMENT_NAME": settings.azure_openai_deployment,
+        "AZURE_OPENAI_CHAT_DEPLOYMENT_NAME": settings.azure_openai_deployment,
         "OPENAI_API_VERSION": "2024-10-21",
     }
     

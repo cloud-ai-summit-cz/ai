@@ -1,7 +1,15 @@
 {
   "name": "mcp-scratchpad",
-  "version": "1.1.0",
-  "description": "Shared workspace for inter-agent collaboration with three pillars: Notes (raw findings), Draft (structured document), and Plan (task checklist)",
+  "version": "2.0.0",
+  "description": "Shared workspace for inter-agent collaboration with three pillars: Notes (raw findings), Draft (structured document), and Plan (task checklist). Session ID is injected via X-Session-ID HTTP header for security isolation.",
+  "security": {
+    "sessionIsolation": {
+      "description": "Session ID is NOT a tool parameter. It is injected by the orchestrator via X-Session-ID HTTP header. This ensures AI agents cannot access other sessions.",
+      "requiredHeader": "X-Session-ID",
+      "optionalHeader": "X-Caller-Agent",
+      "enforcement": "Server rejects requests without valid X-Session-ID header"
+    }
+  },
   "tools": [
     {
       "name": "add_note",
@@ -17,16 +25,6 @@
             "type": "array",
             "items": { "type": "string" },
             "description": "Optional tags for categorization"
-          },
-          "session_id": {
-            "type": "string",
-            "description": "Session ID",
-            "default": "default"
-          },
-          "agent_id": {
-            "type": "string", 
-            "description": "ID of the agent creating the note",
-            "default": "unknown"
           }
         },
         "required": ["content"]
@@ -45,11 +43,6 @@
           "tag": {
             "type": "string",
             "description": "Optional tag to filter by"
-          },
-          "session_id": {
-            "type": "string",
-            "description": "Session ID",
-            "default": "default"
           }
         }
       }
@@ -71,11 +64,6 @@
           "content": {
             "type": "string",
             "description": "The full text content of the section"
-          },
-          "session_id": {
-            "type": "string",
-            "description": "Session ID",
-            "default": "default"
           }
         },
         "required": ["section_id", "title", "content"]
@@ -90,11 +78,6 @@
           "section_id": {
             "type": "string",
             "description": "If provided, returns only that section. If null, returns full draft."
-          },
-          "session_id": {
-            "type": "string",
-            "description": "Session ID",
-            "default": "default"
           }
         }
       }
@@ -124,11 +107,6 @@
               "required": ["description"]
             },
             "minItems": 1
-          },
-          "session_id": {
-            "type": "string",
-            "description": "Session ID",
-            "default": "default"
           }
         },
         "required": ["tasks"]
@@ -152,11 +130,6 @@
           "assigned_to": {
             "type": "string",
             "description": "Optional agent ID to assign the task to"
-          },
-          "session_id": {
-            "type": "string",
-            "description": "Session ID",
-            "default": "default"
           }
         },
         "required": ["task_id", "status"]
@@ -167,13 +140,7 @@
       "description": "Read the current plan/checklist of tasks",
       "inputSchema": {
         "type": "object",
-        "properties": {
-          "session_id": {
-            "type": "string",
-            "description": "Session ID",
-            "default": "default"
-          }
-        }
+        "properties": {}
       }
     }
   ]

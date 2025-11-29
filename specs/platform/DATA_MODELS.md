@@ -8,6 +8,62 @@ Definitive schema catalog for Cofilot AI Platform. All persistent and transient 
 - **Versioning**: Use semantic versioning for breaking changes.
 - **Specification by Example**: Each schema includes realistic payload examples.
 - **Cosmos DB Guidelines**: Follow partition key best practices per attached instructions.
+- **Session Isolation**: All scratchpad operations are scoped by session_id via HTTP headers (see Security section).
+
+---
+
+## Session Isolation (SECURITY)
+
+**Version**: 2.0 (Breaking change from v1.x)
+
+Session isolation ensures that each research session's data is completely separate. This is enforced at the infrastructure level, not by AI agents.
+
+### Key Changes in v2.0
+
+| Aspect | v1.x (Old) | v2.0 (Current) |
+|--------|------------|----------------|
+| Session ID passing | Tool parameter (`session_id: str`) | HTTP header (`X-Session-ID`) |
+| Agent access | Could set any session_id | Cannot see or modify session_id |
+| Enforcement | Trust-based | Infrastructure-enforced |
+
+### HTTP Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `X-Session-ID` | Yes | UUID identifying the session. Set by orchestrator, not agents. |
+| `X-Caller-Agent` | No | Name of the calling agent for audit logging. |
+
+### MCP Tool Signature Changes
+
+**Before (v1.x)** - AI could manipulate session:
+```python
+def add_note(content: str, session_id: str = "default") -> dict:
+    ...
+```
+
+**After (v2.0)** - Session from header, AI cannot manipulate:
+```python
+def add_note(content: str) -> dict:
+    session_id = get_session_id()  # From X-Session-ID header
+    ...
+```
+
+### Orchestrator Session Scoping
+
+The orchestrator creates session-scoped MCP tool connections:
+
+```python
+# Each session gets its own MCP tool with X-Session-ID header
+session_mcp = MCPStreamableHTTPTool(
+    name="scratchpad",
+    url=mcp_url,
+    headers={
+        "Authorization": f"Bearer {api_key}",
+        "X-Session-ID": session_id,        # Injected, not settable by AI
+        "X-Caller-Agent": "market-analyst", # For audit
+    },
+)
+```
 
 ---
 
