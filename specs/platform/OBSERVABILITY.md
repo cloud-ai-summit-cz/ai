@@ -4,13 +4,116 @@ Telemetry standards for Cofilot AI Platform. Focus on demo visibility and debugg
 
 ---
 
+## Infrastructure Overview
+
+All observability infrastructure is managed via Terraform in `deploy/azure/terraform/`:
+
+| Resource | Purpose | Terraform File |
+|----------|---------|----------------|
+| Log Analytics Workspace | Centralized log storage | `capp.env.tf` |
+| Application Insights | Tracing and telemetry | `observability.tf` |
+| Diagnostic Settings | Foundry metrics/logs | `observability.tf` |
+
+### Getting Connection Strings
+
+After running `terraform apply`, retrieve observability configuration:
+
+```bash
+cd deploy/azure/terraform
+
+# Application Insights connection string (for all agents)
+terraform output -raw application_insights_connection_string
+
+# Log Analytics workspace ID (for Kusto queries)
+terraform output log_analytics_workspace_id
+```
+
+---
+
+## Application Insights Integration
+
+All agents MUST send traces to Application Insights for unified observability.
+
+### Required Environment Variable
+
+Every agent must have this environment variable set:
+
+```bash
+APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=<key>;IngestionEndpoint=https://northcentralus-0.in.applicationinsights.azure.com/
+```
+
+Get the value from Terraform: `terraform output -raw application_insights_connection_string`
+
+### Python Setup with OpenTelemetry
+
+```python
+# app/telemetry.py
+import os
+from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry import trace
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+def configure_telemetry(service_name: str):
+    """Configure OpenTelemetry with Azure Monitor export."""
+    connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
+    
+    if connection_string:
+        configure_azure_monitor(
+            connection_string=connection_string,
+            service_name=service_name,
+        )
+        
+        # Auto-instrument FastAPI and HTTP clients
+        FastAPIInstrumentor.instrument()
+        HTTPXClientInstrumentor().instrument()
+        
+        print(f"Telemetry configured for {service_name}")
+    else:
+        print("Warning: APPLICATIONINSIGHTS_CONNECTION_STRING not set, tracing disabled")
+
+# Get tracer for manual instrumentation
+tracer = trace.get_tracer(__name__)
+```
+
+### Agent Initialization Pattern
+
+```python
+# main.py
+from app.telemetry import configure_telemetry
+
+# Configure telemetry FIRST before importing other modules
+configure_telemetry(service_name="agent-location-scout")
+
+from fastapi import FastAPI
+from app.routes import router
+
+app = FastAPI()
+app.include_router(router)
+```
+
+### Required Dependencies
+
+Add to `pyproject.toml`:
+
+```toml
+[project]
+dependencies = [
+    "azure-monitor-opentelemetry>=1.6.0",
+    "opentelemetry-instrumentation-fastapi>=0.45b0",
+    "opentelemetry-instrumentation-httpx>=0.45b0",
+]
+```
+
+---
+
 ## Instrumentation Baseline
 
 ### Preferred Libraries
 
 | Language | Logging | Metrics | Tracing |
 |----------|---------|---------|---------|
-| Python | structlog | prometheus-client (optional) | OpenTelemetry |
+| Python | structlog | prometheus-client (optional) | OpenTelemetry + Azure Monitor |
 | JavaScript | pino | N/A | N/A |
 
 ### Correlation & Context
@@ -171,36 +274,52 @@ TOOL_CALLS.labels(
 
 ## Tracing
 
-### OpenTelemetry Setup
+### Azure Application Insights Integration
+
+All agents export traces to Azure Application Insights via OpenTelemetry. The integration is configured automatically when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set.
+
+See the **Application Insights Integration** section above for setup instructions.
+
+### Manual Span Creation
 
 ```python
-# app/tracing.py
+# For custom spans beyond auto-instrumentation
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-
-def configure_tracing(service_name: str):
-    provider = TracerProvider()
-    processor = BatchSpanProcessor(OTLPSpanExporter())
-    provider.add_span_processor(processor)
-    trace.set_tracer_provider(provider)
-    
-    # Auto-instrument FastAPI and HTTP clients
-    FastAPIInstrumentor.instrument()
-    HTTPXClientInstrumentor().instrument()
 
 tracer = trace.get_tracer(__name__)
 
-# Usage
 @tracer.start_as_current_span("invoke_agent")
 async def invoke_agent(agent_name: str, message: str):
     span = trace.get_current_span()
     span.set_attribute("agent.name", agent_name)
     span.set_attribute("message.length", len(message))
     # ...
+```
+
+### Viewing Traces in Azure Portal
+
+1. Go to Azure Portal → Application Insights → your instance
+2. Navigate to **Transaction search** for individual traces
+3. Use **Application map** to see service dependencies
+4. Use **Performance** to analyze latency distributions
+
+### Kusto Queries for Traces
+
+```kusto
+// All traces for a session
+traces
+| where customDimensions.session_id == "sess_abc123"
+| order by timestamp
+
+// Agent invocation latency
+requests
+| where name contains "invoke_agent"
+| summarize avg(duration), percentile(duration, 95) by bin(timestamp, 5m)
+
+// Failed tool calls
+exceptions
+| where customDimensions.tool_name != ""
+| summarize count() by customDimensions.tool_name, bin(timestamp, 1h)
 ```
 
 ### Sampling Strategy
@@ -438,14 +557,20 @@ services:
         max-file: "3"
 ```
 
-### Azure (Container Apps)
+### Azure (Container Apps + Application Insights)
 
 Container Apps automatically:
 - Collect stdout/stderr logs
-- Send to Azure Monitor
+- Send to Azure Monitor / Log Analytics
 - Provide log streaming in Azure Portal
 
-Query logs via Log Analytics:
+Application Insights provides:
+- Distributed tracing across all agents
+- Dependency tracking (OpenAI calls, HTTP requests)
+- Exception and failure analysis
+- Performance metrics and dashboards
+
+#### Query Container Logs via Log Analytics
 
 ```kusto
 // All logs for a session
@@ -458,6 +583,27 @@ ContainerAppConsoleLogs_CL
 | where Log_s contains "ERROR"
 | where Log_s contains "agent"
 | summarize count() by bin(TimeGenerated, 5m)
+```
+
+#### Query Traces via Application Insights
+
+```kusto
+// All requests for an agent
+requests
+| where cloud_RoleName == "agent-location-scout"
+| summarize count(), avg(duration) by name
+| order by count_ desc
+
+// Dependency calls (OpenAI, HTTP)
+dependencies
+| where cloud_RoleName contains "agent"
+| summarize count(), avg(duration) by target, name
+| order by avg_duration desc
+
+// Exceptions by agent
+exceptions
+| summarize count() by cloud_RoleName, type
+| order by count_ desc
 ```
 
 ---

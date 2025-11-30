@@ -23,22 +23,6 @@ resource "azurerm_role_assignment" "acr_push_current_user" {
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
-# AcrPull role for the Azure AI Foundry project
-# This allows hosted agents to pull images from ACR
-resource "azurerm_role_assignment" "acr_pull_foundry_project" {
-  count                = var.foundry_project_principal_id != "" ? 1 : 0
-  scope                = azurerm_container_registry.main.id
-  role_definition_name = "AcrPull"
-  principal_id         = var.foundry_project_principal_id
-}
-
-# AcrPull role for Container Apps managed identity (if needed in future)
-# resource "azurerm_role_assignment" "acr_pull_container_apps" {
-#   scope                = azurerm_container_registry.main.id
-#   role_definition_name = "AcrPull"
-#   principal_id         = azapi_resource.container_app_environment.identity[0].principal_id
-# }
-
 # User-Assigned Managed Identity for Container Apps to pull from ACR
 # Created separately so role assignment can complete before Container App uses it
 resource "azurerm_user_assigned_identity" "container_apps" {

@@ -65,3 +65,77 @@ output "agent_location_scout_image" {
   description = "The container image used for Agent Location Scout"
   value       = local.agent_location_scout_image
 }
+
+# ============================================================================
+# Azure AI Foundry Outputs
+# ============================================================================
+
+output "ai_foundry_account_name" {
+  description = "The name of the Azure AI Foundry account"
+  value       = azapi_resource.ai_foundry_account.name
+}
+
+output "ai_foundry_account_id" {
+  description = "The resource ID of the Azure AI Foundry account"
+  value       = azapi_resource.ai_foundry_account.id
+}
+
+output "ai_foundry_endpoint" {
+  description = "The main endpoint for Azure AI Foundry account"
+  value       = local.ai_foundry_endpoint
+}
+
+output "ai_foundry_project_name" {
+  description = "The name of the Azure AI Foundry project"
+  value       = azapi_resource.ai_foundry_project.name
+}
+
+output "ai_foundry_project_endpoint" {
+  description = "The API endpoint for the Azure AI Foundry project"
+  value       = local.ai_foundry_project_endpoint
+}
+
+output "azure_openai_endpoint" {
+  description = "The Azure OpenAI endpoint for chat completions"
+  value       = local.azure_openai_endpoint
+}
+
+output "ai_foundry_project_principal_id" {
+  description = "The principal ID of the Foundry project managed identity"
+  value       = local.ai_foundry_project_principal_id
+}
+
+# ============================================================================
+# Model Deployment Outputs
+# ============================================================================
+
+output "model_gpt5_name" {
+  description = "The deployment name for the gpt-5 model"
+  value       = azapi_resource.model_gpt5.name
+}
+
+output "model_gpt5_mini_name" {
+  description = "The deployment name for the gpt-5-mini model"
+  value       = azapi_resource.model_gpt5_mini.name
+}
+
+# ============================================================================
+# Application Insights Outputs
+# ============================================================================
+
+output "application_insights_name" {
+  description = "The name of the Application Insights instance"
+  value       = azurerm_application_insights.main.name
+}
+
+output "application_insights_instrumentation_key" {
+  description = "The instrumentation key for Application Insights"
+  value       = azurerm_application_insights.main.instrumentation_key
+  sensitive   = true
+}
+
+output "application_insights_connection_string" {
+  description = "The connection string for Application Insights (use this for newer SDKs)"
+  value       = azurerm_application_insights.main.connection_string
+  sensitive   = true
+}

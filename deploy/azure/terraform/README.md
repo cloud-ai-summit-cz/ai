@@ -1,20 +1,33 @@
-# MCP Scratchpad - Azure Terraform Deployment
+# Cofilot AI Platform - Azure Terraform Deployment
 
-This directory contains Terraform configuration for deploying the MCP Scratchpad server to Azure Container Apps.
+This directory contains Terraform configuration for deploying the Cofilot AI Platform infrastructure to Azure.
 
 ## Prerequisites
 
 - [Terraform](https://www.terraform.io/downloads.html) >= 1.5.0
 - [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli) (for authentication)
 - An Azure subscription
-- The MCP Scratchpad container image pushed to GitHub Container Registry
 
 ## Resources Created
 
+### Core Infrastructure
 - **Resource Group**: Container for all resources
-- **Log Analytics Workspace**: For monitoring and logging
-- **Container Apps Environment**: Managed environment for container apps
-- **Container App**: The MCP Scratchpad server
+- **Log Analytics Workspace**: Centralized logging for all services
+- **Application Insights**: Distributed tracing and telemetry
+
+### Azure AI Foundry
+- **AI Services Account**: Next-gen AI Foundry hub with hosted agents support
+- **AI Foundry Project**: Project for organizing AI resources
+- **Model Deployments**: gpt-5 and gpt-5-mini (GlobalStandard)
+
+### Container Infrastructure
+- **Azure Container Registry**: Private registry for container images
+- **Container Apps Environment**: Managed environment for containers
+- **Container App (MCP Scratchpad)**: Shared scratchpad MCP server
+
+### RBAC & Security
+- **AcrPull roles**: For Foundry project and Container Apps identities
+- **Cognitive Services roles**: For accessing Azure OpenAI
 
 ## Quick Start
 
@@ -36,12 +49,12 @@ This directory contains Terraform configuration for deploying the MCP Scratchpad
 
 4. **Review the plan**:
    ```bash
-   terraform plan
+   terraform plan -var-file=demo.tfvars
    ```
 
 5. **Apply the configuration**:
    ```bash
-   terraform apply
+   terraform apply -var-file=demo.tfvars
    ```
 
 ## Configuration
@@ -57,58 +70,75 @@ This directory contains Terraform configuration for deploying the MCP Scratchpad
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `resource_group_name` | `rg-mcp-scratchpad` | Name of the resource group |
-| `location` | `westeurope` | Azure region |
-| `environment` | `dev` | Environment name (dev/staging/prod) |
-| `container_image` | `ghcr.io/tkubica12/mcp-scratchpad:latest` | Container image to deploy |
-| `container_cpu` | `0.25` | CPU cores for container |
-| `container_memory` | `0.5Gi` | Memory for container |
-| `min_replicas` | `0` | Minimum replicas (0 = scale to zero) |
-| `max_replicas` | `3` | Maximum replicas for auto-scaling |
+| `project_name` | `summit-ai` | Project name for resource naming |
+| `resource_group_name` | `rg-summit-ai` | Name of the resource group |
+| `location` | `northcentralus` | Azure region (North Central US for hosted agents preview) |
+| `gpt5_capacity` | `50` | Tokens per minute (thousands) for gpt-5 |
+| `gpt5_mini_capacity` | `100` | Tokens per minute (thousands) for gpt-5-mini |
 
-## Outputs
+## Key Outputs
 
-After deployment, Terraform will output:
+After deployment, retrieve important values:
 
-- `container_app_url`: The URL to access the MCP Scratchpad server
-- `container_app_fqdn`: The fully qualified domain name
-- `resource_group_name`: The resource group name
-- `log_analytics_workspace_id`: For monitoring queries
+```bash
+# AI Foundry project endpoint (for agents)
+terraform output -raw ai_foundry_project_endpoint
 
-## Connecting to the MCP Server
+# Azure OpenAI endpoint (for direct model calls)
+terraform output -raw azure_openai_endpoint
 
-Once deployed, connect to the MCP Scratchpad server using the URL from outputs:
+# Application Insights connection string (for tracing)
+terraform output -raw application_insights_connection_string
 
-```python
-from mcp import ClientSession
+# ACR login server (for container images)
+terraform output -raw acr_login_server
 
-async with ClientSession(
-    url="https://<container_app_fqdn>/mcp",
-    headers={"Authorization": "Bearer <your-mcp-auth-token>"}
-) as session:
-    # Use MCP tools
-    result = await session.call_tool("list_sections", {"session_id": "my-session"})
+# MCP Scratchpad URL
+terraform output -raw container_app_url
 ```
+
+## Building and Deploying Container Images
+
+After infrastructure is deployed, build and push images:
+
+```bash
+cd ../
+python build.py --container mcp-scratchpad
+python build.py --container agent-location-scout
+```
+
+## Observability
+
+All agents should export traces to Application Insights. Set this environment variable:
+
+```bash
+APPLICATIONINSIGHTS_CONNECTION_STRING=$(terraform output -raw application_insights_connection_string)
+```
+
+View traces and logs:
+- **Azure Portal** → Application Insights → Transaction search
+- **Azure Portal** → Log Analytics → Logs (Kusto queries)
 
 ## Cleanup
 
 To destroy all resources:
 
 ```bash
-terraform destroy
+terraform destroy -var-file=demo.tfvars
 ```
 
 ## Troubleshooting
 
 ### Container App not starting
-- Check the container logs in Azure Portal or via CLI
-- Verify the container image exists and is accessible
-- Check the `MCP_AUTH_TOKEN` secret is correctly set
+- Check the container logs in Azure Portal
+- Verify ACR image exists: `az acr repository list --name <acr-name>`
+- Check managed identity has AcrPull role
 
-### Health check failures
-- The server exposes `/health` endpoint on port 8080
-- Ensure the container has enough resources (CPU/memory)
+### Model deployment failures
+- Verify model availability in North Central US
+- Check quota limits in Azure Portal → Cognitive Services → Quotas
 
-### Authentication errors
-- Verify the `MCP_AUTH_TOKEN` matches what clients are using
-- Check the authorization header format: `Bearer <token>`
+### Tracing not appearing
+- Verify `APPLICATIONINSIGHTS_CONNECTION_STRING` is set
+- Check agent has `azure-monitor-opentelemetry` dependency
+- Wait 2-5 minutes for traces to appear in portal

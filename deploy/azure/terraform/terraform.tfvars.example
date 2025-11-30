@@ -1,24 +1,49 @@
-# Example terraform.tfvars file
-# Copy this to terraform.tfvars and fill in your values
+# Cofilot AI Platform - Terraform Variables Example
+# ==================================================
+# Copy this file to terraform.tfvars and fill in your values.
 
-# Required: Your Azure subscription ID
+# ============================================================================
+# Required Variables
+# ============================================================================
+
+# Your Azure subscription ID
 subscription_id = "your-subscription-id-here"
 
-# Optional: Customize these values
-resource_group_name = "rg-mcp-scratchpad"
-location            = "westeurope"
+# Project name (used for resource naming - lowercase, 3-24 chars)
+project_name = "summit-ai"
 
-# Container image - update with your GitHub organization
-mcp_scratchpad_image = "ghcr.io/your-org/mcp-scratchpad:latest"
-
-# Required: Authentication token for MCP server
-# Generate a secure random token, e.g.: openssl rand -hex 32
+# Authentication token for MCP server
+# Generate a secure random token: openssl rand -hex 32
 mcp_auth_token = "your-secure-token-here"
 
-# Container resources (optional)
+# ============================================================================
+# Optional Variables
+# ============================================================================
+
+# Resource group and location
+resource_group_name = "rg-summit-ai"
+location            = "northcentralus"
+
+# Container images - leave empty to use ACR-based images
+# mcp_scratchpad_image = ""
+# agent_location_scout_image = ""
+
+# Container resources
 container_cpu    = 0.25
 container_memory = "0.5Gi"
 
-# Scaling (optional)
+# Scaling
 min_replicas = 0
 max_replicas = 3
+
+# ============================================================================
+# AI Foundry Model Configuration
+# ============================================================================
+
+# Model deployment to use for agents (gpt-5 or gpt-5-mini)
+azure_ai_model_deployment_name = "gpt-5"
+
+# Model capacity (tokens per minute in thousands)
+# Increase for production workloads
+gpt5_capacity      = 50
+gpt5_mini_capacity = 100

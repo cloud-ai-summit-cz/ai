@@ -10,6 +10,20 @@ variable "subscription_id" {
   type        = string
 }
 
+variable "project_name" {
+  description = <<-EOT
+    The name of the project used for resource naming.
+    
+    This will be used as a prefix/suffix for Azure resources
+    including the AI Foundry account, project, and other services.
+    Must be 3-24 characters, lowercase alphanumeric.
+    
+    Example: "summit-ai"
+  EOT
+  type        = string
+  default     = "summit-ai"
+}
+
 variable "resource_group_name" {
   description = <<-EOT
     The name of the Azure Resource Group to create.
@@ -46,7 +60,7 @@ variable "mcp_scratchpad_image" {
     Example: "myacr.azurecr.io/mcp-scratchpad:latest"
   EOT
   type        = string
-  default     = ""  # Will be computed from ACR if empty
+  default     = "" # Will be computed from ACR if empty
 }
 
 variable "mcp_auth_token" {
@@ -98,7 +112,7 @@ variable "min_replicas" {
     Example: 0
   EOT
   type        = number
-  default     = 0
+  default     = 1
 }
 
 variable "max_replicas" {
@@ -128,20 +142,7 @@ variable "agent_location_scout_image" {
     Example: "myacr.azurecr.io/agent-location-scout:latest"
   EOT
   type        = string
-  default     = ""  # Will be computed from ACR if empty
-}
-
-variable "azure_ai_foundry_endpoint" {
-  description = <<-EOT
-    The Azure AI Foundry project endpoint.
-    
-    Used by the agent to connect to Azure OpenAI models.
-    Format: https://<resource>.services.ai.azure.com/api/projects/<project>
-    
-    Example: "https://my-ai.services.ai.azure.com/api/projects/my-project"
-  EOT
-  type        = string
-  sensitive   = true
+  default     = "" # Will be computed from ACR if empty
 }
 
 variable "azure_ai_model_deployment_name" {
@@ -149,11 +150,42 @@ variable "azure_ai_model_deployment_name" {
     The Azure OpenAI model deployment name.
     
     The name of the deployed model in Azure OpenAI/Foundry.
+    This should match one of the deployments created by Terraform.
     
-    Example: "gpt-4o"
+    Example: "gpt-5"
   EOT
   type        = string
-  default     = "gpt-4o"
+  default     = "gpt-5"
+}
+
+# ============================================================================
+# AI Foundry Model Capacity Variables
+# ============================================================================
+
+variable "gpt5_capacity" {
+  description = <<-EOT
+    Capacity (in thousands of tokens per minute) for the gpt-5 model deployment.
+    
+    GlobalStandard deployments bill based on usage, but capacity sets the rate limit.
+    Typical values: 10-100 for development, 100-1000 for production.
+    
+    Example: 50
+  EOT
+  type        = number
+  default     = 500
+}
+
+variable "gpt5_mini_capacity" {
+  description = <<-EOT
+    Capacity (in thousands of tokens per minute) for the gpt-5-mini model deployment.
+    
+    GlobalStandard deployments bill based on usage, but capacity sets the rate limit.
+    Typical values: 10-100 for development, 100-1000 for production.
+    
+    Example: 100
+  EOT
+  type        = number
+  default     = 500
 }
 
 variable "agent_container_cpu" {
@@ -210,19 +242,3 @@ variable "agent_max_replicas" {
 # ============================================================================
 # Azure Container Registry Variables
 # ============================================================================
-
-variable "foundry_project_principal_id" {
-  description = <<-EOT
-    The principal ID of the Azure AI Foundry project managed identity.
-    
-    Used for granting AcrPull permission so hosted agents can pull images.
-    Retrieve via:
-      az rest --method GET --url "https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.MachineLearningServices/workspaces/{project}?api-version=2025-06-01" --query identity.principalId -o tsv
-    
-    Leave empty if not using Azure AI Foundry hosted agents.
-    
-    Example: "88c618b4-c06f-460c-bebf-0b336a41ee54"
-  EOT
-  type        = string
-  default     = ""
-}
