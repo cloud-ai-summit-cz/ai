@@ -654,3 +654,4 @@ Content-Type: application/json
 - ADR-002: MCP over direct function calling (pending)
 - ADR-003: SSE over WebSocket for real-time updates (pending)
 - ADR-004: Separate frontends per scenario (pending)
+- **ADR-005: Real-time Agent Observability via OpenTelemetry and Application Insights** - See `specs/platform/decisions/ADR-005-realtime-agent-observability.md`

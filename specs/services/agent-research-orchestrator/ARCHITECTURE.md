@@ -351,6 +351,82 @@ flowchart LR
 1. **MAF Middleware Events**: Intercepts tool calls to specialist agents (market-analyst, competitor-analyst, etc.) using `FunctionInvocationContext` middleware
 2. **Run Steps Events**: Polls `run_steps.list()` API on Foundry agents to capture their internal tool calls (web search, calculator, etc.)
 3. **MCP Scratchpad Events**: Subscribes to `mcp-scratchpad` notifications to stream scratchpad changes in real-time
+4. **Application Insights Trace Events**: Polls App Insights for traces matching the session's `operation_Id` to capture subagent tool calls (see ADR-005)
+
+### Application Insights Trace Polling (ADR-005)
+
+> **Background**: Azure AI Foundry Hosted Agents execute tools server-side. MAF's `stream_callback` only receives text tokens, not `FunctionCallContent`. Therefore, we poll Application Insights for traces to get visibility into subagent tool calls.
+
+See `specs/platform/decisions/ADR-005-realtime-agent-observability.md` for full architecture decision.
+
+```mermaid
+flowchart LR
+    subgraph Orchestrator["Research Orchestrator"]
+        POLLER[App Insights<br/>Trace Poller]
+        BUS[Event Bus]
+    end
+    
+    subgraph Azure["Azure Monitor"]
+        AI[Application Insights]
+    end
+    
+    subgraph Agents["Agents (emit traces)"]
+        MA[market-analyst]
+        LS[location-scout]
+        MCP[mcp-scratchpad]
+    end
+    
+    Agents -->|OTEL| AI
+    POLLER -->|KQL Query<br/>operation_Id filter| AI
+    AI -->|Trace Events| POLLER
+    POLLER -->|trace_span_completed| BUS
+    BUS -->|SSE| UI[React UI]
+```
+
+#### Trace Polling Implementation
+
+```python
+# orchestrator.py - integrate trace polling
+
+class AppInsightsTracePoller:
+    """Polls Application Insights for traces matching session operation_Id."""
+    
+    def __init__(self, workspace_id: str):
+        self.client = LogsQueryClient(DefaultAzureCredential())
+        self.workspace_id = workspace_id
+    
+    async def poll_session_traces(
+        self,
+        operation_id: str,
+        since: datetime
+    ) -> list[dict]:
+        query = f"""
+        union traces, dependencies
+        | where operation_Id == '{operation_id}'
+        | where timestamp > datetime({since.isoformat()}Z)
+        | project timestamp, name, duration, customDimensions, success
+        | order by timestamp asc
+        """
+        result = await self.client.query_workspace(
+            self.workspace_id, query, timespan=timedelta(minutes=30)
+        )
+        return [dict(zip(result.tables[0].columns, row)) 
+                for row in result.tables[0].rows]
+```
+
+#### SSE Events from Traces
+
+| Event Type | Source | Payload |
+|------------|--------|---------|
+| `trace_span_started` | Trace Poller | `{span_name, agent_name, operation_id, timestamp}` |
+| `trace_span_completed` | Trace Poller | `{span_name, agent_name, duration_ms, success}` |
+| `trace_tool_call` | Trace Poller | `{tool_name, mcp_server, agent_name, arguments_preview}` |
+
+#### Latency Expectations
+
+- App Insights ingestion: 2-5 seconds
+- Polling interval: 2 seconds
+- Total trace event latency: **3-8 seconds**
 
 ### MCP Scratchpad Integration
 
@@ -449,6 +525,7 @@ sequenceDiagram
 | API | FastAPI | ^0.115.0 |
 | Async | asyncio, httpx | - |
 | Azure SDK | azure-ai-projects | ^2.0.0 |
+| Telemetry | azure-monitor-query, azure-monitor-opentelemetry | ^1.3.0, ^1.6.0 |
 | Validation | Pydantic | ^2.5.0 |
 | Streaming | sse-starlette | ^2.0.0 |
 
@@ -457,3 +534,4 @@ sequenceDiagram
 - ADR-001: Use MAF for orchestration (pending)
 - ADR-002: REST+SSE over WebSocket for web UI (pending)
 - ADR-003: A2A for cross-platform agent communication (pending)
+- **ADR-005: Real-time Agent Observability via OpenTelemetry and Application Insights** - See `specs/platform/decisions/ADR-005-realtime-agent-observability.md`
