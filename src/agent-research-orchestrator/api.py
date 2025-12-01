@@ -3,6 +3,7 @@
 Exposes REST endpoints and SSE streaming for the research workflow.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
@@ -23,6 +24,9 @@ from models import (
 from orchestrator import AgentOrchestrator
 
 logger = logging.getLogger(__name__)
+
+# SSE heartbeat interval in seconds (keeps connection alive during long operations)
+SSE_HEARTBEAT_INTERVAL = 15
 
 # Global orchestrator instance (initialized in lifespan)
 _orchestrator: AgentOrchestrator | None = None
@@ -181,17 +185,72 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
         )
 
     async def event_generator() -> AsyncGenerator[dict[str, Any], None]:
-        """Generate SSE events from workflow execution."""
+        """Generate SSE events from workflow execution with heartbeat keep-alive.
+        
+        Sends heartbeat events every SSE_HEARTBEAT_INTERVAL seconds to prevent
+        connection timeouts during long-running agent operations.
+        
+        Uses async tasks instead of asyncio.wait_for to avoid cancelling the
+        workflow generator mid-execution, which can leave it in an inconsistent state.
+        """
+        import json
+        from datetime import datetime, timezone
+        
+        workflow_gen = orchestrator.run_research_workflow(session_id)
+        workflow_exhausted = False
+        pending_event_task: asyncio.Task | None = None
+        
         try:
-            async for event in orchestrator.run_research_workflow(session_id):
+            while not workflow_exhausted:
                 # Check if client disconnected
                 if await request.is_disconnected():
                     logger.warning(f"Client disconnected from session {session_id}")
                     break
-
+                
+                # Create task for next event if not already pending
+                if pending_event_task is None:
+                    pending_event_task = asyncio.create_task(workflow_gen.__anext__())
+                
+                # Wait for either the event or heartbeat timeout
+                done, _ = await asyncio.wait(
+                    {pending_event_task},
+                    timeout=SSE_HEARTBEAT_INTERVAL,
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                
+                if pending_event_task in done:
+                    # Event is ready
+                    try:
+                        event = pending_event_task.result()
+                        yield {
+                            "event": event.event_type.value,
+                            "data": event.model_dump_json(),
+                        }
+                        pending_event_task = None  # Clear for next iteration
+                    except StopAsyncIteration:
+                        workflow_exhausted = True
+                        pending_event_task = None
+                else:
+                    # Timeout - send heartbeat but DON'T cancel the pending task
+                    heartbeat_data = json.dumps({
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "session_id": session_id,
+                    })
+                    yield {
+                        "event": "heartbeat",
+                        "data": heartbeat_data,
+                    }
+                    # Keep pending_event_task - it's still running
+                    
+        except RuntimeError as e:
+            # Handle cross-task cancel scope errors from MCP cleanup
+            if "cancel scope" in str(e):
+                logger.debug(f"Ignoring cross-task cancel scope during SSE generator: {e}")
+            else:
+                logger.exception(f"RuntimeError in workflow for session {session_id}")
                 yield {
-                    "event": event.event_type.value,
-                    "data": event.model_dump_json(),
+                    "event": "error",
+                    "data": f'{{"error": "{str(e)}"}}',
                 }
         except Exception as e:
             logger.exception(f"Error in workflow for session {session_id}")
@@ -199,6 +258,25 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
                 "event": "error",
                 "data": f'{{"error": "{str(e)}"}}',
             }
+        finally:
+            # Cancel any pending task
+            if pending_event_task and not pending_event_task.done():
+                pending_event_task.cancel()
+                try:
+                    await pending_event_task
+                except (asyncio.CancelledError, StopAsyncIteration):
+                    pass
+            
+            # Explicitly close the workflow generator
+            try:
+                await workflow_gen.aclose()
+            except RuntimeError as e:
+                if "cancel scope" in str(e):
+                    logger.debug(f"Ignoring cross-task cancel scope during generator close: {e}")
+                else:
+                    logger.debug(f"Error closing workflow generator: {e}")
+            except Exception as e:
+                logger.debug(f"Error closing workflow generator: {e}")
 
     return EventSourceResponse(event_generator())
 

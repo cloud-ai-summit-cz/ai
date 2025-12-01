@@ -1,6 +1,11 @@
 """Agent provisioner for Market Analyst.
 
 Creates and destroys the market-analyst agent in Azure AI Foundry Agent Service.
+
+NOTE: MCP Scratchpad is NOT configured at agent creation time.
+The orchestrator provides session-scoped MCP tools dynamically at runtime
+with proper X-Session-ID headers for session isolation.
+See: agent-research-orchestrator/orchestrator.py::_get_session_mcp_tool()
 """
 
 import os
@@ -49,6 +54,9 @@ def create_agent() -> None:
     """Create the market-analyst agent in AI Foundry.
 
     This function is idempotent - it will delete existing agent before creating new one.
+    
+    NOTE: MCP Scratchpad tools are provided by the orchestrator at runtime,
+    not configured here. This ensures session isolation via X-Session-ID headers.
     """
     console.print(f"[bold blue]Creating {AGENT_DISPLAY_NAME} Agent[/bold blue]\n")
 
@@ -75,6 +83,8 @@ def create_agent() -> None:
             try:
                 instructions = get_instructions()
 
+                # NOTE: No tools configured here - MCP Scratchpad is injected
+                # by the orchestrator at runtime with session-scoped headers
                 agent_def = PromptAgentDefinition(
                     model=settings.model_deployment_name,
                     instructions=instructions,

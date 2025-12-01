@@ -420,17 +420,28 @@ class AgentOrchestrator:
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
-        # Clean up session-scoped MCP tools
-        for session_id, mcp_tool in list(self._session_mcp_tools.items()):
-            try:
-                await mcp_tool.__aexit__(exc_type, exc_val, exc_tb)
-            except Exception as e:
-                logger.debug(f"Error closing session MCP tool {session_id}: {e}")
+        # NOTE: We intentionally DO NOT clean up session-scoped MCP tools here.
+        # Session-scoped MCP tools are entered (via __aenter__) from request handler tasks,
+        # but this __aexit__ runs in the lifespan task. anyio cancel scopes require
+        # exit from the same task that entered them, so attempting cleanup causes:
+        # RuntimeError: Attempted to exit cancel scope in a different task than it was entered in
+        #
+        # The MCP tools will be garbage collected when the process shuts down.
+        # For graceful cleanup, session MCP tools should be cleaned up at the end of
+        # each session/request, not during application shutdown.
+        if self._session_mcp_tools:
+            logger.info(f"Skipping cleanup of {len(self._session_mcp_tools)} session-scoped MCP tools (cross-task context issue)")
         self._session_mcp_tools.clear()
         
-        # Clean up base MCP Scratchpad
+        # Clean up base MCP Scratchpad (this one was entered in the lifespan task)
         if self._mcp_scratchpad:
-            await self._mcp_scratchpad.__aexit__(exc_type, exc_val, exc_tb)
+            try:
+                await self._mcp_scratchpad.__aexit__(exc_type, exc_val, exc_tb)
+            except RuntimeError as e:
+                if "cancel scope" in str(e):
+                    logger.debug(f"Skipping base MCP cleanup due to cross-task context: {e}")
+                else:
+                    raise
             self._mcp_scratchpad = None
         
         if self._credential:
@@ -1429,12 +1440,20 @@ class AgentOrchestrator:
         
         finally:
             # Clean up agent clients to prevent unclosed aiohttp sessions
+            # NOTE: Some clients may have MCP tools with anyio cancel scopes that were
+            # entered in a different task context. We catch and ignore RuntimeError for
+            # cancel scope issues since the underlying resources will be cleaned up anyway.
             for client in clients_to_cleanup:
                 try:
                     if hasattr(client, 'close'):
                         await client.close()
                     elif hasattr(client, '_session') and client._session:
                         await client._session.close()
+                except RuntimeError as e:
+                    if "cancel scope" in str(e):
+                        logger.debug(f"Ignoring cross-task cancel scope during cleanup: {e}")
+                    else:
+                        logger.debug(f"Error closing client: {e}")
                 except Exception as cleanup_error:
                     logger.debug(f"Error closing client: {cleanup_error}")
             

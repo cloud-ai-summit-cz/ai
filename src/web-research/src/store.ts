@@ -66,9 +66,12 @@ interface ResearchStore {
 
   // === SSE & Workflow ===
   sseCleanup: (() => void) | null;
+  pollingInterval: ReturnType<typeof setInterval> | null;
   startResearchSession: (query: string) => Promise<void>;
   handleSSEEvent: (event: SSEEvent) => void;
   pollScratchpadState: () => Promise<void>;
+  startPolling: () => void;
+  stopPolling: () => void;
   resetState: () => void;
 }
 
@@ -183,20 +186,63 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
   isConnected: false,
   setConnected: (connected) => set({ isConnected: connected }),
   activePanel: 'chat',
-  setActivePanel: (panel) => set({ activePanel: panel }),
+  setActivePanel: (panel) => {
+    set({ activePanel: panel });
+    // Re-fetch scratchpad data when switching tabs (except chat)
+    if (panel !== 'chat') {
+      get().pollScratchpadState().catch((err) => {
+        console.debug('Failed to refresh scratchpad on tab switch:', err);
+      });
+    }
+  },
   showQuestionModal: false,
   setShowQuestionModal: (show) => set({ showQuestionModal: show }),
 
   // === SSE & Workflow ===
   sseCleanup: null,
+  pollingInterval: null,
+
+  startPolling: () => {
+    const store = get();
+    // Clear any existing polling interval
+    if (store.pollingInterval) {
+      clearInterval(store.pollingInterval);
+    }
+    
+    // Poll scratchpad every 5 seconds while session is running
+    const interval = setInterval(() => {
+      const currentStore = get();
+      if (currentStore.session?.status === 'running') {
+        currentStore.pollScratchpadState().catch((err) => {
+          console.debug('Background poll failed:', err);
+        });
+      } else {
+        // Stop polling if session is no longer running
+        currentStore.stopPolling();
+      }
+    }, 5000);
+    
+    set({ pollingInterval: interval });
+    console.log('Started background scratchpad polling (5s interval)');
+  },
+
+  stopPolling: () => {
+    const store = get();
+    if (store.pollingInterval) {
+      clearInterval(store.pollingInterval);
+      set({ pollingInterval: null });
+      console.log('Stopped background scratchpad polling');
+    }
+  },
 
   startResearchSession: async (query: string) => {
     const store = get();
 
-    // Clean up any existing SSE connection
+    // Clean up any existing SSE connection and polling
     if (store.sseCleanup) {
       store.sseCleanup();
     }
+    store.stopPolling();
 
     // Reset state for new session
     set({
@@ -240,6 +286,10 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
       );
 
       set({ sseCleanup: cleanup, isConnected: true });
+      
+      // Start background polling for scratchpad updates
+      // This ensures we get updates even if SSE events are missed
+      store.startPolling();
     } catch (error) {
       console.error('Failed to start research session:', error);
       store.addMessage({
@@ -273,6 +323,9 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
 
       case 'workflow_completed':
         store.updateSessionStatus('completed');
+        store.stopPolling();
+        // Final poll to get any remaining updates
+        store.pollScratchpadState().catch(() => {});
         store.addMessage({
           id: `msg-${Date.now()}`,
           type: 'system',
@@ -284,6 +337,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
 
       case 'workflow_failed':
         store.updateSessionStatus('failed');
+        store.stopPolling();
         store.addMessage({
           id: `msg-${Date.now()}`,
           type: 'error',
@@ -545,6 +599,12 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
         });
         break;
 
+      // === Keep-Alive ===
+      case 'heartbeat':
+        // Heartbeat event - just confirms connection is alive, no UI update needed
+        console.debug('SSE heartbeat received');
+        break;
+
       default:
         console.warn(`Unhandled SSE event type: ${eventType}`);
     }
@@ -633,6 +693,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
     if (store.sseCleanup) {
       store.sseCleanup();
     }
+    store.stopPolling();
     set({
       session: null,
       scratchpad: initialScratchpad,
@@ -641,6 +702,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
       activePanel: 'chat',
       showQuestionModal: false,
       sseCleanup: null,
+      pollingInterval: null,
     });
   },
 }));

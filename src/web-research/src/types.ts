@@ -132,7 +132,9 @@ export type SSEEventType =
   // Synthesis
   | 'synthesis_started'
   | 'synthesis_progress'
-  | 'synthesis_completed';
+  | 'synthesis_completed'
+  // Keep-alive
+  | 'heartbeat';
 
 /**
  * SSE Event structure as received from the backend.

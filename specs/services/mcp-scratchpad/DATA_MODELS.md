@@ -42,6 +42,7 @@ class DraftSection(BaseModel):
     id: str
     title: str
     content: str
+    author: str  # Agent who last updated this section
     last_updated: datetime
     version: int = 1
 

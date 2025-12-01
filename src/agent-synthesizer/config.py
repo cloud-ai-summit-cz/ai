@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     # Model deployment
     model_deployment_name: str = "gpt-5"
 
+    # NOTE: MCP Scratchpad is NOT configured here.
+    # The orchestrator provides session-scoped MCP tools dynamically at runtime
+    # with proper X-Session-ID headers for session isolation.
+    # See: agent-research-orchestrator/orchestrator.py::_get_session_mcp_tool()
+
     @property
     def prompts_dir(self) -> Path:
         """Get the prompts directory path."""

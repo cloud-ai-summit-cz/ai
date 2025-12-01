@@ -113,6 +113,128 @@ sequenceDiagram
 | finance-analyst | A2A Protocol | HTTP Client | Managed Identity |
 | synthesizer | Foundry SDK | `AIProjectClient.agents` | DefaultAzureCredential |
 
+## MCP Session Isolation
+
+> **Important Architecture Decision**: MCP Scratchpad tools are NOT configured at agent provisioning time. The orchestrator injects session-scoped MCP tools at runtime.
+
+### Problem Statement
+
+The multi-agent research workflow requires:
+1. **Session isolation**: Each research session must have isolated scratchpad data
+2. **Authentication**: MCP server requires Bearer token authentication
+3. **Audit trail**: Track which agent made each MCP call
+
+### Why Runtime Injection?
+
+**Azure AI Foundry `MCPTool` Limitation**: The Foundry SDK's `MCPTool` class does not allow sensitive headers (like `Authorization`) in agent definitions:
+
+```python
+# ❌ This FAILS at provisioning time
+MCPTool(
+    server_url="https://mcp-scratchpad.../mcp",
+    headers={"Authorization": "Bearer ..."},  # NOT ALLOWED
+)
+# Error: "Headers that can include sensitive information are not allowed 
+#         in the headers property for MCP tools"
+```
+
+The only alternatives are:
+1. Use `project_connection_id` - requires creating Foundry connection resources
+2. Pass headers via `tool_resources` at runtime - but this doesn't work for agent-as-tool pattern
+3. **Orchestrator injection** - orchestrator creates MCP tools with headers and passes to agents
+
+### Solution: Orchestrator-Managed Session Scoping
+
+```mermaid
+sequenceDiagram
+    participant UI as Web UI
+    participant Orch as Orchestrator
+    participant Foundry as AI Foundry
+    participant MCP as mcp-scratchpad
+    
+    UI->>Orch: POST /sessions (start research)
+    Orch->>Orch: session_id = uuid()
+    
+    Note over Orch: Create session-scoped MCP tools
+    Orch->>Orch: session_mcp_market = MCPStreamableHTTPTool(<br/>url=MCP_SCRATCHPAD_URL,<br/>headers={<br/>  "Authorization": "Bearer {API_KEY}",<br/>  "X-Session-ID": session_id,<br/>  "X-Caller-Agent": "market-analyst"<br/>})
+    
+    Orch->>Foundry: Get market-analyst agent definition
+    Foundry-->>Orch: Agent (no tools configured)
+    
+    Orch->>Orch: ChatAgent(<br/>client=foundry_client,<br/>name="market-analyst",<br/>tools=[session_mcp_market])
+    
+    Note over Orch: Agent now has session-scoped MCP
+    Orch->>MCP: (via agent) write_section(...)
+    Note over MCP: Headers injected:<br/>X-Session-ID: abc123<br/>X-Caller-Agent: market-analyst
+```
+
+### Implementation Details
+
+```python
+# orchestrator.py - _get_session_mcp_tool()
+
+async def _get_session_mcp_tool(
+    self,
+    session_id: str,
+    caller_agent: str = "orchestrator",
+) -> MCPStreamableHTTPTool:
+    """Create session-scoped MCP tool with isolation headers.
+    
+    SECURITY: AI agents cannot modify these headers.
+    Session ID comes from orchestrator (trusted code), not from agent.
+    """
+    return MCPStreamableHTTPTool(
+        name=f"scratchpad-{session_id[:8]}",
+        url=self.settings.mcp_scratchpad_url,
+        headers={
+            "Authorization": f"Bearer {self.settings.mcp_scratchpad_api_key}",
+            "X-Session-ID": session_id,      # Session isolation
+            "X-Caller-Agent": caller_agent,   # Audit trail
+        },
+    )
+
+# When invoking specialist agents:
+session_mcp_market = await self._get_session_mcp_tool(session_id, "market-analyst")
+session_mcp_competitor = await self._get_session_mcp_tool(session_id, "competitor-analyst")
+session_mcp_synthesizer = await self._get_session_mcp_tool(session_id, "synthesizer")
+
+market_agent = ChatAgent(
+    chat_client=foundry_client,
+    name="market-analyst",
+    tools=[session_mcp_market],  # Injected at runtime!
+)
+```
+
+### Security Benefits
+
+| Concern | How Addressed |
+|---------|---------------|
+| Cross-session data access | `X-Session-ID` header ensures agents only see their session's data |
+| Credential exposure | Bearer token never stored in Foundry agent definitions |
+| Agent impersonation | `X-Caller-Agent` set by orchestrator, not controllable by AI |
+| Audit logging | All MCP calls tagged with session + caller for compliance |
+
+### Implications for Agent Provisioning
+
+Foundry Native agents (market-analyst, competitor-analyst, synthesizer) are provisioned **without MCP tools**:
+
+```python
+# provision.py - What gets stored in AI Foundry
+agent = client.agents.create(
+    name="market-analyst",
+    definition=PromptAgentDefinition(
+        model="gpt-5",
+        instructions=SYSTEM_PROMPT,
+        # NO tools here - orchestrator provides them at runtime
+    ),
+)
+```
+
+See individual agent specs for more details:
+- `specs/services/agent-market-analyst/ARCHITECTURE.md`
+- `specs/services/agent-competitor-analyst/ARCHITECTURE.md`
+- `specs/services/agent-synthesizer/ARCHITECTURE.md`
+
 ## Human-in-the-Loop Architecture
 
 The orchestrator supports pausing for human input using MAF's checkpointing mechanism combined with the scratchpad question queue.

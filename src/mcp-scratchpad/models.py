@@ -25,6 +25,7 @@ class DraftSection(BaseModel):
     id: str
     title: str
     content: str
+    author: str = "unknown"  # The agent who last updated this section
     last_updated: datetime = Field(default_factory=datetime.now)
     version: int = 1
 

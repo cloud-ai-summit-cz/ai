@@ -4,9 +4,9 @@ SECURITY: Session isolation is enforced via X-Session-ID HTTP header.
 The session_id is NOT a tool parameter - it's injected by the orchestrator.
 This prevents AI agents from accessing other sessions.
 
-NOTE: Since FastMCP doesn't expose the underlying app for middleware,
-we extract session headers in the custom routes and rely on the orchestrator
-to pass the correct session_id for tool calls. In debug mode, tools use 'default'.
+Session isolation is implemented using FastMCP middleware to extract
+X-Session-ID and X-Caller-Agent headers and store them in context state.
+Tools access session context via fastmcp Context.get_state().
 """
 
 import logging
@@ -14,8 +14,10 @@ import uuid
 from datetime import datetime
 from typing import Any, List, Optional
 
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+from fastmcp.server.dependencies import get_http_headers
+from fastmcp.server.middleware import Middleware, MiddlewareContext
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -29,10 +31,61 @@ from storage import get_storage
 
 logger = logging.getLogger(__name__)
 
-# Thread-local storage for request context (session_id from header)
-import contextvars
-_request_session_id: contextvars.ContextVar[str] = contextvars.ContextVar('session_id', default='default')
-_request_caller_agent: contextvars.ContextVar[str] = contextvars.ContextVar('caller_agent', default='unknown')
+
+# =============================================================================
+# Session Context Middleware
+# =============================================================================
+
+class SessionContextMiddleware(Middleware):
+    """Middleware to extract session context from HTTP headers.
+    
+    Extracts X-Session-ID and X-Caller-Agent headers and stores them
+    in FastMCP context state so tools can access them via Context.get_state().
+    
+    This runs BEFORE tool execution and makes session info available throughout.
+    """
+    
+    async def on_call_tool(self, context: MiddlewareContext, call_next):
+        """Extract session headers before any tool is called."""
+        # Try to get headers from HTTP request context
+        try:
+            headers = get_http_headers(include_all=True)
+            
+            # HTTP headers are case-insensitive, but check both cases to be safe
+            # FastMCP/Starlette typically lowercases headers
+            session_id = (
+                headers.get("x-session-id") or 
+                headers.get("X-Session-ID") or 
+                "default"
+            )
+            caller_agent = (
+                headers.get("x-caller-agent") or 
+                headers.get("X-Caller-Agent") or 
+                "unknown"
+            )
+            
+            logger.info(
+                f"SessionContextMiddleware.on_call_tool | "
+                f"tool={context.message.name} | "
+                f"session_id={session_id} | "
+                f"caller_agent={caller_agent} | "
+                f"all_headers={dict(headers)}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not extract headers: {e}")
+            session_id = "default"
+            caller_agent = "unknown"
+        
+        # Store in context state for tools to access
+        if context.fastmcp_context:
+            context.fastmcp_context.set_state("session_id", session_id)
+            context.fastmcp_context.set_state("caller_agent", caller_agent)
+            logger.debug(f"Set context state: session_id={session_id}, caller_agent={caller_agent}")
+        else:
+            logger.warning("No fastmcp_context available to store session state")
+        
+        # Continue to the tool
+        return await call_next(context)
 
 
 def _is_valid_session_id(session_id: str) -> bool:
@@ -59,34 +112,26 @@ def _is_valid_session_id(session_id: str) -> bool:
     return False
 
 
-def get_session_id() -> str:
-    """Get the current session ID from request context.
+def get_session_id_from_context(ctx: Context) -> str:
+    """Get session ID from FastMCP context state (set by middleware).
     
     SECURITY: This is the ONLY way tools get the session ID.
-    It comes from the X-Session-ID header, not from tool parameters.
+    It comes from context state which was set by middleware from HTTP headers.
+    This prevents AI agents from accessing other sessions.
     """
-    return _request_session_id.get()
-
-
-def get_caller_agent() -> str:
-    """Get the calling agent name from request context."""
-    return _request_caller_agent.get()
-
-
-def set_session_context(session_id: str, caller_agent: str = "unknown") -> tuple:
-    """Set session context from request headers.
+    session_id = ctx.get_state("session_id") or "default"
     
-    Returns tokens that must be used to reset the context.
-    """
-    token_session = _request_session_id.set(session_id)
-    token_agent = _request_caller_agent.set(caller_agent)
-    return token_session, token_agent
+    # Validate session ID format
+    if not _is_valid_session_id(session_id):
+        logger.warning(f"Invalid session ID format: {session_id}, using 'default'")
+        return "default"
+    
+    return session_id
 
 
-def reset_session_context(token_session, token_agent) -> None:
-    """Reset session context after request processing."""
-    _request_session_id.reset(token_session)
-    _request_caller_agent.reset(token_agent)
+def get_caller_agent_from_context(ctx: Context) -> str:
+    """Get caller agent from FastMCP context state (set by middleware)."""
+    return ctx.get_state("caller_agent") or "unknown"
 
 
 # Configure authentication with static token verification
@@ -116,6 +161,9 @@ mcp = FastMCP(
     auth=auth,
 )
 
+# Add middleware to extract session context from HTTP headers
+mcp.add_middleware(SessionContextMiddleware())
+
 
 # =============================================================================
 # NOTES Tools (The Corkboard)
@@ -124,6 +172,7 @@ mcp = FastMCP(
 @mcp.tool
 def add_note(
     content: str,
+    ctx: Context,
     tags: List[str] = [],
 ) -> dict[str, Any]:
     """Add a raw note, finding, or fact to the shared workspace.
@@ -137,9 +186,9 @@ def add_note(
     
     Note: Session is determined automatically from request context (X-Session-ID header).
     """
-    # Get session from request context (injected by middleware)
-    session_id = get_session_id()
-    agent_id = get_caller_agent()
+    # Get session from context state (set by middleware)
+    session_id = get_session_id_from_context(ctx)
+    agent_id = get_caller_agent_from_context(ctx)
     
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
@@ -162,6 +211,7 @@ def add_note(
 
 @mcp.tool
 def read_notes(
+    ctx: Context,
     query: Optional[str] = None,
     tag: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -173,8 +223,8 @@ def read_notes(
     
     Note: Session is determined automatically from request context (X-Session-ID header).
     """
-    # Get session from request context
-    session_id = get_session_id()
+    # Get session from context state (set by middleware)
+    session_id = get_session_id_from_context(ctx)
     
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
@@ -185,7 +235,9 @@ def read_notes(
             continue
         if query and query.lower() not in note.content.lower():
             continue
-        results.append(note.dict())
+        results.append(note.model_dump())
+    
+    logger.info(f"read_notes | session={session_id} | count={len(results)}")
         
     return {
         "count": len(results),
@@ -202,6 +254,7 @@ def write_draft_section(
     section_id: str,
     title: str,
     content: str,
+    ctx: Context,
 ) -> dict[str, Any]:
     """Write or overwrite a section of the structured draft.
     
@@ -212,9 +265,9 @@ def write_draft_section(
     
     Note: Session is determined automatically from request context (X-Session-ID header).
     """
-    # Get session from request context
-    session_id = get_session_id()
-    agent_id = get_caller_agent()
+    # Get session from context state (set by middleware)
+    session_id = get_session_id_from_context(ctx)
+    agent_id = get_caller_agent_from_context(ctx)
     
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
@@ -224,6 +277,7 @@ def write_draft_section(
         section = session.state.draft_sections[section_id]
         section.title = title
         section.content = content
+        section.author = agent_id  # Track who last updated this section
         section.last_updated = datetime.now()
         section.version += 1
     else:
@@ -231,7 +285,8 @@ def write_draft_section(
         section = DraftSection(
             id=section_id,
             title=title,
-            content=content
+            content=content,
+            author=agent_id,  # Track who created this section
         )
         session.state.draft_sections[section_id] = section
         
@@ -248,6 +303,7 @@ def write_draft_section(
 
 @mcp.tool
 def read_draft(
+    ctx: Context,
     section_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Read the current draft.
@@ -257,20 +313,22 @@ def read_draft(
     
     Note: Session is determined automatically from request context (X-Session-ID header).
     """
-    # Get session from request context
-    session_id = get_session_id()
+    # Get session from context state (set by middleware)
+    session_id = get_session_id_from_context(ctx)
     
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
+    logger.info(f"read_draft | session={session_id} | section_count={len(session.state.draft_sections)}")
+    
     if section_id:
         if section_id not in session.state.draft_sections:
             return {"error": "Section not found"}
-        return {"section": session.state.draft_sections[section_id].dict()}
+        return {"section": session.state.draft_sections[section_id].model_dump()}
     
     # Return full draft sorted by something? For now just dict.
     return {
-        "sections": {k: v.dict() for k, v in session.state.draft_sections.items()}
+        "sections": {k: v.model_dump() for k, v in session.state.draft_sections.items()}
     }
 
 
@@ -281,6 +339,7 @@ def read_draft(
 @mcp.tool
 def add_tasks(
     tasks: List[dict],
+    ctx: Context,
 ) -> dict[str, Any]:
     """Add one or more tasks to the shared plan.
     
@@ -298,9 +357,9 @@ def add_tasks(
     
     Note: Session is determined automatically from request context (X-Session-ID header).
     """
-    # Get session from request context
-    session_id = get_session_id()
-    agent_id = get_caller_agent()
+    # Get session from context state (set by middleware)
+    session_id = get_session_id_from_context(ctx)
+    agent_id = get_caller_agent_from_context(ctx)
     
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
@@ -337,6 +396,7 @@ def add_tasks(
 def update_task(
     task_id: str,
     status: str,
+    ctx: Context,
     assigned_to: Optional[str] = None
 ) -> dict[str, Any]:
     """Update a task's status or assignment.
@@ -348,9 +408,9 @@ def update_task(
     
     Note: Session is determined automatically from request context (X-Session-ID header).
     """
-    # Get session from request context
-    session_id = get_session_id()
-    agent_id = get_caller_agent()
+    # Get session from context state (set by middleware)
+    session_id = get_session_id_from_context(ctx)
+    agent_id = get_caller_agent_from_context(ctx)
     
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
@@ -374,19 +434,21 @@ def update_task(
     return {"success": True, "task_id": task_id, "status": status}
 
 @mcp.tool
-def read_plan() -> dict[str, Any]:
+def read_plan(ctx: Context) -> dict[str, Any]:
     """Read the current plan/checklist.
     
     Note: Session is determined automatically from request context (X-Session-ID header).
     """
-    # Get session from request context
-    session_id = get_session_id()
+    # Get session from context state (set by middleware)
+    session_id = get_session_id_from_context(ctx)
     
     storage = get_storage()
     session = storage.get_or_create_session(session_id)
     
+    logger.info(f"read_plan | session={session_id} | task_count={len(session.state.plan)}")
+    
     return {
-        "tasks": [t.dict() for t in session.state.plan]
+        "tasks": [t.model_dump() for t in session.state.plan]
     }
 
 

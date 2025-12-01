@@ -1,5 +1,13 @@
 """Entry point for MCP Scratchpad server."""
 
+import logging
+
+# Configure logging to show INFO level and above
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
 from config import settings
 from server import mcp
 

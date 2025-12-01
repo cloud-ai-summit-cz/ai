@@ -19,6 +19,7 @@ interface PanelTabsProps {
   onPanelChange: (panel: PanelType) => void;
   pendingQuestionsCount: number;
   notesCount: number;
+  draftSectionsCount: number;
   completedTasksCount: number;
   totalTasksCount: number;
   onQuestionsClick: () => void;
@@ -36,6 +37,7 @@ export function PanelTabs({
   onPanelChange,
   pendingQuestionsCount,
   notesCount,
+  draftSectionsCount,
   completedTasksCount,
   totalTasksCount,
   onQuestionsClick,
@@ -62,6 +64,7 @@ export function PanelTabs({
       id: 'draft',
       label: 'Draft',
       icon: <FileText className="w-4 h-4" />,
+      badge: draftSectionsCount > 0 ? draftSectionsCount : undefined,
     },
   ];
 

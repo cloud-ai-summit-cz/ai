@@ -57,6 +57,7 @@ export function Workspace({ onNewSession }: WorkspaceProps) {
         onPanelChange={setActivePanel}
         pendingQuestionsCount={pendingQuestionsCount}
         notesCount={scratchpad.notes.length}
+        draftSectionsCount={scratchpad.draft.length}
         completedTasksCount={completedTasksCount}
         totalTasksCount={scratchpad.plan.length}
         onQuestionsClick={() => setShowQuestionModal(true)}

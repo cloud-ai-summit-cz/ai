@@ -94,8 +94,49 @@ agent = client.agents.create(
     definition=PromptAgentDefinition(
         model="gpt-4o",
         instructions=SYSTEM_PROMPT,
-        tools=mcp_tool_definitions
+        # NOTE: No tools configured here - see MCP Session Isolation below
     ),
     description="Market research analyst for expansion analysis"
 )
 ```
+
+## MCP Session Isolation
+
+> **Important Architecture Decision**: MCP tools are NOT configured at agent provisioning time.
+
+### Why Not Provision-Time MCP?
+
+1. **Azure AI Foundry Limitation**: The `MCPTool` class does not allow sensitive headers (like `Authorization`) in the agent definition. You must use `project_connection_id` or pass headers via `tool_resources` at runtime.
+
+2. **Session Isolation Requirement**: Each research session needs a unique `X-Session-ID` header to isolate scratchpad data. This session ID is only known at runtime when the orchestrator creates a research session.
+
+3. **Audit Trail**: The `X-Caller-Agent` header identifies which agent made each MCP call, enabling proper audit logging.
+
+### How It Works
+
+```mermaid
+sequenceDiagram
+    participant UI as Web UI
+    participant Orch as Orchestrator
+    participant MCP as mcp-scratchpad
+    participant Agent as market-analyst
+    
+    UI->>Orch: Start research session
+    Orch->>Orch: Generate session_id
+    
+    Note over Orch: Create session-scoped MCP tool
+    Orch->>Orch: MCPStreamableHTTPTool(<br/>headers={<br/>  "Authorization": "Bearer ...",<br/>  "X-Session-ID": session_id,<br/>  "X-Caller-Agent": "market-analyst"<br/>})
+    
+    Orch->>Agent: Invoke with tools=[session_mcp]
+    Agent->>MCP: read_section() [with session headers]
+    MCP-->>Agent: Session-scoped data only
+```
+
+### Security Benefits
+
+| Concern | Solution |
+|---------|----------|
+| Cross-session data access | `X-Session-ID` header isolates data per session |
+| Credential exposure | Bearer token injected by orchestrator, not stored in agent definition |
+| Agent impersonation | `X-Caller-Agent` header set by orchestrator, not agent |
+| Audit logging | All MCP calls tagged with session and caller info |

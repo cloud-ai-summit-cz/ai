@@ -127,6 +127,7 @@ export function startSession(
     'synthesis_started',
     'synthesis_progress',
     'synthesis_completed',
+    'heartbeat',  // Keep-alive signal during long operations
   ];
 
   eventTypes.forEach((eventType) => {

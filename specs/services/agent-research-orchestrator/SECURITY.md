@@ -11,6 +11,33 @@ Security controls and threat model for the research orchestrator.
 | LLM prompts | Prompt injection | Input validation, prompt templates |
 | SSE stream | Information disclosure | Session-scoped events only |
 | A2A communication | Man-in-the-middle | HTTPS, managed identity tokens |
+| MCP Scratchpad | Cross-session data access | Session isolation via `X-Session-ID` header |
+| MCP Scratchpad | Agent impersonation | `X-Caller-Agent` header set by orchestrator |
+
+## MCP Session Isolation
+
+> **Security Control**: MCP Scratchpad access is session-isolated at runtime.
+
+### Design Decision
+
+MCP tools are **not configured at agent provisioning time**. Instead, the orchestrator creates session-scoped MCP tools at runtime with:
+
+| Header | Purpose | Set By |
+|--------|---------|--------|
+| `Authorization` | Bearer token authentication | Orchestrator (from env) |
+| `X-Session-ID` | Isolate data per research session | Orchestrator (generated) |
+| `X-Caller-Agent` | Audit trail - which agent made the call | Orchestrator (injected) |
+
+### Security Benefits
+
+1. **AI agents cannot set session ID** - prevents cross-session data access
+2. **Bearer token not stored in Foundry** - credentials never in agent definitions
+3. **Audit trail** - every MCP call tagged with caller identity
+4. **Defense in depth** - MCP server validates headers server-side
+
+### Implementation Reference
+
+See `ARCHITECTURE.md` section "MCP Session Isolation" for implementation details.
 
 ## Controls Checklist
 
