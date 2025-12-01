@@ -50,6 +50,9 @@ from models import (
     ScratchpadUpdatedData,
     SSEEvent,
     SSEEventType,
+    SubagentProgressData,
+    SubagentToolCompletedData,
+    SubagentToolStartedData,
     ToolCallCompletedData,
     ToolCallFailedData,
     ToolCallStartedData,
@@ -191,6 +194,116 @@ SCRATCHPAD_QUESTION_TOOLS = {"add_question", "get_pending_questions", "get_answe
 
 # Agent tool names (subagents exposed as tools to orchestrator)
 AGENT_TOOL_NAMES = {"market_analysis", "competitor_analysis", "synthesize_findings"}
+
+
+def create_subagent_stream_callback(
+    event_queue: ToolCallEventQueue,
+    subagent_name: str,
+    session_id: str,
+) -> Callable[[Any], Awaitable[None]]:
+    """Create a stream callback for subagent tool calls.
+    
+    This callback is passed to agent.as_tool() to capture streaming events
+    from subagent execution, including:
+    - Tool calls (FunctionCallContent)
+    - Tool results (FunctionResultContent)  
+    - Text chunks (TextContent)
+    
+    Args:
+        event_queue: Queue to push events to.
+        subagent_name: Name of the subagent (e.g., "market-analyst").
+        session_id: Session ID for the event.
+        
+    Returns:
+        Async callback function for streaming updates.
+    """
+    pending_tool_calls: dict[str, str] = {}  # call_id -> tool_name
+    
+    async def stream_callback(update: Any) -> None:
+        """Handle streaming updates from subagent."""
+        # AgentRunResponseUpdate has a .contents list
+        if not hasattr(update, "contents") or not update.contents:
+            return
+        
+        for content in update.contents:
+            content_type = getattr(content, "type", None)
+            
+            # Handle tool call started (FunctionCallContent)
+            if content_type == "function_call" or hasattr(content, "call_id"):
+                call_id = getattr(content, "call_id", None) or getattr(content, "id", str(uuid4()))
+                tool_name = getattr(content, "name", "unknown_tool")
+                arguments = getattr(content, "arguments", {})
+                
+                # Track this call for matching with result
+                pending_tool_calls[call_id] = tool_name
+                
+                # Create input preview
+                input_preview = None
+                if arguments:
+                    if isinstance(arguments, str):
+                        input_preview = arguments[:200]
+                    elif isinstance(arguments, dict):
+                        input_preview = str(arguments)[:200]
+                
+                await event_queue.put({
+                    "type": "subagent_tool_started",
+                    "event_data": SubagentToolStartedData(
+                        subagent_name=subagent_name,
+                        tool_name=tool_name,
+                        tool_call_id=call_id,
+                        input_preview=input_preview,
+                    ),
+                    "session_id": session_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                logger.debug(f"Subagent {subagent_name} calling tool: {tool_name}")
+            
+            # Handle tool result (FunctionResultContent)
+            elif content_type == "function_result" or (
+                hasattr(content, "call_id") and hasattr(content, "result")
+            ):
+                call_id = getattr(content, "call_id", None)
+                result = getattr(content, "result", None)
+                tool_name = pending_tool_calls.pop(call_id, "unknown_tool") if call_id else "unknown_tool"
+                
+                # Create output preview
+                output_preview = None
+                if result:
+                    if isinstance(result, str):
+                        output_preview = result[:200]
+                    else:
+                        output_preview = str(result)[:200]
+                
+                await event_queue.put({
+                    "type": "subagent_tool_completed",
+                    "event_data": SubagentToolCompletedData(
+                        subagent_name=subagent_name,
+                        tool_name=tool_name,
+                        tool_call_id=call_id or str(uuid4()),
+                        output_preview=output_preview,
+                    ),
+                    "session_id": session_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                logger.debug(f"Subagent {subagent_name} tool completed: {tool_name}")
+            
+            # Handle text content (streaming text from subagent)
+            elif content_type == "text" or hasattr(content, "text"):
+                text = getattr(content, "text", "")
+                if text and len(text) > 0:
+                    # Only emit substantial text chunks (skip tiny ones)
+                    if len(text) >= 10:
+                        await event_queue.put({
+                            "type": "subagent_progress",
+                            "event_data": SubagentProgressData(
+                                subagent_name=subagent_name,
+                                text_chunk=text[:500],  # Limit chunk size
+                            ),
+                            "session_id": session_id,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        })
+    
+    return stream_callback
 
 
 def _serialize_tool_output(output: Any) -> Any:
@@ -1091,25 +1204,33 @@ class AgentOrchestrator:
             agents_to_cleanup.append(synthesizer_agent)
             clients_to_cleanup.append(synthesizer_client)
 
-            # Convert specialist agents to tools
-            # The .as_tool() method converts a ChatAgent into a callable function tool
+            # Create event queue early so we can pass it to subagent stream callbacks
+            event_queue = ToolCallEventQueue()
+            agent_call_count: dict[str, int] = {}
+            tool_middleware = create_tool_call_middleware(event_queue, agent_call_count)
+
+            # Convert specialist agents to tools with stream callbacks for visibility
+            # The stream_callback captures tool calls made BY the subagent (e.g., MCP scratchpad)
             market_tool = market_agent.as_tool(
                 name="market_analysis",
                 description="Call this tool to analyze market opportunities, trends, customer segments, and market sizing for the research query.",
                 arg_name="query",
                 arg_description="The specific market analysis question or aspect to investigate",
+                stream_callback=create_subagent_stream_callback(event_queue, "market-analyst", session_id),
             )
             competitor_tool = competitor_agent.as_tool(
                 name="competitor_analysis",
                 description="Call this tool to analyze competitive landscape, competitor strengths/weaknesses, and market positioning.",
                 arg_name="query",
                 arg_description="The specific competitor analysis question or aspect to investigate",
+                stream_callback=create_subagent_stream_callback(event_queue, "competitor-analyst", session_id),
             )
             synthesizer_tool = synthesizer_agent.as_tool(
                 name="synthesize_findings",
                 description="Call this tool AFTER gathering market and competitor insights to create a final synthesized report with recommendations.",
                 arg_name="context",
                 arg_description="All the gathered research findings and insights to synthesize into a final report",
+                stream_callback=create_subagent_stream_callback(event_queue, "synthesizer", session_id),
             )
 
             yield SSEEvent(
@@ -1124,11 +1245,6 @@ class AgentOrchestrator:
                     "session_isolation": True,  # Indicate session isolation is active
                 },
             )
-
-            # Create event queue and middleware for tool call interception
-            event_queue = ToolCallEventQueue()
-            agent_call_count: dict[str, int] = {}
-            tool_middleware = create_tool_call_middleware(event_queue, agent_call_count)
 
             # Build the tools list - agent tools + session-scoped MCP scratchpad
             tools_list: list[Any] = [market_tool, competitor_tool, synthesizer_tool]
@@ -1179,9 +1295,12 @@ class AgentOrchestrator:
                     
                     if tool_event["type"] == "tool_started":
                         event_data: ToolCallStartedData = tool_event["event_data"]
+                        # Use the timestamp from when middleware captured the event
+                        event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
                         yield SSEEvent(
                             event_type=SSEEventType.TOOL_CALL_STARTED,
                             session_id=session_id,
+                            timestamp=event_timestamp,
                             data={
                                 "tool_name": event_data.tool_name,
                                 "tool_call_id": event_data.tool_call_id,
@@ -1201,10 +1320,12 @@ class AgentOrchestrator:
                     elif tool_event["type"] == "tool_completed":
                         event_data_completed: ToolCallCompletedData = tool_event["event_data"]
                         tool_name = event_data_completed.tool_name
-                        
+                        # Use the timestamp from when middleware captured the event
+                        event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
                         yield SSEEvent(
                             event_type=SSEEventType.TOOL_CALL_COMPLETED,
                             session_id=session_id,
+                            timestamp=event_timestamp,
                             data={
                                 "tool_name": tool_name,
                                 "tool_call_id": event_data_completed.tool_call_id,
@@ -1218,20 +1339,43 @@ class AgentOrchestrator:
                         # Check if this was a subagent tool - emit agent_response
                         # so UI knows to poll scratchpad for updated notes/draft
                         if tool_name in AGENT_TOOL_NAMES:
-                            # Extract a response summary from the tool output
+                            # Extract a response preview from the tool output
                             output = event_data_completed.output
-                            response_summary = ""
+                            response_preview = ""
+                            
+                            # Try to extract meaningful preview text from the response
                             if isinstance(output, str):
-                                response_summary = output[:200] + ("..." if len(output) > 200 else "")
+                                response_preview = output[:500]
+                            elif isinstance(output, list):
+                                # Handle list of content blocks (common MAF output format)
+                                text_parts = []
+                                for item in output:
+                                    if isinstance(item, dict):
+                                        text = item.get("text", item.get("content", ""))
+                                        if text:
+                                            text_parts.append(str(text))
+                                    elif isinstance(item, str):
+                                        text_parts.append(item)
+                                response_preview = "\n".join(text_parts)[:500]
                             elif isinstance(output, dict):
-                                response_summary = output.get("summary", output.get("response", str(output)))[:200]
+                                # Check common response fields
+                                for key in ["text", "content", "summary", "response", "result"]:
+                                    if key in output and output[key]:
+                                        response_preview = str(output[key])[:500]
+                                        break
+                                if not response_preview:
+                                    response_preview = str(output)[:500]
+                            
+                            # Truncate and add ellipsis if needed
+                            if len(response_preview) >= 500:
+                                response_preview = response_preview[:497] + "..."
                             
                             yield SSEEvent(
                                 event_type=SSEEventType.AGENT_RESPONSE,
                                 session_id=session_id,
                                 data={
                                     "agent_name": tool_name.replace("_", "-"),
-                                    "response_summary": response_summary,
+                                    "response_preview": response_preview,
                                     "execution_time_ms": event_data_completed.execution_time_ms,
                                 },
                             )
@@ -1301,9 +1445,11 @@ class AgentOrchestrator:
                     
                     elif tool_event["type"] == "tool_failed":
                         event_data_failed: ToolCallFailedData = tool_event["event_data"]
+                        event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
                         yield SSEEvent(
                             event_type=SSEEventType.TOOL_CALL_FAILED,
                             session_id=session_id,
+                            timestamp=event_timestamp,
                             data={
                                 "tool_name": event_data_failed.tool_name,
                                 "tool_call_id": event_data_failed.tool_call_id,
@@ -1311,6 +1457,50 @@ class AgentOrchestrator:
                                 "error": event_data_failed.error,
                                 "error_type": event_data_failed.error_type,
                                 "call_number": tool_event["call_number"],
+                            },
+                        )
+                    
+                    # === Subagent streaming events (from stream_callback) ===
+                    elif tool_event["type"] == "subagent_tool_started":
+                        subagent_event: SubagentToolStartedData = tool_event["event_data"]
+                        event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
+                        yield SSEEvent(
+                            event_type=SSEEventType.SUBAGENT_TOOL_STARTED,
+                            session_id=session_id,
+                            timestamp=event_timestamp,
+                            data={
+                                "subagent_name": subagent_event.subagent_name,
+                                "tool_name": subagent_event.tool_name,
+                                "tool_call_id": subagent_event.tool_call_id,
+                                "input_preview": subagent_event.input_preview,
+                            },
+                        )
+                    
+                    elif tool_event["type"] == "subagent_tool_completed":
+                        subagent_completed: SubagentToolCompletedData = tool_event["event_data"]
+                        event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
+                        yield SSEEvent(
+                            event_type=SSEEventType.SUBAGENT_TOOL_COMPLETED,
+                            session_id=session_id,
+                            timestamp=event_timestamp,
+                            data={
+                                "subagent_name": subagent_completed.subagent_name,
+                                "tool_name": subagent_completed.tool_name,
+                                "tool_call_id": subagent_completed.tool_call_id,
+                                "output_preview": subagent_completed.output_preview,
+                            },
+                        )
+                    
+                    elif tool_event["type"] == "subagent_progress":
+                        subagent_progress: SubagentProgressData = tool_event["event_data"]
+                        event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
+                        yield SSEEvent(
+                            event_type=SSEEventType.SUBAGENT_PROGRESS,
+                            session_id=session_id,
+                            timestamp=event_timestamp,
+                            data={
+                                "subagent_name": subagent_progress.subagent_name,
+                                "text_chunk": subagent_progress.text_chunk,
                             },
                         )
 
@@ -1327,9 +1517,11 @@ class AgentOrchestrator:
                     break
                 if tool_event["type"] == "tool_completed":
                     event_data_completed = tool_event["event_data"]
+                    event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
                     yield SSEEvent(
                         event_type=SSEEventType.TOOL_CALL_COMPLETED,
                         session_id=session_id,
+                        timestamp=event_timestamp,
                         data={
                             "tool_name": event_data_completed.tool_name,
                             "tool_call_id": event_data_completed.tool_call_id,
@@ -1341,9 +1533,11 @@ class AgentOrchestrator:
                     )
                 elif tool_event["type"] == "tool_failed":
                     event_data_failed = tool_event["event_data"]
+                    event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
                     yield SSEEvent(
                         event_type=SSEEventType.TOOL_CALL_FAILED,
                         session_id=session_id,
+                        timestamp=event_timestamp,
                         data={
                             "tool_name": event_data_failed.tool_name,
                             "tool_call_id": event_data_failed.tool_call_id,

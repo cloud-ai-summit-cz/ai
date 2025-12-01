@@ -413,22 +413,37 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
         });
         break;
 
-      case 'agent_response':
-        // Subagent returned - show a brief message and poll scratchpad
+      case 'agent_response': {
+        // Subagent returned - show a message with preview of what came back
+        const responsePreview = data.response_preview as string;
+        const agentNameFormatted = formatAgentName(data.agent_name as string);
+        
+        // Build message content with optional preview
+        let messageContent = `📥 Response received (${data.execution_time_ms}ms)`;
+        if (responsePreview && responsePreview.trim()) {
+          // Truncate preview for display in chat (first 150 chars)
+          const shortPreview = responsePreview.length > 150 
+            ? responsePreview.slice(0, 150) + '...' 
+            : responsePreview;
+          messageContent = `📥 Response received (${data.execution_time_ms}ms)\n\n> ${shortPreview}`;
+        }
+        
         store.addMessage({
           id: `msg-${Date.now()}`,
           type: 'agent',
-          sender: formatAgentName(data.agent_name as string),
-          content: `📥 Analysis complete. View findings in Notes and Draft tabs.`,
+          sender: agentNameFormatted,
+          content: messageContent,
           timestamp,
           metadata: {
             agentType: data.agent_name as string,
             status: 'completed',
             duration: data.execution_time_ms as number,
+            responsePreview: responsePreview, // Store full preview for potential expansion
           },
         });
         // Note: pollScratchpadState is called automatically after this event
         break;
+      }
 
       // === Tool Events ===
       case 'tool_call_started': {
@@ -479,12 +494,14 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
         const isAgentTool = ['market_analysis', 'competitor_analysis', 'synthesize_findings'].includes(toolName);
         
         if (isAgentTool) {
+          // For agent tools, just show a brief completion marker
+          // The agent_response event will have the full preview
           const targetAgent = formatAgentName(toolName.replace('_', '-'));
           store.addMessage({
             id: `msg-${Date.now()}-response`,
             type: 'agent',
             sender: targetAgent,
-            content: `📥 Response received (${data.execution_time_ms}ms)`,
+            content: `✅ Completed (${((data.execution_time_ms as number) / 1000).toFixed(1)}s)`,
             timestamp,
             metadata: {
               toolName,
@@ -522,6 +539,63 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
           },
         });
         break;
+
+      // === Subagent Internal Events (bubbled up from agent-as-tool streaming) ===
+      case 'subagent_tool_started': {
+        const subagentName = data.subagent_name as string;
+        const toolName = data.tool_name as string;
+        const inputPreview = data.input_preview as string | undefined;
+        
+        // Show subagent calling a tool (e.g., writing to scratchpad)
+        let content = `🔧 Calling ${toolName}`;
+        if (inputPreview) {
+          const shortPreview = inputPreview.length > 100 
+            ? inputPreview.slice(0, 100) + '...' 
+            : inputPreview;
+          content = `🔧 Calling ${toolName}: ${shortPreview}`;
+        }
+        
+        store.addMessage({
+          id: `msg-${Date.now()}-subagent-tool`,
+          type: 'tool',
+          sender: formatAgentName(subagentName),
+          content,
+          timestamp,
+          metadata: {
+            toolName,
+            status: 'started',
+          },
+        });
+        break;
+      }
+
+      case 'subagent_tool_completed': {
+        const subagentName = data.subagent_name as string;
+        const toolName = data.tool_name as string;
+        
+        store.addMessage({
+          id: `msg-${Date.now()}-subagent-tool-done`,
+          type: 'tool',
+          sender: formatAgentName(subagentName),
+          content: `✓ ${toolName} completed`,
+          timestamp,
+          metadata: {
+            toolName,
+            status: 'completed',
+          },
+        });
+        // Poll scratchpad to get the updated data
+        store.pollScratchpadState().catch(() => {});
+        break;
+      }
+
+      case 'subagent_progress': {
+        // Streaming text from subagent - could be used for live updates
+        // For now, we'll skip displaying these to avoid too much noise
+        // The agent_response event will have the full response
+        console.debug('Subagent progress:', data.subagent_name, data.text_chunk);
+        break;
+      }
 
       // === Scratchpad Events ===
       case 'scratchpad_updated':

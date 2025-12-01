@@ -94,6 +94,7 @@ export interface ChatMessage {
     targetAgent?: string;  // For agent-to-agent delegations
     status?: 'started' | 'completed' | 'failed';
     duration?: number;
+    responsePreview?: string;  // Full response preview for agent responses
   };
 }
 
@@ -120,6 +121,10 @@ export type SSEEventType =
   | 'agent_completed'
   | 'agent_failed'
   | 'agent_response'  // Subagent returned result → poll scratchpad
+  // Subagent internal events (bubbled up from agent-as-tool streaming)
+  | 'subagent_tool_started'    // Subagent started calling a tool (e.g., MCP scratchpad)
+  | 'subagent_tool_completed'  // Subagent's tool call completed
+  | 'subagent_progress'        // Subagent streaming text chunk
   // Tool events
   | 'tool_call_started'
   | 'tool_call_completed'
@@ -170,6 +175,27 @@ export interface ToolCallFailedData {
   agent_name: string;
   error: string;
   error_type?: string;
+}
+
+// === Subagent Event Data Types (bubbled up from agent-as-tool streaming) ===
+
+export interface SubagentToolStartedData {
+  subagent_name: string;
+  tool_name: string;
+  tool_call_id: string;
+  input_preview?: string;
+}
+
+export interface SubagentToolCompletedData {
+  subagent_name: string;
+  tool_name: string;
+  tool_call_id: string;
+  output_preview?: string;
+}
+
+export interface SubagentProgressData {
+  subagent_name: string;
+  text_chunk: string;
 }
 
 export interface ScratchpadUpdatedData {

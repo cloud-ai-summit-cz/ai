@@ -79,6 +79,40 @@
   @apply text-accent hover:underline;
 }
 
+/* Note-specific markdown styling (more compact) */
+.note-content.markdown-content h1 {
+  @apply text-lg font-semibold mb-2 mt-3 first:mt-0;
+}
+
+.note-content.markdown-content h2 {
+  @apply text-base font-semibold mb-2 mt-2 first:mt-0;
+}
+
+.note-content.markdown-content h3 {
+  @apply text-sm font-medium mb-1 mt-2 first:mt-0;
+}
+
+.note-content.markdown-content p {
+  @apply mb-2;
+}
+
+.note-content.markdown-content ul,
+.note-content.markdown-content ol {
+  @apply mb-2 pl-4;
+}
+
+.note-content.markdown-content li {
+  @apply mb-0.5;
+}
+
+.note-content.markdown-content blockquote {
+  @apply border-l-2 border-border/50 pl-3 text-text-muted mb-2 text-sm;
+}
+
+.note-content.markdown-content pre {
+  @apply p-2 text-xs mb-2;
+}
+
 .markdown-content table {
   @apply w-full border-collapse mb-3;
 }

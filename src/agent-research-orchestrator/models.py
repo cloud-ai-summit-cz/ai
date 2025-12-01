@@ -108,6 +108,11 @@ class SSEEventType(str, Enum):
     AGENT_FAILED = "agent_failed"
     AGENT_RESPONSE = "agent_response"       # Subagent returned result → UI should poll scratchpad
     
+    # Subagent internal events (bubbled up from agent-as-tool streaming)
+    SUBAGENT_TOOL_STARTED = "subagent_tool_started"   # Subagent started calling a tool
+    SUBAGENT_TOOL_COMPLETED = "subagent_tool_completed"  # Subagent's tool call completed
+    SUBAGENT_PROGRESS = "subagent_progress"   # Subagent streaming text chunk
+    
     # Tool events (detailed tool invocation tracking)
     TOOL_CALL_STARTED = "tool_call_started"     # Tool invocation started (with input)
     TOOL_CALL_COMPLETED = "tool_call_completed" # Tool completed (with output)
@@ -171,6 +176,40 @@ class ToolCallFailedData(BaseModel):
     agent_name: str = Field(description="Agent that initiated the tool call")
     error: str = Field(description="Error message from the tool")
     error_type: str | None = Field(default=None, description="Exception type if available")
+
+
+# === Subagent Event Models (bubbled up from agent-as-tool streaming) ===
+
+
+class SubagentToolStartedData(BaseModel):
+    """Data for SUBAGENT_TOOL_STARTED event (when a subagent calls an MCP tool)."""
+    
+    subagent_name: str = Field(description="Name of the subagent making the tool call")
+    tool_name: str = Field(description="Name of the tool being called")
+    tool_call_id: str = Field(description="Unique identifier for this tool invocation")
+    input_preview: str | None = Field(
+        default=None,
+        description="First 200 chars of tool input arguments"
+    )
+
+
+class SubagentToolCompletedData(BaseModel):
+    """Data for SUBAGENT_TOOL_COMPLETED event."""
+    
+    subagent_name: str = Field(description="Name of the subagent that made the tool call")
+    tool_name: str = Field(description="Name of the tool that completed")
+    tool_call_id: str = Field(description="Unique identifier for this tool invocation")
+    output_preview: str | None = Field(
+        default=None,
+        description="First 200 chars of tool output"
+    )
+
+
+class SubagentProgressData(BaseModel):
+    """Data for SUBAGENT_PROGRESS event (streaming text from subagent)."""
+    
+    subagent_name: str = Field(description="Name of the subagent generating content")
+    text_chunk: str = Field(description="Text chunk from the subagent")
 
 
 # === Scratchpad Event Models ===
