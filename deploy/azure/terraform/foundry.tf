@@ -144,3 +144,35 @@ resource "azapi_resource" "ai_foundry_project_capability_host" {
 
   depends_on = [azapi_resource.ai_foundry_account_capability_host]
 }
+
+# ============================================================================
+# Application Insights Connection
+# ============================================================================
+# Connect Application Insights to the Foundry account for agent tracing.
+# This enables the Tracing UI in the Foundry portal to display traces
+# and allows agents to export telemetry via project_client.telemetry.
+
+resource "azapi_resource" "foundry_appinsights_connection" {
+  type      = "Microsoft.CognitiveServices/accounts/connections@2025-04-01-preview"
+  name      = "${var.project_name}-appinsights"
+  parent_id = azapi_resource.ai_foundry_account.id
+
+  body = {
+    properties = {
+      category      = "AppInsights"
+      target        = azurerm_application_insights.main.id
+      authType      = "ApiKey"
+      isSharedToAll = true
+      credentials = {
+        key = azurerm_application_insights.main.connection_string
+      }
+      metadata = {
+        ApiType    = "Azure"
+        ResourceId = azurerm_application_insights.main.id
+      }
+    }
+  }
+
+  depends_on = [azapi_resource.ai_foundry_project_capability_host]
+}
+

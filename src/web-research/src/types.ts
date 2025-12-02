@@ -1,8 +1,8 @@
 /**
  * Type definitions for the web-research frontend.
  *
- * Aligns with the backend SSE event models from agent-research-orchestrator.
- * Note: Backend uses snake_case, frontend uses camelCase. API layer handles mapping.
+ * Simplified for the new trace-based architecture (ADR-005).
+ * All agent activity is captured via App Insights trace polling.
  */
 
 // === Session & Workflow Types ===
@@ -21,11 +21,12 @@ export interface ResearchSession {
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
+  operationId?: string; // Trace correlation ID
 }
 
 // === Plan/Task Types (The Checklist) ===
 
-export type TaskStatus = 'pending' | 'in-progress' | 'completed' | 'failed' | 'skipped' | 'todo' | 'blocked';
+export type TaskStatus = 'pending' | 'in-progress' | 'completed' | 'failed' | 'skipped' | 'todo' | 'blocked' | 'done';
 
 export interface Task {
   id: string;
@@ -44,6 +45,7 @@ export interface Note {
   author: string;
   timestamp: string;
   tags: string[];
+  sourceUrl?: string;
 }
 
 // === Draft Types (The Manuscript) ===
@@ -72,30 +74,48 @@ export interface Question {
   createdAt: string;
 }
 
-// === Chat/Message Types ===
+// === Activity Message Types ===
 
-export type MessageType =
-  | 'system'
-  | 'orchestrator'
-  | 'agent'
-  | 'tool'
-  | 'user'
-  | 'error';
+/**
+ * Activity types for the timeline view.
+ * Maps trace events to user-friendly activities.
+ */
+export type ActivityType =
+  | 'workflow_start'      // Session/workflow began
+  | 'workflow_complete'   // Workflow finished successfully
+  | 'workflow_error'      // Workflow failed
+  | 'agent_delegation'    // Orchestrator delegating to subagent
+  | 'agent_working'       // Agent is processing
+  | 'agent_complete'      // Agent finished its work
+  | 'tool_call'           // Agent calling an MCP tool
+  | 'scratchpad_update'   // Note/draft/plan update detected
+  | 'system';             // System messages
 
-export interface ChatMessage {
+/**
+ * A single activity item in the timeline.
+ */
+export interface Activity {
   id: string;
-  type: MessageType;
-  sender: string;
-  content: string;
+  type: ActivityType;
   timestamp: string;
-  metadata?: {
-    agentType?: string;
-    toolName?: string;
-    targetAgent?: string;  // For agent-to-agent delegations
-    status?: 'started' | 'completed' | 'failed';
-    duration?: number;
-    responsePreview?: string;  // Full response preview for agent responses
-  };
+  
+  // Who initiated this activity
+  actor: string;          // e.g., "Orchestrator", "Market Analyst"
+  
+  // What happened (short description)
+  action: string;         // e.g., "Delegating to Market Analyst"
+  
+  // Optional details
+  target?: string;        // e.g., tool name, target agent
+  durationMs?: number;    // If completed, how long it took
+  success?: boolean;      // If completed, was it successful
+  details?: string;       // Additional context (truncated tool args, etc.)
+  preview?: string;       // Preview of content (tool output, response text)
+  agentColor?: string;    // Color hint for the agent (e.g., "blue", "purple")
+  
+  // Trace correlation
+  operationId?: string;
+  spanId?: string;
 }
 
 // === Scratchpad State (Combined) ===
@@ -107,39 +127,35 @@ export interface ScratchpadState {
   questions: Question[];
 }
 
-// === SSE Event Types (matches backend SSEEventType enum) ===
+// === SSE Event Types (simplified for trace-based architecture) ===
 
 export type SSEEventType =
-  // Session lifecycle
-  | 'session_started'
+  // Workflow lifecycle
+  | 'workflow_started'    // Initial event with operation_id
   | 'workflow_completed'
   | 'workflow_failed'
-  // Agent events
+  // Trace events from App Insights (primary event source)
+  | 'trace_span_started'
+  | 'trace_span_completed'
+  | 'trace_tool_call'
+  // Subagent events (from stream_callback - visibility into subagent tool calls)
+  | 'subagent_tool_started'
+  | 'subagent_tool_completed'
+  | 'subagent_progress'
+  // Keep-alive
+  | 'heartbeat'
+  // Error fallback
+  | 'error'
+  // Legacy events (emitted by backend, handled gracefully)
+  | 'session_started'
   | 'agent_started'
   | 'agent_progress'
-  | 'agent_thinking'
   | 'agent_completed'
-  | 'agent_failed'
-  | 'agent_response'  // Subagent returned result → poll scratchpad
-  // Subagent internal events (bubbled up from agent-as-tool streaming)
-  | 'subagent_tool_started'    // Subagent started calling a tool (e.g., MCP scratchpad)
-  | 'subagent_tool_completed'  // Subagent's tool call completed
-  | 'subagent_progress'        // Subagent streaming text chunk
-  // Tool events
+  | 'agent_response'
   | 'tool_call_started'
   | 'tool_call_completed'
-  | 'tool_call_failed'
-  // Scratchpad events (deprecated - use polling)
   | 'scratchpad_updated'
-  | 'scratchpad_snapshot'
-  | 'question_added'
-  | 'question_answered'
-  // Synthesis
-  | 'synthesis_started'
-  | 'synthesis_progress'
-  | 'synthesis_completed'
-  // Keep-alive
-  | 'heartbeat';
+  | 'synthesis_completed';
 
 /**
  * SSE Event structure as received from the backend.
@@ -152,128 +168,19 @@ export interface SSEEvent {
   data: Record<string, unknown>;
 }
 
-// === SSE Event Data Types (matches backend *Data models) ===
+// === Trace Event Data Types ===
 
-export interface ToolCallStartedData {
-  tool_name: string;
-  tool_call_id: string;
-  agent_name: string;
-  input_args?: Record<string, unknown>;
-}
-
-export interface ToolCallCompletedData {
-  tool_name: string;
-  tool_call_id: string;
-  agent_name: string;
-  output?: unknown;
-  execution_time_ms: number;
-}
-
-export interface ToolCallFailedData {
-  tool_name: string;
-  tool_call_id: string;
-  agent_name: string;
-  error: string;
-  error_type?: string;
-}
-
-// === Subagent Event Data Types (bubbled up from agent-as-tool streaming) ===
-
-export interface SubagentToolStartedData {
-  subagent_name: string;
-  tool_name: string;
-  tool_call_id: string;
-  input_preview?: string;
-}
-
-export interface SubagentToolCompletedData {
-  subagent_name: string;
-  tool_name: string;
-  tool_call_id: string;
-  output_preview?: string;
-}
-
-export interface SubagentProgressData {
-  subagent_name: string;
-  text_chunk: string;
-}
-
-export interface ScratchpadUpdatedData {
-  section_name: string;
-  operation: 'created' | 'updated' | 'appended' | 'deleted';
-  updated_by: string;
-  content_preview?: string;
-  appended_content?: string;
-}
-
-export interface ScratchpadSectionData {
-  name: string;
-  content: string;
-  updated_by?: string;
-  updated_at?: string;
-}
-
-export interface ScratchpadSnapshotData {
-  sections: ScratchpadSectionData[];
-  total_sections: number;
-  iteration?: number;
-  triggered_by?: string;
-}
-
-export interface QuestionAddedData {
-  question_id: string;
-  question: string;
-  asked_by: string;
-  context?: string;
-  priority?: 'high' | 'medium' | 'low';
-  blocking?: boolean;
-  options?: string[];
-}
-
-export interface QuestionAnsweredData {
-  question_id: string;
-  answer: string;
-  answered_at?: string;
-}
-
-// === Agent Event Data Types ===
-
-export interface AgentStartedData {
-  agent_name: string;
-  task_description?: string;
-}
-
-export interface AgentProgressData {
-  agent_name: string;
-  chunk: string;
-}
-
-export interface AgentThinkingData {
-  agent_name: string;
-  message: string;
-}
-
-export interface AgentCompletedData {
-  agent_name: string;
-  result_summary?: string;
-  execution_time_ms?: number;
-}
-
-export interface AgentFailedData {
-  agent_name: string;
-  error: string;
-}
-
-// === Session Event Data Types ===
-
-export interface SessionStartedData {
-  query: string;
-  message?: string;
+export interface WorkflowStartedData {
+  session_id: string;
+  operation_id: string;
+  trace_polling_enabled: boolean;
+  timestamp: string;
 }
 
 export interface WorkflowCompletedData {
-  final_synthesis?: string;
-  duration_seconds?: number;
+  synthesis?: string;
+  total_tool_calls?: number;
+  total_time_ms?: number;
 }
 
 export interface WorkflowFailedData {
@@ -281,19 +188,31 @@ export interface WorkflowFailedData {
   error_type?: string;
 }
 
-// === Synthesis Event Data Types ===
-
-export interface SynthesisStartedData {
-  message?: string;
+export interface TraceSpanStartedData {
+  span_name: string;
+  agent_name?: string;
+  operation_id: string;
+  timestamp: string;
 }
 
-export interface SynthesisProgressData {
-  chunk: string;
+export interface TraceSpanCompletedData {
+  span_name: string;
+  agent_name?: string;
+  operation_id: string;
+  timestamp: string;
+  duration_ms: number;
+  success?: boolean;
 }
 
-export interface SynthesisCompletedData {
-  final_report: string;
-  sections_used?: string[];
+export interface TraceToolCallData {
+  span_name: string;
+  tool_name: string;
+  agent_name?: string;
+  mcp_server?: string;
+  operation_id: string;
+  timestamp: string;
+  duration_ms?: number;
+  success?: boolean;
 }
 
 // === Application State ===
@@ -305,11 +224,14 @@ export interface AppState {
   // Scratchpad pillars
   scratchpad: ScratchpadState;
 
-  // Chat stream
-  messages: ChatMessage[];
+  // Activity timeline (replaces chat messages)
+  activities: Activity[];
+
+  // Final synthesis report (full markdown from Synthesizer)
+  finalReport: string | null;
 
   // UI state
   isConnected: boolean;
-  activePanel: 'chat' | 'plan' | 'notes' | 'draft';
+  activePanel: 'activity' | 'plan' | 'notes' | 'draft' | 'final';
   showQuestionModal: boolean;
 }

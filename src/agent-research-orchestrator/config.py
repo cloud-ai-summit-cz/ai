@@ -46,6 +46,23 @@ class Settings(BaseSettings):
         description="API key for MCP Scratchpad authentication",
     )
 
+    # Application Insights / Log Analytics configuration (ADR-005)
+    log_analytics_workspace_id: str = Field(
+        default="",
+        alias="LOG_ANALYTICS_WORKSPACE_ID",
+        description="Log Analytics Workspace ID (GUID) for querying App Insights traces",
+    )
+    trace_polling_enabled: bool = Field(
+        default=True,
+        alias="TRACE_POLLING_ENABLED",
+        description="Enable App Insights trace polling for real-time SSE events",
+    )
+    trace_polling_interval_seconds: float = Field(
+        default=2.0,
+        alias="TRACE_POLLING_INTERVAL_SECONDS",
+        description="How often to poll App Insights for new traces",
+    )
+
     # API Configuration
     api_host: str = Field(default="0.0.0.0", description="API host")
     api_port: int = Field(default=8000, description="API port")
@@ -70,6 +87,14 @@ class Settings(BaseSettings):
     def mcp_scratchpad_enabled(self) -> bool:
         """Check if MCP Scratchpad is configured."""
         return bool(self.mcp_scratchpad_url and self.mcp_scratchpad_api_key)
+
+    @property
+    def trace_polling_configured(self) -> bool:
+        """Check if App Insights trace polling is configured and enabled."""
+        return bool(
+            self.trace_polling_enabled and 
+            self.log_analytics_workspace_id
+        )
 
     def get_prompt(self, prompt_name: str = "system_prompt") -> str:
         """Load a prompt file.

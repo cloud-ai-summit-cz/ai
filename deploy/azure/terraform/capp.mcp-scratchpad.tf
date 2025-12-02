@@ -33,6 +33,10 @@ resource "azapi_resource" "capp_mcp_scratchpad" {
           {
             name  = "mcp-auth-token"
             value = var.mcp_auth_token
+          },
+          {
+            name  = "appinsights-connection-string"
+            value = azurerm_application_insights.main.connection_string
           }
         ]
         registries = [
@@ -63,6 +67,11 @@ resource "azapi_resource" "capp_mcp_scratchpad" {
               {
                 name      = "API_KEY"
                 secretRef = "mcp-auth-token"
+              },
+              {
+                # Required for OpenTelemetry tracing (ADR-005)
+                name      = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+                secretRef = "appinsights-connection-string"
               }
             ]
             probes = [

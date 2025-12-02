@@ -2,6 +2,7 @@
  * API client for the Research Orchestrator backend.
  *
  * Handles REST API calls and SSE event streaming.
+ * Simplified for trace-based architecture (ADR-005).
  */
 
 import type { ResearchSession, SSEEvent } from './types';
@@ -11,8 +12,8 @@ import type { ResearchSession, SSEEvent } from './types';
  */
 function getApiUrl(): string {
   // Runtime config injected by env.sh in Docker
-  if (typeof window !== 'undefined' && (window as any).env?.API_URL) {
-    return (window as any).env.API_URL;
+  if (typeof window !== 'undefined' && (window as unknown as { env?: { API_URL?: string } }).env?.API_URL) {
+    return (window as unknown as { env: { API_URL: string } }).env.API_URL;
   }
   // Development: use Vite proxy
   return '/api';
@@ -105,38 +106,68 @@ export function startSession(
 ): () => void {
   const url = `${API_URL}/research/sessions/${sessionId}/start`;
   const eventSource = new EventSource(url);
+  
+  // Track if we've received a terminal event (workflow_completed or workflow_failed)
+  let workflowEnded = false;
 
-  // Handle different event types
+  // SSE event types - both trace-based (primary) and legacy (backward compat)
   const eventTypes = [
-    'session_started',
+    // Trace-based events (primary - handled by frontend)
+    'workflow_started',
     'workflow_completed',
     'workflow_failed',
+    'trace_span_started',
+    'trace_span_completed',
+    'trace_tool_call',
+    'heartbeat',
+    'error',
+    // Subagent events (from stream_callback - may not fire for hosted agents)
+    'subagent_tool_started',
+    'subagent_tool_completed',
+    'subagent_progress',
+    // Legacy events (emitted by backend, converted to activities)
+    'session_started',
     'agent_started',
     'agent_progress',
-    'agent_thinking',
     'agent_completed',
-    'agent_failed',
     'agent_response',
     'tool_call_started',
     'tool_call_completed',
-    'tool_call_failed',
     'scratchpad_updated',
-    'scratchpad_snapshot',
-    'question_added',
-    'question_answered',
-    'synthesis_started',
-    'synthesis_progress',
     'synthesis_completed',
-    'heartbeat',  // Keep-alive signal during long operations
   ];
 
+  console.log(`[SSE] Connecting to: ${url}`);
+  console.log(`[SSE] Registered event types: ${eventTypes.join(', ')}`);
+  
   eventTypes.forEach((eventType) => {
     eventSource.addEventListener(eventType, (e: MessageEvent) => {
+      console.log(`[SSE] RAW EVENT received: type=${eventType}, data.length=${e.data?.length}`);
+      console.log(`[SSE] RAW DATA: ${e.data?.substring(0, 500)}...`);
+      
+      // Handle the 'error' event type specially - it may have undefined data
+      // when the server closes the connection after workflow_failed
+      if (eventType === 'error') {
+        if (!e.data) {
+          console.log('[SSE] Error event with no data - likely server connection closed after workflow ended');
+          return; // Ignore error events with no data
+        }
+      }
+      
       try {
         const data = JSON.parse(e.data);
+        console.log(`[SSE] PARSED EVENT: type=${eventType}`, data);
+        
+        // Check for terminal events
+        if (eventType === 'workflow_completed' || eventType === 'workflow_failed') {
+          console.log(`[SSE] Terminal event received: ${eventType}`);
+          workflowEnded = true;
+        }
+        
         onEvent(data as SSEEvent);
       } catch (err) {
-        console.error(`Failed to parse SSE event ${eventType}:`, err);
+        console.error(`[SSE] Failed to parse event ${eventType}:`, err);
+        console.error(`[SSE] Raw data was:`, e.data);
       }
     });
   });
@@ -153,13 +184,23 @@ export function startSession(
 
   // Handle connection errors
   eventSource.onerror = () => {
-    // Check if stream ended normally (readyState === CLOSED)
+    // If workflow already ended, this is expected (server closed connection)
+    if (workflowEnded) {
+      eventSource.close();
+      onComplete();
+      return;
+    }
+    
+    // Check if stream ended (readyState === CLOSED means server closed it)
     if (eventSource.readyState === EventSource.CLOSED) {
+      // Server closed connection - could be normal end or error
+      // Don't report as error, just complete
       onComplete();
     } else {
+      // Actual connection error (network issue, etc.)
       onError(new Error('SSE connection error'));
+      eventSource.close();
     }
-    eventSource.close();
   };
 
   // Return cleanup function

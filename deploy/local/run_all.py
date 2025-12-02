@@ -132,7 +132,7 @@ def get_service_command(service: ServiceConfig, src_dir: Path) -> tuple[str, Pat
         folder_name = f"mcp-{service.name}"
         module_name = f"mcp_{service.name.replace('-', '_')}"
         port = service.port or 8000
-        default_cmd = f"uv run uvicorn {module_name}.main:app --host 0.0.0.0 --port {port} --reload"
+        default_cmd = f"uv run uvicorn {module_name}.main:app --host 0.0.0.0 --port {port}"
 
     working_dir = src_dir / folder_name
     command = service.command or default_cmd
@@ -153,9 +153,20 @@ class ServiceProcess:
         self.service = service
         self.command = command
         self.working_dir = working_dir
-        self.env = env
         self.process: asyncio.subprocess.Process | None = None
         self._stopped = False
+
+        # Load service-specific .env file and merge with global env
+        self.env = env.copy()
+        service_env_file = working_dir / ".env"
+        if service_env_file.exists():
+            # Parse .env file manually to avoid global state pollution
+            with open(service_env_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, _, value = line.partition("=")
+                        self.env[key.strip()] = value.strip()
 
         # Create colored tag using Rich
         tag_width = 18

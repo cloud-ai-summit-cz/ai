@@ -1,11 +1,8 @@
 /**
  * Zustand store for application state management.
  *
- * Manages the entire research session state including:
- * - Session metadata
- * - Scratchpad pillars (Plan, Notes, Draft, Questions)
- * - Chat messages
- * - UI state
+ * Simplified for trace-based architecture (ADR-005).
+ * All agent activity is captured via App Insights trace polling.
  */
 
 import { create } from 'zustand';
@@ -16,11 +13,18 @@ import type {
   Note,
   DraftSection,
   Question,
-  ChatMessage,
+  Activity,
+  ActivityType,
   ScratchpadState,
   SessionStatus,
   SSEEvent,
   SSEEventType,
+  TraceSpanStartedData,
+  TraceSpanCompletedData,
+  TraceToolCallData,
+  WorkflowStartedData,
+  WorkflowCompletedData,
+  WorkflowFailedData,
 } from './types';
 import { createSession, startSession, pollScratchpad } from './api';
 
@@ -35,32 +39,32 @@ interface ResearchStore {
 
   // Plan actions
   setTasks: (tasks: Task[]) => void;
-  addTask: (task: Task) => void;
-  updateTask: (taskId: string, updates: Partial<Task>) => void;
 
   // Notes actions
   setNotes: (notes: Note[]) => void;
-  addNote: (note: Note) => void;
 
   // Draft actions
   setDraftSections: (sections: DraftSection[]) => void;
-  updateDraftSection: (section: DraftSection) => void;
 
   // Questions actions
   setQuestions: (questions: Question[]) => void;
   addQuestion: (question: Question) => void;
   answerQuestion: (questionId: string, answer: string) => void;
 
-  // === Chat State ===
-  messages: ChatMessage[];
-  addMessage: (message: ChatMessage) => void;
-  clearMessages: () => void;
+  // === Activity State (replaces chat messages) ===
+  activities: Activity[];
+  addActivity: (activity: Activity) => void;
+  clearActivities: () => void;
+
+  // === Final Report State ===
+  finalReport: string | null;
+  setFinalReport: (report: string | null) => void;
 
   // === UI State ===
   isConnected: boolean;
   setConnected: (connected: boolean) => void;
-  activePanel: 'chat' | 'plan' | 'notes' | 'draft';
-  setActivePanel: (panel: 'chat' | 'plan' | 'notes' | 'draft') => void;
+  activePanel: 'activity' | 'plan' | 'notes' | 'draft' | 'final';
+  setActivePanel: (panel: 'activity' | 'plan' | 'notes' | 'draft' | 'final') => void;
   showQuestionModal: boolean;
   setShowQuestionModal: (show: boolean) => void;
 
@@ -99,52 +103,14 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
       scratchpad: { ...state.scratchpad, plan: tasks },
     })),
 
-  addTask: (task) =>
-    set((state) => ({
-      scratchpad: {
-        ...state.scratchpad,
-        plan: [...state.scratchpad.plan, task],
-      },
-    })),
-
-  updateTask: (taskId, updates) =>
-    set((state) => ({
-      scratchpad: {
-        ...state.scratchpad,
-        plan: state.scratchpad.plan.map((task) =>
-          task.id === taskId ? { ...task, ...updates } : task
-        ),
-      },
-    })),
-
   setNotes: (notes) =>
     set((state) => ({
       scratchpad: { ...state.scratchpad, notes },
     })),
 
-  addNote: (note) =>
-    set((state) => ({
-      scratchpad: {
-        ...state.scratchpad,
-        notes: [...state.scratchpad.notes, note],
-      },
-    })),
-
   setDraftSections: (sections) =>
     set((state) => ({
       scratchpad: { ...state.scratchpad, draft: sections },
-    })),
-
-  updateDraftSection: (section) =>
-    set((state) => ({
-      scratchpad: {
-        ...state.scratchpad,
-        draft: state.scratchpad.draft.some((s) => s.id === section.id)
-          ? state.scratchpad.draft.map((s) =>
-              s.id === section.id ? section : s
-            )
-          : [...state.scratchpad.draft, section],
-      },
     })),
 
   setQuestions: (questions) =>
@@ -158,7 +124,6 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
         ...state.scratchpad,
         questions: [...state.scratchpad.questions, question],
       },
-      // Auto-show modal for blocking questions
       showQuestionModal: question.blocking || state.showQuestionModal,
     })),
 
@@ -174,22 +139,27 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
       },
     })),
 
-  // === Chat State ===
-  messages: [],
-  addMessage: (message) =>
+  // === Activity State ===
+  activities: [],
+  addActivity: (activity) => {
+    console.log('[STORE] Adding activity:', activity);
     set((state) => ({
-      messages: [...state.messages, message],
-    })),
-  clearMessages: () => set({ messages: [] }),
+      activities: [...state.activities, activity],
+    }));
+  },
+  clearActivities: () => set({ activities: [] }),
+
+  // === Final Report State ===
+  finalReport: null,
+  setFinalReport: (report) => set({ finalReport: report }),
 
   // === UI State ===
   isConnected: false,
   setConnected: (connected) => set({ isConnected: connected }),
-  activePanel: 'chat',
+  activePanel: 'activity',
   setActivePanel: (panel) => {
     set({ activePanel: panel });
-    // Re-fetch scratchpad data when switching tabs (except chat)
-    if (panel !== 'chat') {
+    if (panel !== 'activity') {
       get().pollScratchpadState().catch((err) => {
         console.debug('Failed to refresh scratchpad on tab switch:', err);
       });
@@ -204,12 +174,10 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
 
   startPolling: () => {
     const store = get();
-    // Clear any existing polling interval
     if (store.pollingInterval) {
       clearInterval(store.pollingInterval);
     }
     
-    // Poll scratchpad every 5 seconds while session is running
     const interval = setInterval(() => {
       const currentStore = get();
       if (currentStore.session?.status === 'running') {
@@ -217,7 +185,6 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
           console.debug('Background poll failed:', err);
         });
       } else {
-        // Stop polling if session is no longer running
         currentStore.stopPolling();
       }
     }, 5000);
@@ -238,31 +205,28 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
   startResearchSession: async (query: string) => {
     const store = get();
 
-    // Clean up any existing SSE connection and polling
     if (store.sseCleanup) {
       store.sseCleanup();
     }
     store.stopPolling();
 
-    // Reset state for new session
     set({
       scratchpad: initialScratchpad,
-      messages: [],
+      activities: [],
       isConnected: false,
     });
 
     try {
-      // Create session via API
       const session = await createSession(query);
       set({ session });
 
-      // Add initial system message
-      store.addMessage({
-        id: `msg-${Date.now()}`,
+      // Add initial activity
+      store.addActivity({
+        id: `activity-${Date.now()}`,
         type: 'system',
-        sender: 'System',
-        content: `Research session started for: "${query}"`,
         timestamp: new Date().toISOString(),
+        actor: 'System',
+        action: `Research session started for: "${query}"`,
       });
 
       // Start SSE streaming
@@ -272,12 +236,13 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
         (error) => {
           console.error('SSE error:', error);
           set({ isConnected: false });
-          get().addMessage({
-            id: `msg-${Date.now()}`,
-            type: 'error',
-            sender: 'System',
-            content: `Connection error: ${error.message}`,
+          get().addActivity({
+            id: `activity-${Date.now()}`,
+            type: 'workflow_error',
             timestamp: new Date().toISOString(),
+            actor: 'System',
+            action: `Connection error: ${error.message}`,
+            success: false,
           });
         },
         () => {
@@ -286,419 +251,382 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
       );
 
       set({ sseCleanup: cleanup, isConnected: true });
-      
-      // Start background polling for scratchpad updates
-      // This ensures we get updates even if SSE events are missed
       store.startPolling();
     } catch (error) {
       console.error('Failed to start research session:', error);
-      store.addMessage({
-        id: `msg-${Date.now()}`,
-        type: 'error',
-        sender: 'System',
-        content: `Failed to start session: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      store.addActivity({
+        id: `activity-${Date.now()}`,
+        type: 'workflow_error',
         timestamp: new Date().toISOString(),
+        actor: 'System',
+        action: `Failed to start session: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        success: false,
       });
     }
   },
 
   handleSSEEvent: (event: SSEEvent) => {
     const store = get();
+    console.log('[STORE] handleSSEEvent called with:', JSON.stringify(event, null, 2));
+    
     const eventType = event.event_type as SSEEventType;
     const data = event.data as Record<string, unknown>;
-    const timestamp = event.timestamp;
+    const timestamp = event.timestamp || new Date().toISOString();
+    
+    console.log(`[STORE] Parsed event: type=${eventType}, timestamp=${timestamp}`);
+    console.log(`[STORE] Event data:`, data);
 
     switch (eventType) {
-      // === Session Lifecycle ===
-      case 'session_started':
-        store.updateSessionStatus('running');
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'orchestrator',
-          sender: 'Orchestrator',
-          content: (data.message as string) || 'Research workflow initialized',
+      // === Workflow Lifecycle ===
+      case 'workflow_started': {
+        // Handle both nested data.operation_id and direct data field
+        const workflowData = (data.data ? data.data : data) as unknown as WorkflowStartedData;
+        console.log('workflow_started: parsed workflowData =', workflowData);
+        set((state) => ({
+          session: state.session 
+            ? { ...state.session, operationId: workflowData.operation_id, status: 'running' }
+            : null,
+        }));
+        store.addActivity({
+          id: `activity-${Date.now()}`,
+          type: 'workflow_start',
           timestamp,
+          actor: 'Orchestrator',
+          action: 'Research workflow initialized',
+          operationId: workflowData.operation_id,
+          details: workflowData.trace_polling_enabled 
+            ? 'Trace polling enabled' 
+            : 'Trace polling disabled',
         });
-        break;
-
-      case 'workflow_completed':
-        store.updateSessionStatus('completed');
-        store.stopPolling();
-        // Final poll to get any remaining updates
-        store.pollScratchpadState().catch(() => {});
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'system',
-          sender: 'System',
-          content: 'Research workflow completed successfully',
-          timestamp,
-        });
-        break;
-
-      case 'workflow_failed':
-        store.updateSessionStatus('failed');
-        store.stopPolling();
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'error',
-          sender: 'System',
-          content: `Workflow failed: ${data.error || 'Unknown error'}`,
-          timestamp,
-        });
-        break;
-
-      // === Agent Events ===
-      case 'agent_started':
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'agent',
-          sender: formatAgentName(data.agent_name as string),
-          content: (data.task_description as string) || 'Starting analysis...',
-          timestamp,
-          metadata: {
-            agentType: data.agent_name as string,
-            status: 'started',
-          },
-        });
-        break;
-
-      case 'agent_progress':
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'agent',
-          sender: formatAgentName(data.agent_name as string),
-          content: data.chunk as string,
-          timestamp,
-          metadata: { agentType: data.agent_name as string },
-        });
-        break;
-
-      case 'agent_thinking':
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'agent',
-          sender: formatAgentName(data.agent_name as string),
-          content: `💭 ${data.message as string}`,
-          timestamp,
-          metadata: { agentType: data.agent_name as string },
-        });
-        break;
-
-      case 'agent_completed':
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'agent',
-          sender: formatAgentName(data.agent_name as string),
-          content: (data.content as string) || (data.result_summary as string) || 'Analysis complete',
-          timestamp,
-          metadata: {
-            agentType: data.agent_name as string,
-            status: 'completed',
-            duration: data.execution_time_ms as number,
-          },
-        });
-        break;
-
-      case 'agent_failed':
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'error',
-          sender: formatAgentName(data.agent_name as string),
-          content: `Agent failed: ${data.error || 'Unknown error'}`,
-          timestamp,
-          metadata: {
-            agentType: data.agent_name as string,
-            status: 'failed',
-          },
-        });
-        break;
-
-      case 'agent_response': {
-        // Subagent returned - show a message with preview of what came back
-        const responsePreview = data.response_preview as string;
-        const agentNameFormatted = formatAgentName(data.agent_name as string);
-        
-        // Build message content with optional preview
-        let messageContent = `📥 Response received (${data.execution_time_ms}ms)`;
-        if (responsePreview && responsePreview.trim()) {
-          // Truncate preview for display in chat (first 150 chars)
-          const shortPreview = responsePreview.length > 150 
-            ? responsePreview.slice(0, 150) + '...' 
-            : responsePreview;
-          messageContent = `📥 Response received (${data.execution_time_ms}ms)\n\n> ${shortPreview}`;
-        }
-        
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'agent',
-          sender: agentNameFormatted,
-          content: messageContent,
-          timestamp,
-          metadata: {
-            agentType: data.agent_name as string,
-            status: 'completed',
-            duration: data.execution_time_ms as number,
-            responsePreview: responsePreview, // Store full preview for potential expansion
-          },
-        });
-        // Note: pollScratchpadState is called automatically after this event
         break;
       }
 
-      // === Tool Events ===
-      case 'tool_call_started': {
-        const toolName = data.tool_name as string;
-        const agentName = data.agent_name as string;
-        const inputArgs = data.input_args as Record<string, unknown> | undefined;
-        
-        // Agent-to-agent tools show the actual message being sent
-        const isAgentTool = ['market_analysis', 'competitor_analysis', 'synthesize_findings'].includes(toolName);
-        
-        if (isAgentTool && inputArgs) {
-          // Extract the query/context being sent to the agent
-          const agentQuery = (inputArgs.query || inputArgs.context || '') as string;
-          const targetAgent = formatAgentName(toolName.replace('_', '-'));
-          
-          // Show the orchestrator sending a message to the specialist agent
-          store.addMessage({
-            id: `msg-${Date.now()}-delegate`,
-            type: 'orchestrator',
-            sender: formatAgentName(agentName),
-            content: `📤 Delegating to ${targetAgent}: "${agentQuery.slice(0, 200)}${agentQuery.length > 200 ? '...' : ''}"`,
-            timestamp,
-            metadata: {
-              toolName,
-              targetAgent,
-              status: 'started',
-            },
-          });
-        } else {
-          store.addMessage({
-            id: `msg-${Date.now()}`,
-            type: 'tool',
-            sender: formatAgentName(agentName),
-            content: `Calling ${toolName}...`,
-            timestamp,
-            metadata: {
-              toolName,
-              status: 'started',
-            },
-          });
+      case 'workflow_completed': {
+        const completedData = data as unknown as WorkflowCompletedData;
+        store.updateSessionStatus('completed');
+        store.stopPolling();
+        store.pollScratchpadState().catch(() => {});
+        store.addActivity({
+          id: `activity-${Date.now()}`,
+          type: 'workflow_complete',
+          timestamp,
+          actor: 'Orchestrator',
+          action: 'Research workflow completed',
+          durationMs: completedData.total_time_ms,
+          success: true,
+          details: completedData.total_tool_calls 
+            ? `${completedData.total_tool_calls} tool calls` 
+            : undefined,
+        });
+        break;
+      }
+
+      case 'workflow_failed': {
+        const failedData = data as unknown as WorkflowFailedData;
+        store.updateSessionStatus('failed');
+        store.stopPolling();
+        store.addActivity({
+          id: `activity-${Date.now()}`,
+          type: 'workflow_error',
+          timestamp,
+          actor: 'System',
+          action: `Workflow failed: ${failedData.error}`,
+          success: false,
+          details: failedData.error_type,
+        });
+        break;
+      }
+
+      // === Trace Events (primary source) ===
+      case 'trace_span_started': {
+        const spanData = data as unknown as TraceSpanStartedData;
+        const activity = parseTraceSpanStarted(spanData, timestamp);
+        if (activity) {
+          store.addActivity(activity);
         }
+        break;
+      }
+
+      case 'trace_span_completed': {
+        const spanData = data as unknown as TraceSpanCompletedData;
+        const activity = parseTraceSpanCompleted(spanData, timestamp);
+        if (activity) {
+          store.addActivity(activity);
+          // Poll scratchpad after agent completes
+          if (activity.type === 'agent_complete') {
+            store.pollScratchpadState().catch(() => {});
+          }
+        }
+        break;
+      }
+
+      case 'trace_tool_call': {
+        const toolData = data as unknown as TraceToolCallData;
+        const activity = parseTraceToolCall(toolData, timestamp);
+        if (activity) {
+          store.addActivity(activity);
+          // Poll scratchpad after scratchpad tools
+          if (isScratchpadTool(toolData.tool_name)) {
+            store.pollScratchpadState().catch(() => {});
+          }
+        }
+        break;
+      }
+
+      // === Keep-Alive ===
+      case 'heartbeat':
+        console.debug('SSE heartbeat received');
+        break;
+
+      // === Error ===
+      case 'error':
+        store.addActivity({
+          id: `activity-${Date.now()}`,
+          type: 'workflow_error',
+          timestamp,
+          actor: 'System',
+          action: (data.error as string) || 'Unknown error',
+          success: false,
+        });
+        break;
+
+      // === Legacy Events (convert to activities as fallback) ===
+      // These are emitted directly by the orchestrator.
+      // We convert them to activities for display.
+      case 'session_started':
+        // Already handled by workflow_started, skip
+        console.debug('Legacy session_started event (skipped - handled by workflow_started)');
+        break;
+
+      case 'agent_started': {
+        const agentData = data as { phase?: string; description?: string; agent_name?: string };
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: 'agent_working',
+          timestamp,
+          actor: formatAgentName(agentData.agent_name) || 'Orchestrator',
+          action: agentData.description || 'Agent started',
+          details: agentData.phase,
+          agentColor: getAgentColor(agentData.agent_name),
+        });
+        break;
+      }
+
+      case 'agent_progress': {
+        const progressData = data as { message?: string; agent_name?: string };
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: 'agent_working',
+          timestamp,
+          actor: formatAgentName(progressData.agent_name),
+          action: progressData.message || 'Processing...',
+          agentColor: getAgentColor(progressData.agent_name),
+        });
+        break;
+      }
+
+      case 'agent_completed': {
+        const completedData = data as { agent_name?: string; summary?: string };
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: 'agent_complete',
+          timestamp,
+          actor: formatAgentName(completedData.agent_name),
+          action: completedData.summary || 'Analysis complete',
+          success: true,
+          agentColor: getAgentColor(completedData.agent_name),
+        });
+        store.pollScratchpadState().catch(() => {});
+        break;
+      }
+
+      case 'agent_response': {
+        const responseData = data as { agent_name?: string; response?: string; response_preview?: string; execution_time_ms?: number };
+        const preview = responseData.response_preview || responseData.response;
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: 'agent_complete',
+          timestamp,
+          actor: formatAgentName(responseData.agent_name),
+          action: 'Response received',
+          success: true,
+          durationMs: responseData.execution_time_ms,
+          preview: preview,  // Store full text, truncation handled in UI
+          agentColor: getAgentColor(responseData.agent_name),
+        });
+        break;
+      }
+
+      case 'tool_call_started': {
+        const toolData = data as { tool_name?: string; agent_name?: string; input_args?: Record<string, unknown> };
+        const toolAction = getToolAction(toolData.tool_name || 'unknown');
+        // Extract a preview from input_args
+        const inputPreview = extractInputPreview(toolData.input_args);
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: toolAction.type,
+          timestamp,
+          actor: formatAgentName(toolData.agent_name),
+          action: `${toolAction.icon} ${toolAction.action}`,
+          target: toolData.tool_name,
+          preview: inputPreview,
+          agentColor: getAgentColor(toolData.agent_name),
+        });
         break;
       }
 
       case 'tool_call_completed': {
-        const toolName = data.tool_name as string;
-        const agentName = data.agent_name as string;
-        const isAgentTool = ['market_analysis', 'competitor_analysis', 'synthesize_findings'].includes(toolName);
-        
-        if (isAgentTool) {
-          // For agent tools, just show a brief completion marker
-          // The agent_response event will have the full preview
-          const targetAgent = formatAgentName(toolName.replace('_', '-'));
-          store.addMessage({
-            id: `msg-${Date.now()}-response`,
-            type: 'agent',
-            sender: targetAgent,
-            content: `✅ Completed (${((data.execution_time_ms as number) / 1000).toFixed(1)}s)`,
-            timestamp,
-            metadata: {
-              toolName,
-              status: 'completed',
-              duration: data.execution_time_ms as number,
-            },
-          });
-        } else {
-          store.addMessage({
-            id: `msg-${Date.now()}`,
-            type: 'tool',
-            sender: formatAgentName(agentName),
-            content: `${toolName} completed (${data.execution_time_ms}ms)`,
-            timestamp,
-            metadata: {
-              toolName,
-              status: 'completed',
-              duration: data.execution_time_ms as number,
-            },
-          });
+        const toolData = data as { 
+          tool_name?: string; 
+          agent_name?: string; 
+          execution_time_ms?: number;
+          output?: string | Array<{ type: string; text: string }>;
+        };
+        const toolAction = getToolAction(toolData.tool_name || 'unknown');
+        const durationSec = toolData.execution_time_ms 
+          ? (toolData.execution_time_ms / 1000).toFixed(1) 
+          : '?';
+        // Extract output preview
+        const outputPreview = extractOutputPreview(toolData.output);
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: toolAction.type,
+          timestamp,
+          actor: formatAgentName(toolData.agent_name),
+          action: `${toolAction.icon} ${toolAction.action} ✓ (${durationSec}s)`,
+          target: toolData.tool_name,
+          durationMs: toolData.execution_time_ms,
+          success: true,
+          preview: outputPreview,
+          agentColor: getAgentColor(toolData.agent_name),
+        });
+        // Poll scratchpad after tool calls
+        if (isScratchpadTool(toolData.tool_name || '')) {
+          store.pollScratchpadState().catch(() => {});
         }
         break;
       }
 
-      case 'tool_call_failed':
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'tool',
-          sender: formatAgentName(data.agent_name as string),
-          content: `${data.tool_name} failed: ${data.error}`,
-          timestamp,
-          metadata: {
-            toolName: data.tool_name as string,
-            status: 'failed',
-          },
-        });
-        break;
-
-      // === Subagent Internal Events (bubbled up from agent-as-tool streaming) ===
-      case 'subagent_tool_started': {
-        const subagentName = data.subagent_name as string;
-        const toolName = data.tool_name as string;
-        const inputPreview = data.input_preview as string | undefined;
-        
-        // Show subagent calling a tool (e.g., writing to scratchpad)
-        let content = `🔧 Calling ${toolName}`;
-        if (inputPreview) {
-          const shortPreview = inputPreview.length > 100 
-            ? inputPreview.slice(0, 100) + '...' 
-            : inputPreview;
-          content = `🔧 Calling ${toolName}: ${shortPreview}`;
+      case 'scratchpad_updated': {
+        const scratchData = data as { 
+          section_name?: string; 
+          operation?: string; 
+          updated_by?: string;
+          tool_type?: string;
+          tasks_created?: number;
+          content_preview?: string;
+        };
+        const section = scratchData.section_name || 'scratchpad';
+        const operation = scratchData.operation || 'updated';
+        let action = `📋 ${section} ${operation}`;
+        if (scratchData.tasks_created) {
+          action = `📋 Created ${scratchData.tasks_created} tasks`;
         }
-        
-        store.addMessage({
-          id: `msg-${Date.now()}-subagent-tool`,
-          type: 'tool',
-          sender: formatAgentName(subagentName),
-          content,
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: 'scratchpad_update',
           timestamp,
-          metadata: {
-            toolName,
-            status: 'started',
-          },
+          actor: formatAgentName(scratchData.updated_by),
+          action,
+          details: scratchData.tool_type,
+          preview: scratchData.content_preview,  // Store full text, truncation handled in UI
+          agentColor: getAgentColor(scratchData.updated_by),
+        });
+        store.pollScratchpadState().catch(() => {});
+        break;
+      }
+
+      case 'synthesis_completed': {
+        const synthData = data as { summary?: string; synthesis?: string };
+        // Store the full synthesis for the Final Report tab
+        if (synthData.synthesis) {
+          store.setFinalReport(synthData.synthesis);
+          // Auto-navigate to Final tab when synthesis is ready
+          store.setActivePanel('final');
+        }
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: 'workflow_complete',
+          timestamp,
+          actor: 'Synthesizer',
+          action: 'Final report ready',
+          success: true,
+          agentColor: getAgentColor('synthesizer'),
+        });
+        store.pollScratchpadState().catch(() => {});
+        break;
+      }
+
+      // === Subagent streaming events (from MAF stream_callback) ===
+      case 'subagent_tool_started': {
+        const subagentData = data as { 
+          subagent_name?: string; 
+          tool_name?: string; 
+          tool_call_id?: string;
+          input_preview?: string;
+        };
+        const toolAction = getToolAction(subagentData.tool_name || 'unknown');
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: toolAction.type,
+          timestamp,
+          actor: formatAgentName(subagentData.subagent_name),
+          action: `${toolAction.icon} ${toolAction.action}`,
+          target: subagentData.tool_name,
+          preview: subagentData.input_preview,
+          agentColor: getAgentColor(subagentData.subagent_name),
         });
         break;
       }
 
       case 'subagent_tool_completed': {
-        const subagentName = data.subagent_name as string;
-        const toolName = data.tool_name as string;
-        
-        store.addMessage({
-          id: `msg-${Date.now()}-subagent-tool-done`,
-          type: 'tool',
-          sender: formatAgentName(subagentName),
-          content: `✓ ${toolName} completed`,
+        const subagentData = data as { 
+          subagent_name?: string; 
+          tool_name?: string; 
+          tool_call_id?: string;
+          output_preview?: string;
+        };
+        const toolAction = getToolAction(subagentData.tool_name || 'unknown');
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: toolAction.type,
           timestamp,
-          metadata: {
-            toolName,
-            status: 'completed',
-          },
+          actor: formatAgentName(subagentData.subagent_name),
+          action: `${toolAction.icon} ${toolAction.action} ✓`,
+          target: subagentData.tool_name,
+          success: true,
+          preview: subagentData.output_preview,
+          agentColor: getAgentColor(subagentData.subagent_name),
         });
-        // Poll scratchpad to get the updated data
-        store.pollScratchpadState().catch(() => {});
+        // Poll scratchpad after subagent tool calls
+        if (isScratchpadTool(subagentData.tool_name || '')) {
+          store.pollScratchpadState().catch(() => {});
+        }
         break;
       }
 
       case 'subagent_progress': {
-        // Streaming text from subagent - could be used for live updates
-        // For now, we'll skip displaying these to avoid too much noise
-        // The agent_response event will have the full response
-        console.debug('Subagent progress:', data.subagent_name, data.text_chunk);
+        const subagentData = data as { 
+          subagent_name?: string; 
+          text_chunk?: string;
+        };
+        // Only emit for substantial chunks to avoid spam
+        if (subagentData.text_chunk && subagentData.text_chunk.length >= 50) {
+          store.addActivity({
+            id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            type: 'agent_working',
+            timestamp,
+            actor: formatAgentName(subagentData.subagent_name),
+            action: 'Processing...',
+            preview: subagentData.text_chunk?.substring(0, 150),
+            agentColor: getAgentColor(subagentData.subagent_name),
+          });
+        }
         break;
       }
 
-      // === Scratchpad Events ===
-      case 'scratchpad_updated':
-        handleScratchpadUpdate(store, data, timestamp);
-        break;
-
-      case 'scratchpad_snapshot':
-        handleScratchpadSnapshot(store, data);
-        break;
-
-      // === Question Events ===
-      case 'question_added':
-        store.addQuestion({
-          id: data.question_id as string,
-          text: data.question as string,
-          context: data.context as string | undefined,
-          askedBy: data.asked_by as string,
-          priority: (data.priority as 'high' | 'medium' | 'low') || 'medium',
-          blocking: (data.blocking as boolean) || false,
-          options: data.options as string[] | undefined,
-          createdAt: timestamp,
-        });
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'orchestrator',
-          sender: formatAgentName(data.asked_by as string),
-          content: `❓ ${data.question as string}`,
-          timestamp,
-        });
-        break;
-
-      case 'question_answered':
-        store.answerQuestion(data.question_id as string, data.answer as string);
-        break;
-
-      // === Synthesis Events ===
-      case 'synthesis_started':
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'orchestrator',
-          sender: 'Synthesizer',
-          content: (data.message as string) || 'Compiling final report...',
-          timestamp,
-          metadata: { agentType: 'synthesizer', status: 'started' },
-        });
-        break;
-
-      case 'synthesis_progress':
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'agent',
-          sender: 'Synthesizer',
-          content: data.chunk as string,
-          timestamp,
-          metadata: { agentType: 'synthesizer' },
-        });
-        break;
-
-      case 'synthesis_completed':
-        store.updateDraftSection({
-          id: 'final-report',
-          title: 'Final Report',
-          content: data.final_report as string,
-          lastUpdatedBy: 'synthesizer',
-          lastUpdatedAt: timestamp,
-          version: 1,
-        });
-        store.addMessage({
-          id: `msg-${Date.now()}`,
-          type: 'agent',
-          sender: 'Synthesizer',
-          content: 'Final report complete',
-          timestamp,
-          metadata: { agentType: 'synthesizer', status: 'completed' },
-        });
-        break;
-
-      // === Keep-Alive ===
-      case 'heartbeat':
-        // Heartbeat event - just confirms connection is alive, no UI update needed
-        console.debug('SSE heartbeat received');
-        break;
-
       default:
-        console.warn(`Unhandled SSE event type: ${eventType}`);
-    }
-
-    // Poll scratchpad after events that may have changed state
-    // (agent and tool events, since subagents write directly to scratchpad)
-    const pollTriggerEvents: SSEEventType[] = [
-      'agent_completed',
-      'agent_response',
-      'tool_call_completed',
-      'synthesis_completed',
-      'workflow_completed',
-      'scratchpad_updated', // Fallback for orchestrator-only updates
-    ];
-    
-    if (pollTriggerEvents.includes(eventType)) {
-      // Poll asynchronously without blocking
-      store.pollScratchpadState().catch((err) => {
-        console.warn('Failed to poll scratchpad:', err);
-      });
+        console.debug(`Unknown SSE event type: ${eventType}`);
     }
   },
 
@@ -713,10 +641,9 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
     try {
       const { plan, notes, draft } = await pollScratchpad(session.sessionId);
 
-      // Update plan/tasks
       if (plan && plan.tasks.length > 0) {
-        const tasks: Task[] = plan.tasks.map((t) => ({
-          id: t.task_id,
+        const tasks: Task[] = plan.tasks.map((t, idx) => ({
+          id: t.task_id || `task-${idx}-${Date.now()}`,
           description: t.description,
           status: t.status as TaskStatus,
           assignedTo: t.assigned_to,
@@ -727,7 +654,6 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
         }));
       }
 
-      // Update notes
       if (notes && notes.notes.length > 0) {
         const notesList: Note[] = notes.notes.map((n) => ({
           id: n.note_id || n.id || `note-${Date.now()}`,
@@ -742,7 +668,6 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
         }));
       }
 
-      // Update draft sections
       if (draft && draft.sections.length > 0) {
         const draftSections: DraftSection[] = draft.sections.map((s) => ({
           id: s.section_id,
@@ -757,7 +682,6 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
         }));
       }
     } catch (error) {
-      // Log but don't fail - scratchpad polling is best-effort
       console.debug('Scratchpad poll error:', error);
     }
   },
@@ -771,9 +695,10 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
     set({
       session: null,
       scratchpad: initialScratchpad,
-      messages: [],
+      activities: [],
+      finalReport: null,
       isConnected: false,
-      activePanel: 'chat',
+      activePanel: 'activity',
       showQuestionModal: false,
       sseCleanup: null,
       pollingInterval: null,
@@ -781,10 +706,12 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
   },
 }));
 
+// === Helper Functions ===
+
 /**
  * Format agent name for display.
  */
-function formatAgentName(agentName: string): string {
+function formatAgentName(agentName: string | undefined): string {
   if (!agentName) return 'Agent';
   return agentName
     .split('-')
@@ -793,198 +720,314 @@ function formatAgentName(agentName: string): string {
 }
 
 /**
- * Handle scratchpad_updated events and update appropriate pillar.
- * Uses tool_type field for reliable routing instead of section name patterns.
+ * Get a consistent color for an agent based on its name.
+ * This ensures the same agent always gets the same color.
  */
-function handleScratchpadUpdate(
-  store: ResearchStore,
-  data: Record<string, unknown>,
+function getAgentColor(agentName: string | undefined): string | undefined {
+  if (!agentName) return undefined;
+  
+  const agentColors: Record<string, string> = {
+    'orchestrator': 'blue',
+    'research-orchestrator': 'blue',
+    'market-analyst': 'purple',
+    'market_analyst': 'purple',
+    'competitor-analyst': 'orange',
+    'competitor_analyst': 'orange',
+    'location-scout': 'cyan',
+    'location_scout': 'cyan',
+    'finance-analyst': 'green',
+    'finance_analyst': 'green',
+    'synthesizer': 'pink',
+  };
+  
+  const lowerName = agentName.toLowerCase();
+  for (const [key, color] of Object.entries(agentColors)) {
+    if (lowerName.includes(key)) {
+      return color;
+    }
+  }
+  
+  // Default: hash the agent name to get consistent color
+  const colors = ['blue', 'purple', 'cyan', 'orange', 'pink', 'yellow', 'green'];
+  const hash = lowerName.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return colors[hash % colors.length];
+}
+
+/**
+ * Check if a tool is a scratchpad tool that updates state.
+ */
+function isScratchpadTool(toolName: string): boolean {
+  const scratchpadTools = [
+    'add_note', 'add_notes',
+    'add_task', 'add_tasks',
+    'update_task',
+    'write_draft_section',
+    'read_plan', 'read_notes', 'read_draft',
+  ];
+  return scratchpadTools.some(t => toolName.toLowerCase().includes(t.toLowerCase()));
+}
+
+/**
+ * Extract a preview string from tool input arguments.
+ */
+function extractInputPreview(inputArgs: Record<string, unknown> | undefined): string | undefined {
+  if (!inputArgs) return undefined;
+  
+  // Common field names that might contain useful preview text
+  const previewFields = ['query', 'search_query', 'content', 'text', 'note', 'description', 'task'];
+  for (const field of previewFields) {
+    const value = inputArgs[field];
+    if (typeof value === 'string' && value.length > 0) {
+      return value.substring(0, 100) + (value.length > 100 ? '...' : '');
+    }
+  }
+  
+  // Try to stringify first non-empty string value
+  for (const value of Object.values(inputArgs)) {
+    if (typeof value === 'string' && value.length > 0) {
+      return value;  // Return full text, truncation handled in UI
+    }
+  }
+  
+  return undefined;
+}
+
+/**
+ * Extract a preview string from tool output.
+ * Returns full text - truncation is handled in the UI component.
+ */
+function extractOutputPreview(output: string | Array<{ type: string; text: string }> | unknown): string | undefined {
+  if (!output) return undefined;
+  
+  // Handle array format (common in Azure AI Agent Service)
+  if (Array.isArray(output)) {
+    const textItem = output.find((item: unknown) => 
+      typeof item === 'object' && item !== null && 'text' in item
+    ) as { text?: string } | undefined;
+    if (textItem?.text) {
+      return textItem.text;  // Return full text
+    }
+  }
+  
+  // Handle string output
+  if (typeof output === 'string') {
+    return output;  // Return full text
+  }
+  
+  // Try to extract from object with common fields
+  if (typeof output === 'object' && output !== null) {
+    const obj = output as Record<string, unknown>;
+    const previewFields = ['result', 'content', 'text', 'summary', 'message'];
+    for (const field of previewFields) {
+      const value = obj[field];
+      if (typeof value === 'string' && value.length > 0) {
+        return value;  // Return full text
+      }
+    }
+  }
+  
+  return undefined;
+}
+
+/**
+ * Get action info for a tool call (used by legacy event handlers).
+ */
+function getToolAction(toolName: string): { action: string; icon: string; type: ActivityType } {
+  const toolActions: Record<string, { action: string; icon: string; type: ActivityType }> = {
+    'add_note': { action: 'Adding research note', icon: '📝', type: 'scratchpad_update' },
+    'add_notes': { action: 'Adding research notes', icon: '📝', type: 'scratchpad_update' },
+    'add_task': { action: 'Adding task to plan', icon: '📋', type: 'scratchpad_update' },
+    'add_tasks': { action: 'Adding tasks to plan', icon: '📋', type: 'scratchpad_update' },
+    'update_task': { action: 'Updating task status', icon: '✅', type: 'scratchpad_update' },
+    'write_draft_section': { action: 'Writing draft section', icon: '📄', type: 'scratchpad_update' },
+    'read_plan': { action: 'Reading research plan', icon: '📋', type: 'tool_call' },
+    'read_notes': { action: 'Reading research notes', icon: '📝', type: 'tool_call' },
+    'read_draft': { action: 'Reading draft', icon: '📄', type: 'tool_call' },
+    'web_search': { action: 'Searching the web', icon: '🔍', type: 'tool_call' },
+    'tavily_search': { action: 'Searching the web', icon: '🔍', type: 'tool_call' },
+    'market_analysis': { action: 'Running market analysis', icon: '📊', type: 'agent_delegation' },
+    'competitor_analysis': { action: 'Running competitor analysis', icon: '🏢', type: 'agent_delegation' },
+    'synthesize_findings': { action: 'Synthesizing findings', icon: '📑', type: 'agent_delegation' },
+  };
+
+  // Find matching tool action
+  const lowerName = toolName.toLowerCase();
+  for (const [key, value] of Object.entries(toolActions)) {
+    if (lowerName.includes(key.toLowerCase())) {
+      return value;
+    }
+  }
+  
+  // Default for unknown tools
+  return { action: `Calling ${toolName}`, icon: '🔧', type: 'tool_call' };
+}
+
+/**
+ * Parse trace_span_started event into an Activity.
+ */
+function parseTraceSpanStarted(
+  data: TraceSpanStartedData,
   timestamp: string
-): void {
-  const sectionName = (data.section_name as string) || '';
-  const updatedBy = data.updated_by as string;
-  const contentPreview = data.content_preview as string;
-  const toolType = data.tool_type as string;
-  const tasksCreated = data.tasks_created as number | undefined;
-  const tasksArray = data.tasks as Array<{
-    description?: string;
-    priority?: string;
-    assigned_to?: string;
-    status?: string;
-    task_id?: string;  // Server-assigned ID from add_tasks output
-  }> | undefined;
+): Activity | null {
+  const spanName = data.span_name;
+  const agentName = data.agent_name;
 
-  // Route based on tool_type (preferred) or section_name (fallback)
-  if (toolType === 'add_tasks' || sectionName === 'plan') {
-    // Handle task additions - prefer full tasks array over parsing contentPreview
-    if (tasksArray && tasksArray.length > 0) {
-      tasksArray.forEach((task, idx) => {
-        store.addTask({
-          // Use server-assigned task_id if available, otherwise generate one
-          id: task.task_id || `task-${Date.now()}-${idx}`,
-          description: task.description || 'Unknown task',
-          status: (task.status as Task['status']) || 'pending',
-          assignedTo: task.assigned_to || updatedBy,
-          createdAt: timestamp,
-        });
-      });
-      store.addMessage({
-        id: `msg-${Date.now()}`,
-        type: 'orchestrator',
-        sender: formatAgentName(updatedBy),
-        content: `📋 Added ${tasksArray.length} task${tasksArray.length > 1 ? 's' : ''} to plan`,
-        timestamp,
-      });
-    } else if (contentPreview) {
-      // Fallback: parse from contentPreview if tasks array not available
-      const taskCount = tasksCreated || 1;
-      store.addMessage({
-        id: `msg-${Date.now()}`,
-        type: 'orchestrator',
-        sender: formatAgentName(updatedBy),
-        content: `📋 Added ${taskCount} task${taskCount > 1 ? 's' : ''} to plan`,
-        timestamp,
-      });
-      const taskDescriptions = contentPreview.split(';').map(t => t.trim()).filter(Boolean);
-      taskDescriptions.forEach((description, idx) => {
-        store.addTask({
-          id: `task-${Date.now()}-${idx}`,
-          description,
-          status: 'pending',
-          assignedTo: updatedBy,
-          createdAt: timestamp,
-        });
-      });
-    }
-  } else if (toolType === 'update_task') {
-    // Handle task status updates
-    const taskUpdate = data.task_update as { task_id?: string; status?: string; assigned_to?: string } | undefined;
-    if (taskUpdate?.task_id) {
-      store.updateTask(taskUpdate.task_id, {
-        status: (taskUpdate.status as Task['status']) || 'pending',
-        ...(taskUpdate.assigned_to && { assignedTo: taskUpdate.assigned_to }),
-      });
-      store.addMessage({
-        id: `msg-${Date.now()}`,
-        type: 'orchestrator',
-        sender: formatAgentName(updatedBy),
-        content: `✅ Task updated: ${taskUpdate.task_id} → ${taskUpdate.status || 'updated'}`,
-        timestamp,
-      });
-    }
-  } else if (toolType === 'add_note' || sectionName === 'notes') {
-    // Handle notes additions
-    if (contentPreview) {
-      store.addNote({
-        id: `note-${Date.now()}`,
-        content: contentPreview,
-        author: updatedBy,
-        timestamp,
-        tags: [],
-      });
-    }
-    store.addMessage({
-      id: `msg-${Date.now()}`,
-      type: 'orchestrator',
-      sender: formatAgentName(updatedBy),
-      content: `📝 Added note`,
-      timestamp,
-    });
-  } else if (toolType === 'write_draft_section' || sectionName) {
-    // Handle draft section updates
-    store.updateDraftSection({
-      id: sectionName,
-      title: formatSectionTitle(sectionName),
-      content: contentPreview || '',
-      lastUpdatedBy: updatedBy,
-      lastUpdatedAt: timestamp,
-      version: 1,
-    });
-    store.addMessage({
-      id: `msg-${Date.now()}`,
-      type: 'orchestrator',
-      sender: formatAgentName(updatedBy),
-      content: `📝 Updated draft: ${formatSectionTitle(sectionName)}`,
-      timestamp,
-    });
+  // Skip internal spans
+  if (spanName.includes('heartbeat') || spanName.includes('health')) {
+    return null;
   }
+
+  // Agent delegation patterns
+  if (spanName.startsWith('delegate_to_')) {
+    const targetAgent = spanName.replace('delegate_to_', '');
+    return {
+      id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      type: 'agent_delegation',
+      timestamp,
+      actor: 'Orchestrator',
+      action: `Delegating to ${formatAgentName(targetAgent)}`,
+      target: targetAgent,
+      operationId: data.operation_id,
+    };
+  }
+
+  // Agent working pattern
+  if (spanName.startsWith('agent.')) {
+    const agent = spanName.replace('agent.', '');
+    return {
+      id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      type: 'agent_working',
+      timestamp,
+      actor: formatAgentName(agent),
+      action: 'Starting analysis...',
+      operationId: data.operation_id,
+    };
+  }
+
+  // Generic span - only show if it has agent context
+  if (agentName) {
+    return {
+      id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      type: 'agent_working',
+      timestamp,
+      actor: formatAgentName(agentName),
+      action: spanName,
+      operationId: data.operation_id,
+    };
+  }
+
+  return null;
 }
 
 /**
- * Handle scratchpad_snapshot events and populate state.
- * Sections with names starting with "note:" or "task:" are routed appropriately.
+ * Parse trace_span_completed event into an Activity.
  */
-function handleScratchpadSnapshot(
-  store: ResearchStore,
-  data: Record<string, unknown>
-): void {
-  const sections = data.sections as Array<{
-    name: string;
-    content: string;
-    updated_by?: string;
-    updated_at?: string;
-  }>;
+function parseTraceSpanCompleted(
+  data: TraceSpanCompletedData,
+  timestamp: string
+): Activity | null {
+  const spanName = data.span_name;
+  const agentName = data.agent_name;
 
-  if (!sections) return;
-
-  const drafts: DraftSection[] = [];
-  const notes: Note[] = [];
-  const tasks: Task[] = [];
-
-  sections.forEach((section) => {
-    if (section.name.startsWith('note:')) {
-      // This is a note
-      notes.push({
-        id: section.name.replace('note:', ''),
-        content: section.content,
-        author: section.updated_by || 'unknown',
-        timestamp: section.updated_at || new Date().toISOString(),
-        tags: [],
-      });
-    } else if (section.name.startsWith('task:')) {
-      // This is a task - parse "[status] description" format
-      const taskId = section.name.replace('task:', '');
-      const match = section.content.match(/^\[(\w+)\]\s*(.*)$/);
-      const status = match ? match[1] : 'pending';
-      const description = match ? match[2] : section.content;
-      tasks.push({
-        id: taskId,
-        description,
-        status: status as Task['status'],
-        assignedTo: section.updated_by,
-        createdAt: section.updated_at || new Date().toISOString(),
-      });
-    } else {
-      // This is a draft section
-      drafts.push({
-        id: section.name,
-        title: formatSectionTitle(section.name),
-        content: section.content,
-        lastUpdatedBy: section.updated_by,
-        lastUpdatedAt: section.updated_at,
-        version: 1,
-      });
-    }
-  });
-
-  if (drafts.length > 0) {
-    store.setDraftSections(drafts);
+  // Skip internal spans
+  if (spanName.includes('heartbeat') || spanName.includes('health')) {
+    return null;
   }
-  if (notes.length > 0) {
-    store.setNotes(notes);
+
+  // Agent completion patterns
+  if (spanName.startsWith('delegate_to_') || spanName.startsWith('agent.')) {
+    const agent = spanName.replace('delegate_to_', '').replace('agent.', '');
+    return {
+      id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      type: 'agent_complete',
+      timestamp,
+      actor: formatAgentName(agent),
+      action: 'Analysis complete',
+      durationMs: data.duration_ms,
+      success: data.success !== false,
+      operationId: data.operation_id,
+    };
   }
-  if (tasks.length > 0) {
-    store.setTasks(tasks);
+
+  // Generic completion with agent context
+  if (agentName) {
+    return {
+      id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      type: 'agent_complete',
+      timestamp,
+      actor: formatAgentName(agentName),
+      action: `Completed: ${spanName}`,
+      durationMs: data.duration_ms,
+      success: data.success !== false,
+      operationId: data.operation_id,
+    };
   }
+
+  return null;
 }
 
 /**
- * Format section name as title.
+ * Parse trace_tool_call event into an Activity.
  */
-function formatSectionTitle(sectionName: string): string {
-  return sectionName
-    .replace(/[-_]/g, ' ')
-    .split(' ')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
+function parseTraceToolCall(
+  data: TraceToolCallData,
+  timestamp: string
+): Activity | null {
+  const toolName = data.tool_name;
+  const agentName = data.agent_name;
+
+  // Map tool names to user-friendly actions
+  const toolActions: Record<string, { action: string; type: ActivityType }> = {
+    'add_note': { action: '📝 Adding research note', type: 'scratchpad_update' },
+    'add_notes': { action: '📝 Adding research notes', type: 'scratchpad_update' },
+    'add_task': { action: '📋 Adding task to plan', type: 'scratchpad_update' },
+    'add_tasks': { action: '📋 Adding tasks to plan', type: 'scratchpad_update' },
+    'update_task': { action: '✅ Updating task status', type: 'scratchpad_update' },
+    'write_draft_section': { action: '📄 Writing draft section', type: 'scratchpad_update' },
+    'read_plan': { action: '📋 Reading research plan', type: 'tool_call' },
+    'read_notes': { action: '📝 Reading research notes', type: 'tool_call' },
+    'read_draft': { action: '📄 Reading draft', type: 'tool_call' },
+    'web_search': { action: '🔍 Searching the web', type: 'tool_call' },
+    'tavily_search': { action: '🔍 Searching the web', type: 'tool_call' },
+  };
+
+  // Find matching tool action
+  let activityInfo = toolActions[toolName.toLowerCase()];
+  
+  // Fallback for unknown tools
+  if (!activityInfo) {
+    // Check for partial matches
+    for (const [key, value] of Object.entries(toolActions)) {
+      if (toolName.toLowerCase().includes(key)) {
+        activityInfo = value;
+        break;
+      }
+    }
+  }
+  
+  // Default for unknown tools
+  if (!activityInfo) {
+    activityInfo = { action: `Calling ${toolName}`, type: 'tool_call' };
+  }
+
+  // Add completion status if we have duration
+  let action = activityInfo.action;
+  if (data.duration_ms !== undefined) {
+    const durationSec = (data.duration_ms / 1000).toFixed(1);
+    const statusIcon = data.success !== false ? '✓' : '✗';
+    action = `${action} ${statusIcon} (${durationSec}s)`;
+  }
+
+  return {
+    id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    type: activityInfo.type,
+    timestamp,
+    actor: formatAgentName(agentName),
+    action,
+    target: toolName,
+    durationMs: data.duration_ms,
+    success: data.success,
+    operationId: data.operation_id,
+    details: data.mcp_server ? `via ${data.mcp_server}` : undefined,
+  };
 }

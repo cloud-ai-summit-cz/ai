@@ -33,6 +33,11 @@ output "log_analytics_workspace_id" {
   value       = azurerm_log_analytics_workspace.main.id
 }
 
+output "log_analytics_workspace_guid" {
+  description = "The GUID of the Log Analytics Workspace (for Azure Monitor Query API)"
+  value       = azurerm_log_analytics_workspace.main.workspace_id
+}
+
 # ============================================================================
 # Azure Container Registry Outputs
 # ============================================================================

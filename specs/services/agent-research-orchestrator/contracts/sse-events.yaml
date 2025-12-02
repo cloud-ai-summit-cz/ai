@@ -1,497 +1,260 @@
-openapi: 3.1.0
-info:
-  title: Research Orchestrator SSE Events
-  description: |
-    Documentation of Server-Sent Events emitted by the Research Orchestrator.
-    These events are consumed by the web-research frontend via the `/research/sessions/{id}/start` endpoint.
-    
-    ## Event Design Philosophy
-    
-    Events are designed for **discrete status updates**, not state synchronization:
-    - SSE events notify the UI that something happened (agent called, tool used, message received)
-    - UI should poll scratchpad state via REST API after each event to get current plan/notes/draft
-    - This separates "what happened" (SSE) from "current state" (REST polling)
-    
-    ## Why Polling for Scratchpad State?
-    
-    Scratchpad updates from subagents are not reliably captured via SSE because:
-    - Subagents run their own tool calls internally (not intercepted by orchestrator)
-    - Only orchestrator's direct tool calls trigger SSE events
-    - Polling ensures UI always has accurate state regardless of which agent made changes
-    
-    ## Typical Event Flow
-    
-    1. `session_started` - Workflow begins → UI polls scratchpad
-    2. `agent_started` - Orchestrator/agent starts
-    3. `tool_call_started` / `tool_call_completed` - Tool invocation (orchestrator only)
-    4. `agent_response` - Subagent returned a message → UI polls scratchpad
-    5. `agent_completed` - Agent finished
-    6. `workflow_completed` - Workflow done → UI polls final scratchpad state
-    
-    ## Scratchpad Polling
-    
-    After receiving any SSE event, UI should call:
-    - `GET /research/sessions/{id}/scratchpad/plan` - Get current tasks with IDs and statuses
-    - `GET /research/sessions/{id}/scratchpad/notes` - Get all notes
-    - `GET /research/sessions/{id}/scratchpad/draft` - Get all draft sections
-    
-  version: 2.0.0
+# SSE Event Contract - Trace-Based Architecture
+# ==============================================
+# All events are derived from Application Insights trace polling.
+# Events are streamed to the frontend via Server-Sent Events (SSE).
 
-components:
-  schemas:
-    # Base event structure
-    SSEEvent:
+---
+# Event Type Enumeration
+event_types:
+  - workflow_started      # Research session initialized
+  - trace_span_started    # Agent or tool span started
+  - trace_span_completed  # Agent or tool span completed
+  - trace_tool_call       # Tool invocation detected
+  - heartbeat             # Keep-alive signal
+  - workflow_completed    # Research workflow finished successfully
+  - workflow_failed       # Research workflow failed
+
+---
+# Event Schemas
+
+workflow_started:
+  description: Emitted when a new research workflow begins
+  payload:
+    session_id:
+      type: string
+      description: Unique identifier for the research session
+      example: "550e8400-e29b-41d4-a716-446655440000"
+    workflow_id:
+      type: string
+      description: Unique identifier for the workflow execution
+      example: "wf_abc123"
+    query:
+      type: string
+      description: The research query being processed
+      example: "Analyze the coffee shop market in Prague"
+    timestamp:
+      type: string
+      format: ISO 8601
+      example: "2025-01-15T10:30:00Z"
+
+trace_span_started:
+  description: Emitted when an agent or operation span begins (from App Insights traces)
+  payload:
+    session_id:
+      type: string
+      description: Research session identifier
+    workflow_id:
+      type: string
+      description: Workflow execution identifier
+    span_id:
+      type: string
+      description: Unique identifier for this span
+      example: "span_xyz789"
+    span_name:
+      type: string
+      description: Name of the span (agent name or operation)
+      example: "MarketAnalyst.run"
+    parent_span_id:
+      type: string
+      nullable: true
+      description: Parent span ID if nested
+    attributes:
       type: object
-      required:
-        - event_type
-        - session_id
-        - timestamp
+      description: Additional span attributes from App Insights
       properties:
-        event_type:
+        gen_ai.system:
           type: string
-          description: Type of the event
-        session_id:
+          example: "az.ai.agents"
+        gen_ai.operation.name:
           type: string
-          format: uuid
-        timestamp:
-          type: string
-          format: date-time
-        data:
-          type: object
-          description: Event-specific payload
+          example: "run"
+    timestamp:
+      type: string
+      format: ISO 8601
 
-    # === Session Lifecycle Events ===
+trace_span_completed:
+  description: Emitted when an agent or operation span completes (from App Insights traces)
+  payload:
+    session_id:
+      type: string
+      description: Research session identifier
+    workflow_id:
+      type: string
+      description: Workflow execution identifier
+    span_id:
+      type: string
+      description: Identifier matching the started span
+    span_name:
+      type: string
+      description: Name of the completed span
+    duration_ms:
+      type: number
+      description: Duration of the span in milliseconds
+      example: 1523
+    status:
+      type: string
+      enum: [success, error]
+      description: Completion status of the span
+    error_message:
+      type: string
+      nullable: true
+      description: Error details if status is error
+    attributes:
+      type: object
+      description: Additional span attributes
+    timestamp:
+      type: string
+      format: ISO 8601
+
+trace_tool_call:
+  description: Emitted when a tool invocation is detected in traces
+  payload:
+    session_id:
+      type: string
+      description: Research session identifier
+    workflow_id:
+      type: string
+      description: Workflow execution identifier
+    span_id:
+      type: string
+      description: Span identifier for the tool call
+    tool_name:
+      type: string
+      description: Name of the tool being called
+      example: "scratchpad_write"
+    tool_input:
+      type: object
+      nullable: true
+      description: Input parameters to the tool (if ENABLE_SENSITIVE_DATA=true)
+    tool_output:
+      type: object
+      nullable: true
+      description: Tool response (if ENABLE_SENSITIVE_DATA=true)
+    duration_ms:
+      type: number
+      nullable: true
+      description: Tool execution duration
+    status:
+      type: string
+      enum: [started, completed, error]
+    timestamp:
+      type: string
+      format: ISO 8601
+
+heartbeat:
+  description: Keep-alive signal sent periodically to maintain SSE connection
+  payload:
+    session_id:
+      type: string
+      description: Research session identifier
+    timestamp:
+      type: string
+      format: ISO 8601
+    polls_completed:
+      type: integer
+      description: Number of App Insights polling cycles completed
+      example: 42
+
+workflow_completed:
+  description: Emitted when the research workflow completes successfully
+  payload:
+    session_id:
+      type: string
+      description: Research session identifier
+    workflow_id:
+      type: string
+      description: Workflow execution identifier
+    duration_ms:
+      type: number
+      description: Total workflow duration in milliseconds
+    final_report:
+      type: object
+      nullable: true
+      description: The synthesized research report (if available)
+    timestamp:
+      type: string
+      format: ISO 8601
+
+workflow_failed:
+  description: Emitted when the research workflow fails
+  payload:
+    session_id:
+      type: string
+      description: Research session identifier
+    workflow_id:
+      type: string
+      nullable: true
+      description: Workflow execution identifier if available
+    error:
+      type: string
+      description: Error message
+    error_type:
+      type: string
+      description: Error classification
+      example: "timeout"
+    duration_ms:
+      type: number
+      nullable: true
+      description: Duration before failure
+    timestamp:
+      type: string
+      format: ISO 8601
+
+---
+# SSE Format Specification
+
+sse_format:
+  description: |
+    Events are sent as Server-Sent Events with the following format:
     
-    SessionStartedEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: session_started
-            data:
-              type: object
-              properties:
-                query:
-                  type: string
-                  description: The research query
-                message:
-                  type: string
-                  example: "Research workflow initialized"
-
-    WorkflowCompletedEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: workflow_completed
-            data:
-              type: object
-              properties:
-                synthesis:
-                  type: string
-                  description: Complete final research report (full content)
-                total_tool_calls:
-                  type: integer
-                  description: Number of tool calls made during workflow
-                agent_call_counts:
-                  type: object
-                  additionalProperties:
-                    type: integer
-                  description: Count of calls per agent tool
-                total_time_ms:
-                  type: integer
-                  description: Total workflow execution time in milliseconds
-
-    WorkflowFailedEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: workflow_failed
-            data:
-              type: object
-              properties:
-                error:
-                  type: string
-                error_type:
-                  type: string
-
-    # === Agent Events ===
-
-    AgentStartedEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: agent_started
-            data:
-              type: object
-              properties:
-                agent_name:
-                  type: string
-                  enum: [market-analyst, competitor-analyst, location-scout, finance-analyst, synthesizer]
-                task_description:
-                  type: string
-
-    AgentProgressEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: agent_progress
-            data:
-              type: object
-              properties:
-                agent_name:
-                  type: string
-                chunk:
-                  type: string
-                  description: Text chunk from agent (deprecated - use agent_completed instead)
-          deprecated: true
-          description: |
-            DEPRECATED: This event type is no longer emitted by the orchestrator.
-            Use `agent_completed` with full content instead.
-            Kept for backwards compatibility documentation only.
-
-    AgentThinkingEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: agent_thinking
-            data:
-              type: object
-              properties:
-                agent_name:
-                  type: string
-                message:
-                  type: string
-                  description: What the agent is thinking about
-
-    AgentCompletedEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: agent_completed
-            data:
-              type: object
-              required:
-                - agent_name
-                - content
-              properties:
-                agent_name:
-                  type: string
-                content:
-                  type: string
-                  description: Full accumulated content from the agent (not streamed)
-                result_summary:
-                  type: string
-                  description: Optional brief summary (deprecated, use content)
-                execution_time_ms:
-                  type: integer
-
-    AgentFailedEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: agent_failed
-            data:
-              type: object
-              properties:
-                agent_name:
-                  type: string
-                error:
-                  type: string
-
-    # === Tool Call Events ===
-
-    ToolCallStartedEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: tool_call_started
-            data:
-              type: object
-              required:
-                - tool_name
-                - tool_call_id
-                - agent_name
-              properties:
-                tool_name:
-                  type: string
-                  description: Name of the MCP tool being called
-                  examples: [web_search, add_note, write_draft_section]
-                tool_call_id:
-                  type: string
-                  description: Unique ID for this invocation
-                agent_name:
-                  type: string
-                input_args:
-                  type: object
-                  description: Arguments passed to the tool
-
-    ToolCallCompletedEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: tool_call_completed
-            data:
-              type: object
-              required:
-                - tool_name
-                - tool_call_id
-                - agent_name
-              properties:
-                tool_name:
-                  type: string
-                tool_call_id:
-                  type: string
-                agent_name:
-                  type: string
-                output:
-                  description: Tool output (type varies by tool)
-                execution_time_ms:
-                  type: integer
-
-    ToolCallFailedEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: tool_call_failed
-            data:
-              type: object
-              properties:
-                tool_name:
-                  type: string
-                tool_call_id:
-                  type: string
-                agent_name:
-                  type: string
-                error:
-                  type: string
-                error_type:
-                  type: string
-
-    # === Agent Response Events ===
+    event: <event_type>
+    data: <json_payload>
     
-    AgentResponseEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: agent_response
-            data:
-              type: object
-              required:
-                - agent_name
-                - response_summary
-              properties:
-                agent_name:
-                  type: string
-                  description: Name of the subagent that responded
-                  enum: [market-analyst, competitor-analyst, location-scout, finance-analyst, synthesizer]
-                response_summary:
-                  type: string
-                  description: Brief summary or status from the agent (not the full analysis - that goes in scratchpad)
-                task_id:
-                  type: string
-                  description: The task ID this agent was working on (if applicable)
-                notes_added:
-                  type: integer
-                  description: Number of notes the agent added to scratchpad
-                draft_sections_written:
-                  type: array
-                  items:
-                    type: string
-                  description: Draft section IDs the agent wrote to
-          description: |
-            Emitted when a subagent completes and returns a response to the orchestrator.
-            This event indicates the UI should poll scratchpad for updated notes/draft.
-            The agent's factual findings are stored in scratchpad, not in this event.
+    Each event is followed by a blank line. The client should parse the 
+    event type and JSON payload accordingly.
+  
+  example: |
+    event: workflow_started
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","workflow_id":"wf_abc123","query":"Analyze coffee shop market","timestamp":"2025-01-15T10:30:00Z"}
+    
+    event: trace_span_started
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","workflow_id":"wf_abc123","span_id":"span_001","span_name":"MarketAnalyst.run","timestamp":"2025-01-15T10:30:01Z"}
+    
+    event: trace_tool_call
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","workflow_id":"wf_abc123","span_id":"span_002","tool_name":"web_search","status":"started","timestamp":"2025-01-15T10:30:02Z"}
+    
+    event: heartbeat
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","timestamp":"2025-01-15T10:30:05Z","polls_completed":3}
 
-    # === Scratchpad Events (DEPRECATED) ===
-    # These events are deprecated in favor of polling.
-    # UI should poll /scratchpad/plan, /scratchpad/notes, /scratchpad/draft after each SSE event.
+---
+# Data Sensitivity
 
-    ScratchpadUpdatedEvent:
-      deprecated: true
-      description: |
-        DEPRECATED: This event is no longer reliably emitted.
-        Scratchpad state should be polled via REST API instead.
-        Subagent tool calls are not intercepted by SSE, making this unreliable.
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: scratchpad_updated
+sensitive_data:
+  description: |
+    When ENABLE_SENSITIVE_DATA=true is set in the orchestrator environment,
+    additional fields are populated in trace events:
+    
+    - trace_tool_call: tool_input and tool_output fields contain actual data
+    - trace_span_completed: may include prompt/response content in attributes
+    
+    When ENABLE_SENSITIVE_DATA=false (default), these fields are omitted
+    to avoid exposing potentially sensitive information in logs and streams.
 
-    ScratchpadSnapshotEvent:
-      deprecated: true
-      description: |
-        DEPRECATED: Use REST API polling instead.
-        Poll /scratchpad/plan, /scratchpad/notes, /scratchpad/draft for current state.
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: scratchpad_snapshot
+---
+# Polling Architecture
 
-    # === Question Events ===
-
-    QuestionAddedEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: question_added
-            data:
-              type: object
-              required:
-                - question_id
-                - question
-                - asked_by
-              properties:
-                question_id:
-                  type: string
-                question:
-                  type: string
-                context:
-                  type: string
-                  description: Why this question is being asked
-                asked_by:
-                  type: string
-                  description: Agent that asked the question
-                priority:
-                  type: string
-                  enum: [high, medium, low]
-                  default: medium
-                blocking:
-                  type: boolean
-                  description: If true, workflow pauses until answered
-                  default: false
-                options:
-                  type: array
-                  items:
-                    type: string
-                  description: Optional multiple choice options
-
-    QuestionAnsweredEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: question_answered
-            data:
-              type: object
-              properties:
-                question_id:
-                  type: string
-                answer:
-                  type: string
-                answered_at:
-                  type: string
-                  format: date-time
-
-    # === Synthesis Events ===
-
-    SynthesisStartedEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: synthesis_started
-            data:
-              type: object
-              properties:
-                message:
-                  type: string
-                  example: "Synthesizer agent compiling final report"
-
-    SynthesisProgressEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: synthesis_progress
-            data:
-              type: object
-              properties:
-                chunk:
-                  type: string
-                  description: Text chunk from synthesizer (deprecated - not emitted)
-          deprecated: true
-          description: |
-            DEPRECATED: This event type is no longer emitted.
-            Synthesis content is delivered via workflow_completed.synthesis field.
-
-    SynthesisCompletedEvent:
-      allOf:
-        - $ref: '#/components/schemas/SSEEvent'
-        - type: object
-          properties:
-            event_type:
-              const: synthesis_completed
-            data:
-              type: object
-              properties:
-                final_report:
-                  type: string
-                  description: Complete synthesized report
-                sections_used:
-                  type: array
-                  items:
-                    type: string
-                  description: Scratchpad sections referenced
-
-  # Event type enum for reference
-  x-event-types:
-    description: All possible SSE event types
-    enum:
-      # Session lifecycle
-      - session_started
-      - workflow_completed
-      - workflow_failed
-      # Agent events
-      - agent_started
-      - agent_progress      # deprecated
-      - agent_thinking
-      - agent_completed
-      - agent_failed
-      - agent_response      # NEW: subagent returned result → poll scratchpad
-      # Tool events (orchestrator only)
-      - tool_call_started
-      - tool_call_completed
-      - tool_call_failed
-      # Scratchpad events (deprecated - use polling)
-      - scratchpad_updated  # deprecated
-      - scratchpad_snapshot # deprecated
-      # Question events
-      - question_added
-      - question_answered
-      # Synthesis events
-      - synthesis_started
-      - synthesis_progress  # deprecated
-      - synthesis_completed
+polling_architecture:
+  description: |
+    The orchestrator polls Azure Application Insights every 2 seconds
+    for new trace data. Traces are processed and converted to SSE events.
+    
+    Trace sources:
+    - Azure AI Agent Service spans (gen_ai.system = "az.ai.agents")
+    - Tool call spans
+    - Custom telemetry from the orchestrator
+    
+    The trace_poller module handles:
+    1. Querying Log Analytics workspace
+    2. Deduplicating spans (by operation_Id + span_id)
+    3. Converting trace records to SSE events
+    4. Managing polling lifecycle

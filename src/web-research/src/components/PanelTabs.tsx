@@ -5,14 +5,15 @@
  */
 
 import { 
-  MessageSquare, 
+  Activity, 
   ListTodo, 
   StickyNote, 
   FileText,
-  HelpCircle
+  HelpCircle,
+  CheckCircle2
 } from 'lucide-react';
 
-type PanelType = 'chat' | 'plan' | 'notes' | 'draft';
+type PanelType = 'activity' | 'plan' | 'notes' | 'draft' | 'final';
 
 interface PanelTabsProps {
   activePanel: PanelType;
@@ -22,6 +23,7 @@ interface PanelTabsProps {
   draftSectionsCount: number;
   completedTasksCount: number;
   totalTasksCount: number;
+  hasFinalReport: boolean;
   onQuestionsClick: () => void;
 }
 
@@ -30,6 +32,7 @@ interface TabConfig {
   label: string;
   icon: React.ReactNode;
   badge?: string | number;
+  highlight?: boolean;
 }
 
 export function PanelTabs({
@@ -40,13 +43,14 @@ export function PanelTabs({
   draftSectionsCount,
   completedTasksCount,
   totalTasksCount,
+  hasFinalReport,
   onQuestionsClick,
 }: PanelTabsProps) {
   const tabs: TabConfig[] = [
     {
-      id: 'chat',
+      id: 'activity',
       label: 'Activity',
-      icon: <MessageSquare className="w-4 h-4" />,
+      icon: <Activity className="w-4 h-4" />,
     },
     {
       id: 'plan',
@@ -66,6 +70,12 @@ export function PanelTabs({
       icon: <FileText className="w-4 h-4" />,
       badge: draftSectionsCount > 0 ? draftSectionsCount : undefined,
     },
+    {
+      id: 'final',
+      label: 'Final Report',
+      icon: <CheckCircle2 className="w-4 h-4" />,
+      highlight: hasFinalReport,
+    },
   ];
 
   return (
@@ -79,7 +89,9 @@ export function PanelTabs({
             transition-colors text-sm font-medium
             ${activePanel === tab.id
               ? 'bg-surface-light text-text'
-              : 'text-text-muted hover:text-text hover:bg-surface-light/50'
+              : tab.highlight
+                ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                : 'text-text-muted hover:text-text hover:bg-surface-light/50'
             }
           `}
         >

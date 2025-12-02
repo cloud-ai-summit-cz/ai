@@ -89,44 +89,50 @@ class SessionListResponse(BaseModel):
     total: int
 
 
-# === SSE Event Models ===
+# === SSE Event Models (Trace-Based Architecture - ADR-005) ===
 
 
 class SSEEventType(str, Enum):
-    """Types of Server-Sent Events."""
-
-    # Session lifecycle
-    SESSION_STARTED = "session_started"
-    WORKFLOW_COMPLETED = "workflow_completed"
-    WORKFLOW_FAILED = "workflow_failed"
+    """Types of Server-Sent Events.
     
-    # Agent events
+    Primary events are derived from Application Insights trace polling (ADR-005).
+    Legacy events are still emitted by orchestrator for backward compatibility
+    but frontend only processes the trace-based events.
+    """
+
+    # Workflow lifecycle (primary)
+    WORKFLOW_STARTED = "workflow_started"       # Research session initialized
+    WORKFLOW_COMPLETED = "workflow_completed"   # Research workflow finished successfully
+    WORKFLOW_FAILED = "workflow_failed"         # Research workflow failed
+    
+    # Trace events from App Insights polling (primary)
+    TRACE_SPAN_STARTED = "trace_span_started"     # Agent/operation span began
+    TRACE_SPAN_COMPLETED = "trace_span_completed" # Agent/operation span ended
+    TRACE_TOOL_CALL = "trace_tool_call"           # MCP tool call detected
+    
+    # Connection management
+    HEARTBEAT = "heartbeat"                       # Keep-alive signal
+    
+    # Legacy events (emitted by orchestrator, not processed by new frontend)
+    SESSION_STARTED = "session_started"
     AGENT_STARTED = "agent_started"
-    AGENT_PROGRESS = "agent_progress"       # Streaming text chunks from agent
-    AGENT_THINKING = "agent_thinking"       # Agent is processing
+    AGENT_PROGRESS = "agent_progress"
+    AGENT_THINKING = "agent_thinking"
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
-    AGENT_RESPONSE = "agent_response"       # Subagent returned result → UI should poll scratchpad
-    
-    # Subagent internal events (bubbled up from agent-as-tool streaming)
-    SUBAGENT_TOOL_STARTED = "subagent_tool_started"   # Subagent started calling a tool
-    SUBAGENT_TOOL_COMPLETED = "subagent_tool_completed"  # Subagent's tool call completed
-    SUBAGENT_PROGRESS = "subagent_progress"   # Subagent streaming text chunk
-    
-    # Tool events (detailed tool invocation tracking)
-    TOOL_CALL_STARTED = "tool_call_started"     # Tool invocation started (with input)
-    TOOL_CALL_COMPLETED = "tool_call_completed" # Tool completed (with output)
-    TOOL_CALL_FAILED = "tool_call_failed"       # Tool failed (with error)
-    
-    # Scratchpad events (DEPRECATED: use polling instead)
-    SCRATCHPAD_UPDATED = "scratchpad_updated"   # DEPRECATED: Section added/modified
-    SCRATCHPAD_SNAPSHOT = "scratchpad_snapshot" # DEPRECATED: Full scratchpad state
-    QUESTION_ADDED = "question_added"           # Human question queued
-    QUESTION_ANSWERED = "question_answered"     # Human answered a question
-    
-    # Synthesis events
+    AGENT_RESPONSE = "agent_response"
+    SUBAGENT_TOOL_STARTED = "subagent_tool_started"
+    SUBAGENT_TOOL_COMPLETED = "subagent_tool_completed"
+    SUBAGENT_PROGRESS = "subagent_progress"
+    TOOL_CALL_STARTED = "tool_call_started"
+    TOOL_CALL_COMPLETED = "tool_call_completed"
+    TOOL_CALL_FAILED = "tool_call_failed"
+    SCRATCHPAD_UPDATED = "scratchpad_updated"
+    SCRATCHPAD_SNAPSHOT = "scratchpad_snapshot"
+    QUESTION_ADDED = "question_added"
+    QUESTION_ANSWERED = "question_answered"
     SYNTHESIS_STARTED = "synthesis_started"
-    SYNTHESIS_PROGRESS = "synthesis_progress"  # Streaming text chunks from synthesizer
+    SYNTHESIS_PROGRESS = "synthesis_progress"
     SYNTHESIS_COMPLETED = "synthesis_completed"
 
 
@@ -143,11 +149,90 @@ class SSEEvent(BaseModel):
         return f"event: {self.event_type.value}\ndata: {self.model_dump_json()}\n\n"
 
 
-# === Tool Call Event Models ===
+# === Trace Event Models (ADR-005: App Insights Polling) ===
+
+
+class TraceSpanStartedData(BaseModel):
+    """Data for TRACE_SPAN_STARTED event (from App Insights polling)."""
+    
+    span_id: str = Field(description="Unique span identifier")
+    span_name: str = Field(description="Name of the span (e.g., 'MarketAnalyst.run')")
+    parent_span_id: str | None = Field(default=None, description="Parent span ID if nested")
+    operation_id: str = Field(description="Trace correlation ID")
+    attributes: dict[str, Any] = Field(default_factory=dict, description="Span attributes")
+    timestamp: str = Field(description="ISO timestamp when span started")
+
+
+class TraceSpanCompletedData(BaseModel):
+    """Data for TRACE_SPAN_COMPLETED event (from App Insights polling)."""
+    
+    span_id: str = Field(description="Unique span identifier")
+    span_name: str = Field(description="Name of the span that completed")
+    operation_id: str = Field(description="Trace correlation ID")
+    duration_ms: int = Field(description="Span duration in milliseconds")
+    status: str = Field(description="Completion status: 'success' or 'error'")
+    error_message: str | None = Field(default=None, description="Error details if failed")
+    attributes: dict[str, Any] = Field(default_factory=dict, description="Span attributes")
+    timestamp: str = Field(description="ISO timestamp when span completed")
+
+
+class TraceToolCallData(BaseModel):
+    """Data for TRACE_TOOL_CALL event (MCP tool call from App Insights)."""
+    
+    span_id: str = Field(description="Unique span identifier")
+    tool_name: str = Field(description="Name of the MCP tool called")
+    tool_input: dict[str, Any] | None = Field(
+        default=None, 
+        description="Tool input (if ENABLE_SENSITIVE_DATA=true)"
+    )
+    tool_output: Any | None = Field(
+        default=None, 
+        description="Tool output (if ENABLE_SENSITIVE_DATA=true)"
+    )
+    operation_id: str = Field(description="Trace correlation ID")
+    duration_ms: int | None = Field(default=None, description="Call duration if completed")
+    status: str = Field(description="Status: 'started', 'completed', or 'error'")
+    timestamp: str = Field(description="ISO timestamp of the call")
+
+
+class WorkflowStartedData(BaseModel):
+    """Data for WORKFLOW_STARTED event."""
+    
+    workflow_id: str = Field(description="Unique workflow execution identifier")
+    query: str = Field(description="The research query being processed")
+
+
+class WorkflowCompletedData(BaseModel):
+    """Data for WORKFLOW_COMPLETED event."""
+    
+    workflow_id: str = Field(description="Workflow execution identifier")
+    duration_ms: int = Field(description="Total workflow duration")
+    final_report: dict[str, Any] | None = Field(
+        default=None, 
+        description="Synthesized research report"
+    )
+
+
+class WorkflowFailedData(BaseModel):
+    """Data for WORKFLOW_FAILED event."""
+    
+    workflow_id: str | None = Field(default=None, description="Workflow identifier if available")
+    error: str = Field(description="Error message")
+    error_type: str = Field(description="Error classification")
+    duration_ms: int | None = Field(default=None, description="Duration before failure")
+
+
+class HeartbeatData(BaseModel):
+    """Data for HEARTBEAT event."""
+    
+    polls_completed: int = Field(description="Number of App Insights polling cycles")
+
+
+# === Internal Models (used by orchestrator, not exposed as SSE events) ===
 
 
 class ToolCallStartedData(BaseModel):
-    """Data for TOOL_CALL_STARTED event."""
+    """Internal: Data for tool call tracking."""
     
     tool_name: str = Field(description="Name of the tool being called")
     tool_call_id: str = Field(description="Unique identifier for this tool invocation")
@@ -159,7 +244,7 @@ class ToolCallStartedData(BaseModel):
 
 
 class ToolCallCompletedData(BaseModel):
-    """Data for TOOL_CALL_COMPLETED event."""
+    """Internal: Data for tool call completion tracking."""
     
     tool_name: str = Field(description="Name of the tool that completed")
     tool_call_id: str = Field(description="Unique identifier for this tool invocation")
@@ -169,7 +254,7 @@ class ToolCallCompletedData(BaseModel):
 
 
 class ToolCallFailedData(BaseModel):
-    """Data for TOOL_CALL_FAILED event."""
+    """Internal: Data for tool call failure tracking."""
     
     tool_name: str = Field(description="Name of the tool that failed")
     tool_call_id: str = Field(description="Unique identifier for this tool invocation")
@@ -178,11 +263,8 @@ class ToolCallFailedData(BaseModel):
     error_type: str | None = Field(default=None, description="Exception type if available")
 
 
-# === Subagent Event Models (bubbled up from agent-as-tool streaming) ===
-
-
 class SubagentToolStartedData(BaseModel):
-    """Data for SUBAGENT_TOOL_STARTED event (when a subagent calls an MCP tool)."""
+    """Internal: Data for subagent tool call tracking."""
     
     subagent_name: str = Field(description="Name of the subagent making the tool call")
     tool_name: str = Field(description="Name of the tool being called")
@@ -194,7 +276,7 @@ class SubagentToolStartedData(BaseModel):
 
 
 class SubagentToolCompletedData(BaseModel):
-    """Data for SUBAGENT_TOOL_COMPLETED event."""
+    """Internal: Data for subagent tool completion tracking."""
     
     subagent_name: str = Field(description="Name of the subagent that made the tool call")
     tool_name: str = Field(description="Name of the tool that completed")
@@ -206,17 +288,14 @@ class SubagentToolCompletedData(BaseModel):
 
 
 class SubagentProgressData(BaseModel):
-    """Data for SUBAGENT_PROGRESS event (streaming text from subagent)."""
+    """Internal: Data for subagent streaming progress."""
     
     subagent_name: str = Field(description="Name of the subagent generating content")
     text_chunk: str = Field(description="Text chunk from the subagent")
 
 
-# === Scratchpad Event Models ===
-
-
 class ScratchpadSection(BaseModel):
-    """A single section in the scratchpad."""
+    """Internal: A single section in the scratchpad."""
     
     name: str = Field(description="Section name/identifier")
     content: str = Field(description="Section content")
@@ -224,36 +303,8 @@ class ScratchpadSection(BaseModel):
     updated_at: datetime | None = Field(default=None, description="Last update timestamp")
 
 
-class ScratchpadUpdatedData(BaseModel):
-    """Data for SCRATCHPAD_UPDATED event."""
-    
-    section_name: str = Field(description="Pillar/section that changed: 'notes', 'plan', or section ID")
-    operation: str = Field(description="Operation: 'created', 'updated', 'appended', 'deleted'")
-    updated_by: str = Field(description="Agent that made the change")
-    content_preview: str | None = Field(
-        default=None,
-        description="First 500 chars of new content"
-    )
-    tool_type: str | None = Field(
-        default=None, 
-        description="MCP tool that triggered this: 'add_note', 'add_tasks', 'write_draft_section', 'update_task'"
-    )
-    tasks_created: int | None = Field(
-        default=None,
-        description="Number of tasks created (for add_tasks only)"
-    )
-    tasks: list[dict] | None = Field(
-        default=None,
-        description="Full task list for add_tasks tool (not truncated)"
-    )
-    task_update: dict | None = Field(
-        default=None,
-        description="Task update details for update_task (task_id, status, assigned_to)"
-    )
-
-
 class ScratchpadSnapshotData(BaseModel):
-    """Data for SCRATCHPAD_SNAPSHOT event (full state after iteration)."""
+    """Internal: Full scratchpad state (for orchestrator use)."""
     
     sections: list[ScratchpadSection] = Field(
         default_factory=list,
@@ -263,19 +314,21 @@ class ScratchpadSnapshotData(BaseModel):
     iteration: int | None = Field(default=None, description="Workflow iteration number")
     triggered_by: str | None = Field(
         default=None, 
-        description="What triggered this snapshot (e.g., 'iteration_complete', 'agent_finished')"
+        description="What triggered this snapshot"
     )
 
 
-class QuestionData(BaseModel):
-    """Data for question-related events."""
+class ScratchpadUpdatedData(BaseModel):
+    """Internal: Data for scratchpad updates (used by orchestrator logging)."""
     
-    question_id: str = Field(description="Unique question identifier")
-    question: str = Field(description="The question text")
-    asked_by: str = Field(description="Agent that asked the question")
-    context: str | None = Field(default=None, description="Why the question was asked")
-    answer: str | None = Field(default=None, description="Human's answer (for answered events)")
-    answered_at: datetime | None = Field(default=None, description="When answered")
+    section_name: str = Field(description="Pillar/section that changed")
+    operation: str = Field(description="Operation: 'created', 'updated', 'appended', 'deleted'")
+    updated_by: str = Field(description="Agent that made the change")
+    content_preview: str | None = Field(default=None, description="First 500 chars of new content")
+    tool_type: str | None = Field(default=None, description="MCP tool that triggered this")
+    tasks_created: int | None = Field(default=None, description="Number of tasks created")
+    tasks: list[dict] | None = Field(default=None, description="Full task list for add_tasks tool")
+    task_update: dict | None = Field(default=None, description="Task update details")
 
 
 # === Health Check Models ===

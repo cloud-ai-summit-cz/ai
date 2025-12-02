@@ -172,7 +172,7 @@ variable "gpt5_capacity" {
     Example: 50
   EOT
   type        = number
-  default     = 500
+  default     = 900
 }
 
 variable "gpt5_mini_capacity" {
@@ -185,7 +185,7 @@ variable "gpt5_mini_capacity" {
     Example: 100
   EOT
   type        = number
-  default     = 500
+  default     = 900
 }
 
 variable "agent_container_cpu" {

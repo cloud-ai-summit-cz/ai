@@ -33,6 +33,8 @@ from agent_framework import ChatAgent, FunctionInvocationContext, MCPStreamableH
 from agent_framework_azure_ai import AzureAIAgentClient
 from azure.identity.aio import DefaultAzureCredential
 
+from telemetry import get_tracer, set_session_context, set_agent_context, set_tool_context
+
 from config import (
     Settings,
     get_settings,
@@ -59,6 +61,7 @@ from models import (
 )
 
 logger = logging.getLogger(__name__)
+tracer = get_tracer(__name__)
 
 
 # === Session-Scoped MCP Tool Wrapper ===
@@ -218,21 +221,41 @@ def create_subagent_stream_callback(
         Async callback function for streaming updates.
     """
     pending_tool_calls: dict[str, str] = {}  # call_id -> tool_name
+    update_count = 0  # Track number of updates received
     
     async def stream_callback(update: Any) -> None:
         """Handle streaming updates from subagent."""
+        nonlocal update_count
+        update_count += 1
+        
+        # Log ALL updates for debugging
+        logger.info(f"[SUBAGENT_STREAM] {subagent_name} update #{update_count}: type={type(update).__name__}")
+        if hasattr(update, "__dict__"):
+            logger.info(f"[SUBAGENT_STREAM] {subagent_name} update attrs: {list(update.__dict__.keys())}")
+        
         # AgentRunResponseUpdate has a .contents list
         if not hasattr(update, "contents") or not update.contents:
+            logger.info(f"[SUBAGENT_STREAM] {subagent_name} update has no contents (or empty)")
+            if hasattr(update, "text"):
+                logger.info(f"[SUBAGENT_STREAM] {subagent_name} update.text: {str(update.text)[:100]}")
             return
         
-        for content in update.contents:
+        logger.info(f"[SUBAGENT_STREAM] {subagent_name} update has {len(update.contents)} content items")
+        
+        for idx, content in enumerate(update.contents):
             content_type = getattr(content, "type", None)
+            logger.info(
+                f"[SUBAGENT_STREAM] {subagent_name} content[{idx}]: type={content_type}, "
+                f"class={type(content).__name__}, has_call_id={hasattr(content, 'call_id')}"
+            )
             
             # Handle tool call started (FunctionCallContent)
             if content_type == "function_call" or hasattr(content, "call_id"):
                 call_id = getattr(content, "call_id", None) or getattr(content, "id", str(uuid4()))
                 tool_name = getattr(content, "name", "unknown_tool")
                 arguments = getattr(content, "arguments", {})
+                
+                logger.info(f"[SUBAGENT_STREAM] {subagent_name} TOOL CALL DETECTED: {tool_name} (call_id={call_id})")
                 
                 # Track this call for matching with result
                 pending_tool_calls[call_id] = tool_name
@@ -265,6 +288,8 @@ def create_subagent_stream_callback(
                 call_id = getattr(content, "call_id", None)
                 result = getattr(content, "result", None)
                 tool_name = pending_tool_calls.pop(call_id, "unknown_tool") if call_id else "unknown_tool"
+                
+                logger.info(f"[SUBAGENT_STREAM] {subagent_name} TOOL RESULT DETECTED: {tool_name} (call_id={call_id})")
                 
                 # Create output preview
                 output_preview = None
@@ -352,6 +377,7 @@ def create_tool_call_middleware(
     event_queue: ToolCallEventQueue,
     call_counts: dict[str, int],
     agent_name: str = "research-orchestrator",
+    session_id: str | None = None,
 ) -> Callable[[FunctionInvocationContext, Callable[[FunctionInvocationContext], Awaitable[None]]], Awaitable[None]]:
     """Create middleware that intercepts tool calls and pushes detailed events to the queue.
     
@@ -360,11 +386,13 @@ def create_tool_call_middleware(
     - Full output results (for SSE streaming)
     - Execution timing
     - Scratchpad-specific events for collaborative workspace tracking
+    - OpenTelemetry spans for trace correlation (ADR-005)
     
     Args:
         event_queue: Queue to push tool call events to.
         call_counts: Shared dict to track call counts per tool.
         agent_name: Name of the agent making the calls.
+        session_id: Optional session ID for span context.
         
     Returns:
         Middleware function for the agent.
@@ -373,7 +401,7 @@ def create_tool_call_middleware(
         context: FunctionInvocationContext,
         next: Callable[[FunctionInvocationContext], Awaitable[None]],
     ) -> None:
-        """Middleware that captures detailed tool call inputs and outputs."""
+        """Middleware that captures detailed tool call inputs and outputs with tracing."""
         function_name = context.function.name
         call_counts[function_name] = call_counts.get(function_name, 0) + 1
         call_number = call_counts[function_name]
@@ -384,90 +412,126 @@ def create_tool_call_middleware(
         if hasattr(context, "arguments") and context.arguments:
             input_args = dict(context.arguments)
         
-        # Emit detailed tool call started event
-        await event_queue.put({
-            "type": "tool_started",
-            "event_data": ToolCallStartedData(
-                tool_name=function_name,
-                tool_call_id=tool_call_id,
-                agent_name=agent_name,
-                input_args=input_args,
-            ),
-            "call_number": call_number,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "is_scratchpad_write": function_name in SCRATCHPAD_WRITE_TOOLS,
-            "is_scratchpad_question": function_name in SCRATCHPAD_QUESTION_TOOLS,
-        })
+        # Create span for this tool call (provides trace correlation in App Insights)
+        # Span name follows gen_ai semantic conventions for tool calls
+        span_name = f"tool.{function_name}"
+        if function_name in AGENT_TOOL_NAMES:
+            span_name = f"agent.{function_name}"  # Distinguish subagent calls
         
-        logger.info(f"Tool call started: {function_name} (call #{call_number}) args={input_args}")
-        start_time = datetime.now(timezone.utc)
-        
-        error_occurred = False
-        error_message = ""
-        error_type = ""
-        
-        try:
-            # Execute the actual tool
-            await next(context)
-        except Exception as e:
-            error_occurred = True
-            error_message = str(e)
-            error_type = type(e).__name__
-            logger.error(f"Tool call failed: {function_name} - {error_message}")
-            raise
-        finally:
-            end_time = datetime.now(timezone.utc)
-            execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
+        with tracer.start_as_current_span(span_name) as span:
+            # Set span attributes for correlation and debugging
+            span.set_attribute("tool.name", function_name)
+            span.set_attribute("tool.call_id", tool_call_id)
+            span.set_attribute("tool.call_number", call_number)
+            span.set_attribute("agent.name", agent_name)
+            if session_id:
+                span.set_attribute("session.id", session_id)
             
-            if error_occurred:
-                # Emit tool call failed event
-                await event_queue.put({
-                    "type": "tool_failed",
-                    "event_data": ToolCallFailedData(
-                        tool_name=function_name,
-                        tool_call_id=tool_call_id,
-                        agent_name=agent_name,
-                        error=error_message,
-                        error_type=error_type,
-                    ),
-                    "call_number": call_number,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+            # Mark subagent invocations distinctly
+            if function_name in AGENT_TOOL_NAMES:
+                span.set_attribute("tool.type", "subagent")
+                # Map tool name to agent name
+                subagent_mapping = {
+                    "market_analysis": "market-analyst",
+                    "competitor_analysis": "competitor-analyst",
+                    "synthesize_findings": "synthesizer",
+                }
+                span.set_attribute("subagent.name", subagent_mapping.get(function_name, function_name))
+            elif function_name in SCRATCHPAD_WRITE_TOOLS:
+                span.set_attribute("tool.type", "scratchpad_write")
+            elif function_name in SCRATCHPAD_READ_TOOLS:
+                span.set_attribute("tool.type", "scratchpad_read")
             else:
-                # Extract full result and ensure it's JSON-serializable
-                output: Any = None
-                if hasattr(context, "result") and context.result is not None:
-                    output = _serialize_tool_output(context.result)
+                span.set_attribute("tool.type", "mcp")
+        
+            # Emit detailed tool call started event
+            await event_queue.put({
+                "type": "tool_started",
+                "event_data": ToolCallStartedData(
+                    tool_name=function_name,
+                    tool_call_id=tool_call_id,
+                    agent_name=agent_name,
+                    input_args=input_args,
+                ),
+                "call_number": call_number,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "is_scratchpad_write": function_name in SCRATCHPAD_WRITE_TOOLS,
+                "is_scratchpad_question": function_name in SCRATCHPAD_QUESTION_TOOLS,
+            })
+            
+            logger.info(f"Tool call started: {function_name} (call #{call_number}) args={input_args}")
+            start_time = datetime.now(timezone.utc)
+            
+            error_occurred = False
+            error_message = ""
+            error_type = ""
+            
+            try:
+                # Execute the actual tool
+                await next(context)
+            except Exception as e:
+                error_occurred = True
+                error_message = str(e)
+                error_type = type(e).__name__
+                span.record_exception(e)
+                span.set_attribute("error", True)
+                span.set_attribute("error.type", error_type)
+                logger.error(f"Tool call failed: {function_name} - {error_message}")
+                raise
+            finally:
+                end_time = datetime.now(timezone.utc)
+                execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
+                span.set_attribute("tool.execution_time_ms", execution_time_ms)
                 
-                # Determine section name based on tool type
-                section_name = None
-                if function_name == "write_draft_section":
-                    section_name = input_args.get("section_id") or "draft"
-                elif function_name == "add_note":
-                    section_name = "notes"  # All notes go to the notes pillar
-                elif function_name in ("add_task", "add_tasks", "update_task"):
-                    section_name = "plan"  # All task operations go to the plan pillar
+                if error_occurred:
+                    # Emit tool call failed event
+                    await event_queue.put({
+                        "type": "tool_failed",
+                        "event_data": ToolCallFailedData(
+                            tool_name=function_name,
+                            tool_call_id=tool_call_id,
+                            agent_name=agent_name,
+                            error=error_message,
+                            error_type=error_type,
+                        ),
+                        "call_number": call_number,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
                 else:
-                    section_name = input_args.get("section_name") or input_args.get("name") or "unknown"
-                
-                # Emit detailed tool call completed event
-                await event_queue.put({
-                    "type": "tool_completed",
-                    "event_data": ToolCallCompletedData(
-                        tool_name=function_name,
-                        tool_call_id=tool_call_id,
-                        agent_name=agent_name,
-                        output=output,
-                        execution_time_ms=execution_time_ms,
-                    ),
-                    "call_number": call_number,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "is_scratchpad_write": function_name in SCRATCHPAD_WRITE_TOOLS,
-                    "section_name": section_name,
-                    "tool_type": function_name,  # Include tool type for frontend routing
-                })
-                
-                logger.info(f"Tool call completed: {function_name} in {execution_time_ms}ms")
+                    # Extract full result and ensure it's JSON-serializable
+                    output: Any = None
+                    if hasattr(context, "result") and context.result is not None:
+                        output = _serialize_tool_output(context.result)
+                    
+                    # Determine section name based on tool type
+                    section_name = None
+                    if function_name == "write_draft_section":
+                        section_name = input_args.get("section_id") or "draft"
+                    elif function_name == "add_note":
+                        section_name = "notes"  # All notes go to the notes pillar
+                    elif function_name in ("add_task", "add_tasks", "update_task"):
+                        section_name = "plan"  # All task operations go to the plan pillar
+                    else:
+                        section_name = input_args.get("section_name") or input_args.get("name") or "unknown"
+                    
+                    # Emit detailed tool call completed event
+                    await event_queue.put({
+                        "type": "tool_completed",
+                        "event_data": ToolCallCompletedData(
+                            tool_name=function_name,
+                            tool_call_id=tool_call_id,
+                            agent_name=agent_name,
+                            output=output,
+                            execution_time_ms=execution_time_ms,
+                        ),
+                        "call_number": call_number,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "is_scratchpad_write": function_name in SCRATCHPAD_WRITE_TOOLS,
+                        "section_name": section_name,
+                        "tool_type": function_name,  # Include tool type for frontend routing
+                    })
+                    
+                    logger.info(f"Tool call completed: {function_name} in {execution_time_ms}ms")
     
     return tool_call_middleware
 
@@ -564,6 +628,7 @@ class AgentOrchestrator:
         self,
         session_id: str,
         caller_agent: str = "orchestrator",
+        use_cache: bool = True,
     ) -> MCPStreamableHTTPTool | None:
         """Get or create a session-scoped MCP tool with session headers.
         
@@ -573,6 +638,8 @@ class AgentOrchestrator:
         Args:
             session_id: The session ID for isolation.
             caller_agent: The agent name for audit logging.
+            use_cache: If True (default), cache and reuse MCP tools for workflow agents.
+                      If False, create a fresh connection (for API proxy calls).
             
         Returns:
             Session-scoped MCP tool, or None if scratchpad not configured.
@@ -583,6 +650,24 @@ class AgentOrchestrator:
         # Create a unique key for this session+agent combination
         cache_key = f"{session_id}:{caller_agent}"
         
+        # For API proxy calls, always create fresh connections
+        # This avoids issues with closed sessions from finished workflows
+        if not use_cache:
+            logger.debug(f"Creating fresh MCP tool for session={session_id}, agent={caller_agent}")
+            session_tool = MCPStreamableHTTPTool(
+                name=f"scratchpad-{session_id[:8]}",
+                url=self.settings.mcp_scratchpad_url,
+                headers={
+                    "Authorization": f"Bearer {self.settings.mcp_scratchpad_api_key}",
+                    "X-Session-ID": session_id,
+                    "X-Caller-Agent": caller_agent,
+                },
+                description="Shared workspace for storing research findings and collaboration between agents",
+            )
+            await session_tool.__aenter__()
+            return session_tool
+        
+        # For workflow agents, use cached tools
         if cache_key not in self._session_mcp_tools:
             logger.info(f"Creating session-scoped MCP tool for session={session_id}, agent={caller_agent}")
             
@@ -602,6 +687,25 @@ class AgentOrchestrator:
             logger.info(f"Session-scoped MCP tool created with {len(session_tool.functions)} tools")
         
         return self._session_mcp_tools[cache_key]
+    
+    async def _cleanup_session_mcp_tools(self, session_id: str) -> None:
+        """Clean up MCP tools for a specific session.
+        
+        Called when a workflow completes or fails to release resources.
+        
+        Args:
+            session_id: The session ID whose MCP tools should be cleaned up.
+        """
+        keys_to_remove = [k for k in self._session_mcp_tools if k.startswith(f"{session_id}:")]
+        
+        for key in keys_to_remove:
+            mcp_tool = self._session_mcp_tools.pop(key, None)
+            if mcp_tool:
+                try:
+                    await mcp_tool.__aexit__(None, None, None)
+                    logger.debug(f"Cleaned up MCP tool: {key}")
+                except Exception as e:
+                    logger.debug(f"Error cleaning up MCP tool {key}: {e}")
 
     async def _get_scratchpad_snapshot_for_session(self, session_id: str) -> ScratchpadSnapshotData | None:
         """Fetch current scratchpad state for a specific session.
@@ -849,45 +953,50 @@ class AgentOrchestrator:
         Raises:
             RuntimeError: If scratchpad not available.
         """
-        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy")
+        # Use use_cache=False for API proxy calls to avoid stale session issues
+        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy", use_cache=False)
         if not mcp_tool:
             raise RuntimeError("MCP Scratchpad not configured")
         
-        # Find read_plan function
-        read_plan_fn = None
-        for fn in mcp_tool.functions:
-            if fn.name == "read_plan":
-                read_plan_fn = fn
-                break
-        
-        if not read_plan_fn:
-            raise RuntimeError("read_plan tool not available")
-        
-        # No session_id parameter - it's in the header
-        result = await read_plan_fn()
-        full_text = self._parse_mcp_result(result)
-        
-        if not full_text:
-            return {"tasks": [], "total_tasks": 0, "tasks_by_status": {}}
-        
         try:
-            data = json.loads(full_text)
-            tasks = data.get("tasks", [])
+            # Find read_plan function
+            read_plan_fn = None
+            for fn in mcp_tool.functions:
+                if fn.name == "read_plan":
+                    read_plan_fn = fn
+                    break
             
-            # Count by status
-            by_status = {"todo": 0, "in-progress": 0, "done": 0, "blocked": 0}
-            for task in tasks:
-                status = task.get("status", "todo")
-                if status in by_status:
-                    by_status[status] += 1
+            if not read_plan_fn:
+                raise RuntimeError("read_plan tool not available")
             
-            return {
-                "tasks": tasks,
-                "total_tasks": len(tasks),
-                "tasks_by_status": by_status,
-            }
-        except json.JSONDecodeError:
-            return {"tasks": [], "total_tasks": 0, "tasks_by_status": {}}
+            # No session_id parameter - it's in the header
+            result = await read_plan_fn()
+            full_text = self._parse_mcp_result(result)
+            
+            if not full_text:
+                return {"tasks": [], "total_tasks": 0, "tasks_by_status": {}}
+            
+            try:
+                data = json.loads(full_text)
+                tasks = data.get("tasks", [])
+                
+                # Count by status
+                by_status = {"todo": 0, "in-progress": 0, "done": 0, "blocked": 0}
+                for task in tasks:
+                    status = task.get("status", "todo")
+                    if status in by_status:
+                        by_status[status] += 1
+                
+                return {
+                    "tasks": tasks,
+                    "total_tasks": len(tasks),
+                    "tasks_by_status": by_status,
+                }
+            except json.JSONDecodeError:
+                return {"tasks": [], "total_tasks": 0, "tasks_by_status": {}}
+        finally:
+            # Close the uncached MCP connection
+            await mcp_tool.__aexit__(None, None, None)
 
     async def get_scratchpad_notes(self, session_id: str) -> dict[str, Any]:
         """Get all research notes.
@@ -903,44 +1012,49 @@ class AgentOrchestrator:
         Raises:
             RuntimeError: If scratchpad not available.
         """
-        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy")
+        # Use use_cache=False for API proxy calls to avoid stale session issues
+        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy", use_cache=False)
         if not mcp_tool:
             raise RuntimeError("MCP Scratchpad not configured")
         
-        # Find read_notes function
-        read_notes_fn = None
-        for fn in mcp_tool.functions:
-            if fn.name == "read_notes":
-                read_notes_fn = fn
-                break
-        
-        if not read_notes_fn:
-            raise RuntimeError("read_notes tool not available")
-        
-        # No session_id parameter - it's in the header
-        result = await read_notes_fn()
-        full_text = self._parse_mcp_result(result)
-        
-        if not full_text:
-            return {"notes": [], "total_notes": 0, "notes_by_author": {}}
-        
         try:
-            data = json.loads(full_text)
-            notes = data.get("notes", [])
+            # Find read_notes function
+            read_notes_fn = None
+            for fn in mcp_tool.functions:
+                if fn.name == "read_notes":
+                    read_notes_fn = fn
+                    break
             
-            # Count by author
-            by_author: dict[str, int] = {}
-            for note in notes:
-                author = note.get("author", "unknown")
-                by_author[author] = by_author.get(author, 0) + 1
+            if not read_notes_fn:
+                raise RuntimeError("read_notes tool not available")
             
-            return {
-                "notes": notes,
-                "total_notes": len(notes),
-                "notes_by_author": by_author,
-            }
-        except json.JSONDecodeError:
-            return {"notes": [], "total_notes": 0, "notes_by_author": {}}
+            # No session_id parameter - it's in the header
+            result = await read_notes_fn()
+            full_text = self._parse_mcp_result(result)
+            
+            if not full_text:
+                return {"notes": [], "total_notes": 0, "notes_by_author": {}}
+            
+            try:
+                data = json.loads(full_text)
+                notes = data.get("notes", [])
+                
+                # Count by author
+                by_author: dict[str, int] = {}
+                for note in notes:
+                    author = note.get("author", "unknown")
+                    by_author[author] = by_author.get(author, 0) + 1
+                
+                return {
+                    "notes": notes,
+                    "total_notes": len(notes),
+                    "notes_by_author": by_author,
+                }
+            except json.JSONDecodeError:
+                return {"notes": [], "total_notes": 0, "notes_by_author": {}}
+        finally:
+            # Close the uncached MCP connection
+            await mcp_tool.__aexit__(None, None, None)
 
     async def get_scratchpad_draft(self, session_id: str) -> dict[str, Any]:
         """Get all draft report sections.
@@ -956,53 +1070,58 @@ class AgentOrchestrator:
         Raises:
             RuntimeError: If scratchpad not available.
         """
-        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy")
+        # Use use_cache=False for API proxy calls to avoid stale session issues
+        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy", use_cache=False)
         if not mcp_tool:
             raise RuntimeError("MCP Scratchpad not configured")
         
-        # Find read_draft function
-        read_draft_fn = None
-        for fn in mcp_tool.functions:
-            if fn.name == "read_draft":
-                read_draft_fn = fn
-                break
-        
-        if not read_draft_fn:
-            raise RuntimeError("read_draft tool not available")
-        
-        # No session_id parameter - it's in the header
-        result = await read_draft_fn()
-        full_text = self._parse_mcp_result(result)
-        
-        if not full_text:
-            return {"sections": [], "total_sections": 0}
-        
         try:
-            data = json.loads(full_text)
-            raw_sections = data.get("sections", {})
+            # Find read_draft function
+            read_draft_fn = None
+            for fn in mcp_tool.functions:
+                if fn.name == "read_draft":
+                    read_draft_fn = fn
+                    break
             
-            # Convert to array format
-            sections = []
-            for section_id, section_data in raw_sections.items():
-                sections.append({
-                    "section_id": section_id,
-                    "title": section_data.get("title", section_id),
-                    "content": section_data.get("content", ""),
-                    "author": section_data.get("author", "unknown"),
-                    "order": section_data.get("order", 0),
-                    "created_at": section_data.get("last_updated"),
-                    "updated_at": section_data.get("last_updated"),
-                })
+            if not read_draft_fn:
+                raise RuntimeError("read_draft tool not available")
             
-            # Sort by order
-            sections.sort(key=lambda s: s.get("order", 0))
+            # No session_id parameter - it's in the header
+            result = await read_draft_fn()
+            full_text = self._parse_mcp_result(result)
             
-            return {
-                "sections": sections,
-                "total_sections": len(sections),
-            }
-        except json.JSONDecodeError:
-            return {"sections": [], "total_sections": 0}
+            if not full_text:
+                return {"sections": [], "total_sections": 0}
+            
+            try:
+                data = json.loads(full_text)
+                raw_sections = data.get("sections", {})
+                
+                # Convert to array format
+                sections = []
+                for section_id, section_data in raw_sections.items():
+                    sections.append({
+                        "section_id": section_id,
+                        "title": section_data.get("title", section_id),
+                        "content": section_data.get("content", ""),
+                        "author": section_data.get("author", "unknown"),
+                        "order": section_data.get("order", 0),
+                        "created_at": section_data.get("last_updated"),
+                        "updated_at": section_data.get("last_updated"),
+                    })
+                
+                # Sort by order
+                sections.sort(key=lambda s: s.get("order", 0))
+                
+                return {
+                    "sections": sections,
+                    "total_sections": len(sections),
+                }
+            except json.JSONDecodeError:
+                return {"sections": [], "total_sections": 0}
+        finally:
+            # Close the uncached MCP connection
+            await mcp_tool.__aexit__(None, None, None)
 
     def _ensure_credential(self) -> DefaultAzureCredential:
         """Ensure credential is initialized."""
@@ -1207,7 +1326,10 @@ class AgentOrchestrator:
             # Create event queue early so we can pass it to subagent stream callbacks
             event_queue = ToolCallEventQueue()
             agent_call_count: dict[str, int] = {}
-            tool_middleware = create_tool_call_middleware(event_queue, agent_call_count)
+            # Pass session_id for span correlation in App Insights (ADR-005)
+            tool_middleware = create_tool_call_middleware(
+                event_queue, agent_call_count, session_id=session_id
+            )
 
             # Convert specialist agents to tools with stream callbacks for visibility
             # The stream_callback captures tool calls made BY the subagent (e.g., MCP scratchpad)
@@ -1597,6 +1719,7 @@ class AgentOrchestrator:
                     "execution_time_ms": execution_time_ms,
                     "tool_calls_made": self._tool_call_log,
                     "agent_call_counts": agent_call_count,
+                    "synthesis": accumulated_content,  # Full synthesis for Final Report tab
                 },
             )
 
@@ -1633,6 +1756,10 @@ class AgentOrchestrator:
             )
         
         finally:
+            # Clean up MCP tools for this session first (before closing agent clients)
+            # This prevents ClosedResourceError when API proxy tries to use stale cached tools
+            await self._cleanup_session_mcp_tools(session_id)
+            
             # Clean up agent clients to prevent unclosed aiohttp sessions
             # NOTE: Some clients may have MCP tools with anyio cancel scopes that were
             # entered in a different task context. We catch and ignore RuntimeError for

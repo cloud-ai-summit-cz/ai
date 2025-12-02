@@ -2,16 +2,18 @@
  * Research Workspace Component
  *
  * Main workspace layout with tabbed panels and live updates.
+ * Updated for trace-based architecture (ADR-005).
  */
 
 import { useResearchStore } from '../store';
 import {
   Header,
   PanelTabs,
-  ChatPanel,
+  ActivityPanel,
   PlanPanel,
   NotesPanel,
   DraftPanel,
+  FinalReportPanel,
   QuestionsPanel,
 } from '../components';
 
@@ -23,7 +25,8 @@ export function Workspace({ onNewSession }: WorkspaceProps) {
   const {
     session,
     scratchpad,
-    messages,
+    activities,
+    finalReport,
     isConnected,
     activePanel,
     setActivePanel,
@@ -34,11 +37,18 @@ export function Workspace({ onNewSession }: WorkspaceProps) {
   } = useResearchStore();
 
   const pendingQuestionsCount = scratchpad.questions.filter(q => !q.answer).length;
-  const completedTasksCount = scratchpad.plan.filter(t => t.status === 'completed').length;
+  const completedTasksCount = scratchpad.plan.filter(t => 
+    t.status === 'completed' || t.status === 'done'
+  ).length;
 
   const handleReset = () => {
     resetState();
     onNewSession?.();
+  };
+
+  // Navigate handler for activity panel links
+  const handleNavigate = (panel: 'plan' | 'notes' | 'draft') => {
+    setActivePanel(panel);
   };
 
   return (
@@ -60,15 +70,22 @@ export function Workspace({ onNewSession }: WorkspaceProps) {
         draftSectionsCount={scratchpad.draft.length}
         completedTasksCount={completedTasksCount}
         totalTasksCount={scratchpad.plan.length}
+        hasFinalReport={finalReport !== null}
         onQuestionsClick={() => setShowQuestionModal(true)}
       />
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden bg-surface">
-        {activePanel === 'chat' && <ChatPanel messages={messages} onNavigate={setActivePanel} />}
+        {activePanel === 'activity' && (
+          <ActivityPanel 
+            activities={activities} 
+            onNavigate={handleNavigate} 
+          />
+        )}
         {activePanel === 'plan' && <PlanPanel tasks={scratchpad.plan} />}
         {activePanel === 'notes' && <NotesPanel notes={scratchpad.notes} />}
         {activePanel === 'draft' && <DraftPanel sections={scratchpad.draft} />}
+        {activePanel === 'final' && <FinalReportPanel content={finalReport} />}
       </main>
 
       {/* Questions Modal */}

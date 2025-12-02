@@ -8,6 +8,10 @@ import sys
 
 import uvicorn
 
+# Configure telemetry FIRST before any other imports that might create spans
+from telemetry import configure_telemetry
+configure_telemetry()
+
 from config import get_settings
 
 
