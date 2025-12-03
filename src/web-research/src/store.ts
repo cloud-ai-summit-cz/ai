@@ -26,6 +26,7 @@ import type {
   WorkflowStartedData,
   WorkflowCompletedData,
   WorkflowFailedData,
+  DemoStateSnapshot,
 } from './types';
 import { createSession, startSession, pollScratchpad } from './api';
 
@@ -68,6 +69,11 @@ interface ResearchStore {
   setActivePanel: (panel: 'activity' | 'plan' | 'notes' | 'draft' | 'final') => void;
   showQuestionModal: boolean;
   setShowQuestionModal: (show: boolean) => void;
+
+  // === Demo Mode ===
+  isDemoMode: boolean;
+  exportDemoState: () => DemoStateSnapshot | null;
+  loadDemoState: (snapshot: DemoStateSnapshot) => void;
 
   // === SSE & Workflow ===
   sseCleanup: (() => void) | null;
@@ -168,6 +174,60 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
   },
   showQuestionModal: false,
   setShowQuestionModal: (show) => set({ showQuestionModal: show }),
+
+  // === Demo Mode ===
+  isDemoMode: false,
+
+  exportDemoState: () => {
+    const state = get();
+    if (!state.session) {
+      console.warn('Cannot export demo state: no active session');
+      return null;
+    }
+    
+    const snapshot: DemoStateSnapshot = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      session: { 
+        ...state.session, 
+        // Mark as completed in the export so it doesn't try to reconnect
+        status: state.session.status === 'running' || state.session.status === 'preparing' 
+          ? 'completed' 
+          : state.session.status 
+      },
+      scratchpad: state.scratchpad,
+      activities: state.activities,
+      finalReport: state.finalReport,
+    };
+    
+    return snapshot;
+  },
+
+  loadDemoState: (snapshot: DemoStateSnapshot) => {
+    const store = get();
+    
+    // Clean up any existing connections
+    if (store.sseCleanup) {
+      store.sseCleanup();
+    }
+    store.stopPolling();
+    
+    // Load the snapshot state
+    set({
+      session: snapshot.session,
+      scratchpad: snapshot.scratchpad,
+      activities: snapshot.activities,
+      finalReport: snapshot.finalReport,
+      isDemoMode: true,
+      isConnected: false,
+      activePanel: 'activity',
+      showQuestionModal: false,
+      sseCleanup: null,
+      pollingInterval: null,
+    });
+    
+    console.info('Demo state loaded successfully');
+  },
 
   // === SSE & Workflow ===
   sseCleanup: null,
@@ -705,6 +765,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
       scratchpad: initialScratchpad,
       activities: [],
       finalReport: null,
+      isDemoMode: false,
       isConnected: false,
       activePanel: 'activity',
       showQuestionModal: false,

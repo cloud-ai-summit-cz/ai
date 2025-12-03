@@ -11,7 +11,9 @@ import {
   RotateCw,
   CheckCircle2,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  Download,
+  PlayCircle
 } from 'lucide-react';
 import type { SessionStatus } from '../types';
 
@@ -19,7 +21,9 @@ interface HeaderProps {
   query?: string;
   status: SessionStatus;
   isConnected: boolean;
+  isDemoMode?: boolean;
   onReset?: () => void;
+  onSaveDemo?: () => void;
 }
 
 function getStatusIndicator(status: SessionStatus) {
@@ -63,7 +67,7 @@ function getStatusIndicator(status: SessionStatus) {
   }
 }
 
-export function Header({ query, status, isConnected, onReset }: HeaderProps) {
+export function Header({ query, status, isConnected, isDemoMode, onReset, onSaveDemo }: HeaderProps) {
   const statusIndicator = getStatusIndicator(status);
   
   return (
@@ -83,6 +87,17 @@ export function Header({ query, status, isConnected, onReset }: HeaderProps) {
             </span>
           </>
         )}
+
+        {/* Demo Mode Badge */}
+        {isDemoMode && (
+          <>
+            <div className="w-px h-6 bg-border" />
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-purple-500/20 border border-purple-500/30">
+              <PlayCircle className="w-3.5 h-3.5 text-purple-400" />
+              <span className="text-xs text-purple-300 font-medium">Demo Mode</span>
+            </div>
+          </>
+        )}
       </div>
       
       {/* Right: Status & Actions */}
@@ -95,15 +110,29 @@ export function Header({ query, status, isConnected, onReset }: HeaderProps) {
           </div>
         )}
         
-        {/* Connection Status */}
-        <div className={`flex items-center gap-1.5 ${isConnected ? 'text-green-400' : 'text-red-400'}`}>
-          {isConnected ? (
-            <Wifi className="w-4 h-4" />
-          ) : (
-            <WifiOff className="w-4 h-4" />
-          )}
-          <span className="text-xs">{isConnected ? 'Connected' : 'Disconnected'}</span>
-        </div>
+        {/* Connection Status (hide in demo mode) */}
+        {!isDemoMode && (
+          <div className={`flex items-center gap-1.5 ${isConnected ? 'text-green-400' : 'text-red-400'}`}>
+            {isConnected ? (
+              <Wifi className="w-4 h-4" />
+            ) : (
+              <WifiOff className="w-4 h-4" />
+            )}
+            <span className="text-xs">{isConnected ? 'Connected' : 'Disconnected'}</span>
+          </div>
+        )}
+        
+        {/* Save Demo Button (show when there's an active session, not in demo mode) */}
+        {onSaveDemo && !isDemoMode && (
+          <button
+            onClick={onSaveDemo}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent/20 hover:bg-accent/30 border border-accent/30 transition-colors text-accent text-sm"
+            title="Save current state for demo"
+          >
+            <Download className="w-4 h-4" />
+            <span>Save Demo</span>
+          </button>
+        )}
         
         {/* Reset Button */}
         {onReset && (

@@ -8,9 +8,10 @@ import { useState } from 'react';
 import { useResearchStore } from './store';
 import { QueryInput } from './components';
 import { Workspace } from './views';
+import type { DemoStateSnapshot } from './types';
 
 function App() {
-  const { session, startResearchSession, resetState } = useResearchStore();
+  const { session, startResearchSession, resetState, loadDemoState } = useResearchStore();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,6 +31,11 @@ function App() {
     }
   };
 
+  const handleLoadDemo = (snapshot: DemoStateSnapshot) => {
+    setError(null);
+    loadDemoState(snapshot);
+  };
+
   const handleNewSession = () => {
     resetState();
     setError(null);
@@ -40,7 +46,12 @@ function App() {
       {showWorkspace ? (
         <Workspace onNewSession={handleNewSession} />
       ) : (
-        <QueryInput onSubmit={handleQuerySubmit} isLoading={isLoading} error={error} />
+        <QueryInput 
+          onSubmit={handleQuerySubmit} 
+          onLoadDemo={handleLoadDemo}
+          isLoading={isLoading} 
+          error={error} 
+        />
       )}
     </div>
   );

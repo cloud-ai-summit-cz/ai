@@ -239,3 +239,18 @@ export interface AppState {
   activePanel: 'activity' | 'plan' | 'notes' | 'draft' | 'final';
   showQuestionModal: boolean;
 }
+
+// === Demo State Snapshot ===
+
+/**
+ * Serializable snapshot of the application state for demo purposes.
+ * Used to save/load a complete research session state.
+ */
+export interface DemoStateSnapshot {
+  version: number;
+  exportedAt: string;
+  session: ResearchSession;
+  scratchpad: ScratchpadState;
+  activities: Activity[];
+  finalReport: string | null;
+}

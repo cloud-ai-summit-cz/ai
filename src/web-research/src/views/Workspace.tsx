@@ -28,12 +28,14 @@ export function Workspace({ onNewSession }: WorkspaceProps) {
     activities,
     finalReport,
     isConnected,
+    isDemoMode,
     activePanel,
     setActivePanel,
     showQuestionModal,
     setShowQuestionModal,
     answerQuestion,
     resetState,
+    exportDemoState,
   } = useResearchStore();
 
   const pendingQuestionsCount = scratchpad.questions.filter(q => !q.answer).length;
@@ -51,6 +53,27 @@ export function Workspace({ onNewSession }: WorkspaceProps) {
     setActivePanel(panel);
   };
 
+  // Save demo state handler
+  const handleSaveDemo = () => {
+    const snapshot = exportDemoState();
+    if (!snapshot) {
+      alert('Cannot save demo state: no active session');
+      return;
+    }
+    
+    // Create and download JSON file
+    const json = JSON.stringify(snapshot, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cofilot-demo-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="flex flex-col h-screen bg-surface-dark">
       {/* Header */}
@@ -58,7 +81,9 @@ export function Workspace({ onNewSession }: WorkspaceProps) {
         query={session?.query}
         status={session?.status || 'idle'}
         isConnected={isConnected}
+        isDemoMode={isDemoMode}
         onReset={handleReset}
+        onSaveDemo={handleSaveDemo}
       />
 
       {/* Tab Navigation */}
