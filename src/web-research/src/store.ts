@@ -1,8 +1,9 @@
 /**
  * Zustand store for application state management.
  *
- * Simplified for trace-based architecture (ADR-005).
- * All agent activity is captured via App Insights trace polling.
+ * ADR-007: UI events are generated directly by the orchestrator middleware,
+ * providing real-time updates. OpenTelemetry traces still flow to App Insights
+ * for observability, but are not used for UI events.
  */
 
 import { create } from 'zustand';
@@ -142,7 +143,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
   // === Activity State ===
   activities: [],
   addActivity: (activity) => {
-    console.log('[STORE] Adding activity:', activity);
+    console.debug('[STORE] Activity:', activity.type, activity.action?.slice(0, 50));
     set((state) => ({
       activities: [...state.activities, activity],
     }));
@@ -190,7 +191,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
     }, 5000);
     
     set({ pollingInterval: interval });
-    console.log('Started background scratchpad polling (5s interval)');
+    console.debug('Started background scratchpad polling (5s interval)');
   },
 
   stopPolling: () => {
@@ -198,7 +199,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
     if (store.pollingInterval) {
       clearInterval(store.pollingInterval);
       set({ pollingInterval: null });
-      console.log('Stopped background scratchpad polling');
+      console.debug('Stopped background scratchpad polling');
     }
   },
 
@@ -267,24 +268,27 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
 
   handleSSEEvent: (event: SSEEvent) => {
     const store = get();
-    console.log('[STORE] handleSSEEvent called with:', JSON.stringify(event, null, 2));
-    
     const eventType = event.event_type as SSEEventType;
     const data = event.data as Record<string, unknown>;
     const timestamp = event.timestamp || new Date().toISOString();
     
-    console.log(`[STORE] Parsed event: type=${eventType}, timestamp=${timestamp}`);
-    console.log(`[STORE] Event data:`, data);
+    // Concise logging - just event type and key identifiers
+    const logSummary: Record<string, unknown> = { type: eventType };
+    if (data.section_name) logSummary.section = data.section_name;
+    if (data.operation) logSummary.op = data.operation;
+    if (data.tasks_created) logSummary.tasks = data.tasks_created;
+    if (data.span_name) logSummary.span = data.span_name;
+    console.debug('[STORE] SSE:', logSummary);
 
     switch (eventType) {
       // === Workflow Lifecycle ===
       case 'workflow_started': {
         // Handle both nested data.operation_id and direct data field
         const workflowData = (data.data ? data.data : data) as unknown as WorkflowStartedData;
-        console.log('workflow_started: parsed workflowData =', workflowData);
+        // Set to 'preparing' initially - will change to 'running' when orchestration starts
         set((state) => ({
           session: state.session 
-            ? { ...state.session, operationId: workflowData.operation_id, status: 'running' }
+            ? { ...state.session, operationId: workflowData.operation_id, status: 'preparing' }
             : null,
         }));
         store.addActivity({
@@ -400,6 +404,10 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
 
       case 'agent_started': {
         const agentData = data as { phase?: string; description?: string; agent_name?: string };
+        // Transition from 'preparing' to 'running' when orchestration phase begins
+        if (agentData.phase === 'orchestration') {
+          store.updateSessionStatus('running');
+        }
         store.addActivity({
           id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           type: 'agent_working',

@@ -137,37 +137,38 @@ export function startSession(
     'synthesis_completed',
   ];
 
-  console.log(`[SSE] Connecting to: ${url}`);
-  console.log(`[SSE] Registered event types: ${eventTypes.join(', ')}`);
+  console.debug(`[SSE] Connecting to: ${url}`);
   
   eventTypes.forEach((eventType) => {
     eventSource.addEventListener(eventType, (e: MessageEvent) => {
-      console.log(`[SSE] RAW EVENT received: type=${eventType}, data.length=${e.data?.length}`);
-      console.log(`[SSE] RAW DATA: ${e.data?.substring(0, 500)}...`);
-      
       // Handle the 'error' event type specially - it may have undefined data
       // when the server closes the connection after workflow_failed
       if (eventType === 'error') {
         if (!e.data) {
-          console.log('[SSE] Error event with no data - likely server connection closed after workflow ended');
           return; // Ignore error events with no data
         }
       }
       
       try {
         const data = JSON.parse(e.data);
-        console.log(`[SSE] PARSED EVENT: type=${eventType}`, data);
+        
+        // Log SSE events concisely - event type only
+        // Enable verbose logging for specific event types as needed for troubleshooting
+        const verboseEventTypes: string[] = []; // Add event types here for detailed logging, e.g., ['tool_call_started']
+        if (verboseEventTypes.includes(eventType)) {
+          console.debug(`[SSE] ${eventType}:`, data);
+        } else {
+          console.debug(`[SSE] ${eventType}`);
+        }
         
         // Check for terminal events
         if (eventType === 'workflow_completed' || eventType === 'workflow_failed') {
-          console.log(`[SSE] Terminal event received: ${eventType}`);
           workflowEnded = true;
         }
         
         onEvent(data as SSEEvent);
       } catch (err) {
-        console.error(`[SSE] Failed to parse event ${eventType}:`, err);
-        console.error(`[SSE] Raw data was:`, e.data);
+        console.error(`[SSE] Failed to parse ${eventType}:`, err);
       }
     });
   });

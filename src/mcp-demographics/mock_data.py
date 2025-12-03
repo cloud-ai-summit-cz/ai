@@ -46,6 +46,9 @@ CITY_DATA = {
         "unemployment": 8.5,
         "disposable_income": 28_000,
         "country": "austria",
+        "coffee_culture": "traditional_strong",  # Strong café tradition, kaffeehauskultur
+        "specialty_coffee_adoption": 0.35,  # 35% of coffee drinkers tried specialty
+        "avg_coffee_spend_month": 85,  # EUR per capita monthly on coffee out-of-home
     },
     "prague": {
         "population": 1_350_000,
@@ -58,6 +61,9 @@ CITY_DATA = {
         "unemployment": 2.5,
         "disposable_income": 15_000,
         "country": "czech",
+        "coffee_culture": "emerging_specialty",
+        "specialty_coffee_adoption": 0.45,
+        "avg_coffee_spend_month": 45,
     },
     "munich": {
         "population": 1_490_000,
@@ -70,6 +76,9 @@ CITY_DATA = {
         "unemployment": 3.2,
         "disposable_income": 35_000,
         "country": "germany",
+        "coffee_culture": "premium_mainstream",
+        "specialty_coffee_adoption": 0.30,
+        "avg_coffee_spend_month": 95,
     },
     "salzburg": {
         "population": 155_000,
@@ -82,38 +91,59 @@ CITY_DATA = {
         "unemployment": 4.5,
         "disposable_income": 26_000,
         "country": "austria",
+        "coffee_culture": "traditional_tourism",
+        "specialty_coffee_adoption": 0.20,
+        "avg_coffee_spend_month": 70,
     },
     "brno": {
         "population": 382_000,
         "density": 1_650,
-        "growth_rate": 0.9,
-        "median_age": 41.5,
+        "growth_rate": 1.4,  # Growing tech hub
+        "median_age": 38.5,  # Younger due to universities
         "median_income": 20_000,
         "mean_income": 24_000,
         "ppi": 88,
-        "unemployment": 3.1,
+        "unemployment": 2.8,  # Lower than national average
         "disposable_income": 13_500,
         "country": "czech",
+        "coffee_culture": "emerging_specialty",  # Strong third-wave movement
+        "specialty_coffee_adoption": 0.52,  # Higher than Prague per capita
+        "avg_coffee_spend_month": 38,  # Lower absolute but high relative to income
+        "student_population": 65_000,  # 5 universities
+        "tech_workers": 28_000,  # Growing IT sector
+        "expat_population": 15_000,  # International community
     },
 }
 
 DISTRICT_MODIFIERS = {
-    # Vienna districts
-    "innere stadt": {"income_mult": 1.5, "density_mult": 1.2, "foot_traffic_mult": 3.0, "tourist_heavy": True},
-    "mariahilf": {"income_mult": 1.2, "density_mult": 1.3, "foot_traffic_mult": 2.5, "shopping": True},
-    "neubau": {"income_mult": 1.25, "density_mult": 1.2, "foot_traffic_mult": 2.0, "hipster": True},
-    "leopoldstadt": {"income_mult": 1.0, "density_mult": 1.4, "foot_traffic_mult": 1.8, "diverse": True},
-    "favoriten": {"income_mult": 0.8, "density_mult": 1.5, "foot_traffic_mult": 1.5, "working_class": True},
+    # Vienna districts - detailed for Cofilot expansion research
+    "innere stadt": {"income_mult": 1.5, "density_mult": 1.2, "foot_traffic_mult": 3.0, "tourist_heavy": True, "rent_index": 2.5},
+    "mariahilf": {"income_mult": 1.2, "density_mult": 1.3, "foot_traffic_mult": 2.5, "shopping": True, "hipster": True, "rent_index": 1.8},
+    "neubau": {"income_mult": 1.25, "density_mult": 1.2, "foot_traffic_mult": 2.0, "hipster": True, "creative_class": True, "rent_index": 1.9},
+    "leopoldstadt": {"income_mult": 1.0, "density_mult": 1.4, "foot_traffic_mult": 1.8, "diverse": True, "gentrifying": True, "rent_index": 1.4},
+    "favoriten": {"income_mult": 0.8, "density_mult": 1.5, "foot_traffic_mult": 1.5, "working_class": True, "rent_index": 0.9},
+    "josefstadt": {"income_mult": 1.3, "density_mult": 1.2, "foot_traffic_mult": 1.6, "upscale": True, "residential": True, "rent_index": 1.7},
+    "wieden": {"income_mult": 1.15, "density_mult": 1.25, "foot_traffic_mult": 1.7, "mixed": True, "university": True, "rent_index": 1.5},
+    "alsergrund": {"income_mult": 1.2, "density_mult": 1.3, "foot_traffic_mult": 1.9, "university": True, "medical_hub": True, "rent_index": 1.6},
     # Prague districts
-    "prague 1": {"income_mult": 1.4, "density_mult": 1.0, "foot_traffic_mult": 4.0, "tourist_heavy": True},
-    "prague 2": {"income_mult": 1.3, "density_mult": 1.2, "foot_traffic_mult": 2.0, "residential": True},
-    "vinohrady": {"income_mult": 1.35, "density_mult": 1.1, "foot_traffic_mult": 1.8, "upscale": True},
-    "žižkov": {"income_mult": 0.9, "density_mult": 1.4, "foot_traffic_mult": 1.5, "hipster": True},
-    "karlín": {"income_mult": 1.25, "density_mult": 1.3, "foot_traffic_mult": 2.2, "tech_hub": True},
+    "prague 1": {"income_mult": 1.4, "density_mult": 1.0, "foot_traffic_mult": 4.0, "tourist_heavy": True, "rent_index": 3.0},
+    "prague 2": {"income_mult": 1.3, "density_mult": 1.2, "foot_traffic_mult": 2.0, "residential": True, "rent_index": 2.2},
+    "vinohrady": {"income_mult": 1.35, "density_mult": 1.1, "foot_traffic_mult": 1.8, "upscale": True, "expat_hub": True, "rent_index": 2.0},
+    "žižkov": {"income_mult": 0.9, "density_mult": 1.4, "foot_traffic_mult": 1.5, "hipster": True, "gentrifying": True, "rent_index": 1.3},
+    "karlín": {"income_mult": 1.25, "density_mult": 1.3, "foot_traffic_mult": 2.2, "tech_hub": True, "new_development": True, "rent_index": 1.8},
+    "holešovice": {"income_mult": 1.1, "density_mult": 1.2, "foot_traffic_mult": 1.7, "creative_class": True, "galleries": True, "rent_index": 1.5},
+    # Brno districts - key for Cofilot expansion analysis
+    "brno-střed": {"income_mult": 1.3, "density_mult": 1.4, "foot_traffic_mult": 2.8, "city_center": True, "tourist_moderate": True, "rent_index": 1.8},
+    "veveří": {"income_mult": 1.25, "density_mult": 1.3, "foot_traffic_mult": 2.2, "university": True, "student_hub": True, "tech_adjacent": True, "rent_index": 1.5},
+    "královo pole": {"income_mult": 1.2, "density_mult": 1.2, "foot_traffic_mult": 1.8, "tech_hub": True, "university": True, "rent_index": 1.4},
+    "židenice": {"income_mult": 0.95, "density_mult": 1.3, "foot_traffic_mult": 1.4, "residential": True, "gentrifying": True, "rent_index": 1.1},
+    "černá pole": {"income_mult": 1.15, "density_mult": 1.1, "foot_traffic_mult": 1.5, "residential": True, "upscale": True, "rent_index": 1.3},
+    "lesná": {"income_mult": 1.0, "density_mult": 1.4, "foot_traffic_mult": 1.2, "residential": True, "family_oriented": True, "rent_index": 1.0},
+    "staré brno": {"income_mult": 1.1, "density_mult": 1.2, "foot_traffic_mult": 1.6, "historic": True, "student_hub": True, "rent_index": 1.2},
     # Munich districts
-    "altstadt": {"income_mult": 1.6, "density_mult": 1.1, "foot_traffic_mult": 3.5, "tourist_heavy": True},
-    "maxvorstadt": {"income_mult": 1.3, "density_mult": 1.3, "foot_traffic_mult": 2.5, "university": True},
-    "schwabing": {"income_mult": 1.4, "density_mult": 1.2, "foot_traffic_mult": 2.0, "upscale": True},
+    "altstadt": {"income_mult": 1.6, "density_mult": 1.1, "foot_traffic_mult": 3.5, "tourist_heavy": True, "rent_index": 3.0},
+    "maxvorstadt": {"income_mult": 1.3, "density_mult": 1.3, "foot_traffic_mult": 2.5, "university": True, "museum_district": True, "rent_index": 2.0},
+    "schwabing": {"income_mult": 1.4, "density_mult": 1.2, "foot_traffic_mult": 2.0, "upscale": True, "creative_class": True, "rent_index": 2.2},
 }
 
 # Lifestyle segments common across cities

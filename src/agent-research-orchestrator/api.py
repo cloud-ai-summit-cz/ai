@@ -2,15 +2,78 @@
 
 Exposes REST endpoints and SSE streaming for the research workflow.
 
-Includes App Insights trace polling (ADR-005) for real-time visibility
-into subagent tool calls that can't be captured via MAF stream_callback.
+ADR-007: UI events are generated directly by the orchestrator middleware,
+providing real-time updates without the 2-5 second latency from App Insights polling.
+OpenTelemetry traces still flow to App Insights for observability dashboards.
 """
 
 import asyncio
 import logging
+import re
+import sys
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
 
+
+# === Logging Configuration ===
+# MUST be configured BEFORE importing other modules so their loggers work correctly
+
+# Pattern for noisy polling endpoints we want to suppress at INFO level
+SCRATCHPAD_POLL_PATTERN = re.compile(
+    r'/research/sessions/[a-f0-9-]+/scratchpad/(plan|notes|draft)'
+)
+
+
+class SuppressScratchpadPollingFilter(logging.Filter):
+    """Filter to suppress frequent scratchpad polling access logs."""
+    
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return False to suppress, True to allow the log record."""
+        message = record.getMessage()
+        if SCRATCHPAD_POLL_PATTERN.search(message):
+            return record.levelno > logging.INFO
+        return True
+
+
+def _configure_logging() -> None:
+    """Configure logging for the API worker process.
+    
+    This runs when api.py is imported by uvicorn, ensuring logging
+    is properly configured in the worker process (not just the parent).
+    """
+    # Force reconfigure logging (override any existing config)
+    root_logger = logging.getLogger()
+    
+    # Clear any existing handlers
+    root_logger.handlers.clear()
+    
+    # Configure with proper format and stdout handler
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+        force=True,  # Override any existing configuration
+    )
+    
+    # Quiet down Azure SDKs, HTTP clients, and framework internals
+    for name in [
+        "azure", "azure.core", "azure.identity", "azure.ai", "azure.monitor",
+        "httpx", "mcp.client.streamable_http", "agent_framework",
+    ]:
+        logging.getLogger(name).setLevel(logging.WARNING)
+    
+    # Add filter to suppress scratchpad polling access logs
+    uvicorn_access_logger = logging.getLogger("uvicorn.access")
+    # Avoid adding duplicate filters
+    if not any(isinstance(f, SuppressScratchpadPollingFilter) for f in uvicorn_access_logger.filters):
+        uvicorn_access_logger.addFilter(SuppressScratchpadPollingFilter())
+
+
+# Configure logging FIRST - before any other imports
+_configure_logging()
+
+
+# Now import other modules (their loggers will inherit from root)
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -27,7 +90,7 @@ from models import (
 )
 from orchestrator import AgentOrchestrator
 from telemetry import get_tracer, set_session_context
-from trace_poller import AppInsightsTracePoller
+
 
 logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
@@ -104,7 +167,7 @@ async def health_check() -> HealthStatus:
 
 @app.get("/health/detailed", tags=["Health"])
 async def health_check_detailed() -> dict[str, Any]:
-    """Detailed health check including trace polling status."""
+    """Detailed health check including observability status."""
     orchestrator = get_orchestrator()
     settings = get_settings()
     health_data = await orchestrator.check_health()
@@ -115,11 +178,11 @@ async def health_check_detailed() -> dict[str, Any]:
         "foundry_endpoint": health_data["foundry_endpoint"],
         "model_deployment": health_data["model_deployment"],
         "mcp_scratchpad": health_data.get("mcp_scratchpad"),
-        "trace_polling": {
-            "enabled": settings.trace_polling_enabled,
-            "configured": settings.trace_polling_configured,
-            "workspace_id": settings.log_analytics_workspace_id[:8] + "..." if settings.log_analytics_workspace_id else None,
-            "interval_seconds": settings.trace_polling_interval_seconds,
+        "observability": {
+            "opentelemetry_enabled": True,
+            "app_insights_configured": bool(settings.log_analytics_workspace_id),
+            # Note: ADR-007 - trace polling is no longer used for UI events
+            # Traces still flow to App Insights for observability dashboards
         },
     }
 
@@ -222,15 +285,15 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
         )
 
     async def event_generator() -> AsyncGenerator[dict[str, Any], None]:
-        """Generate SSE events from workflow execution with trace polling.
+        """Generate SSE events from workflow execution.
+        
+        ADR-007: Events are generated directly by the orchestrator middleware,
+        providing real-time updates. OpenTelemetry traces still flow to App Insights
+        for observability, but are not used for UI events.
         
         Creates a parent span "research_session" that encompasses the entire
-        workflow. This span's operation_Id is used to correlate all subagent
-        traces in Application Insights (ADR-005).
-        
-        Implements two parallel event sources:
-        1. Workflow events from orchestrator.run_research_workflow()
-        2. Trace events from App Insights polling (if configured)
+        workflow. This span's operation_Id is used to correlate all traces
+        in Application Insights for debugging and dashboards.
         
         Sends heartbeat events every SSE_HEARTBEAT_INTERVAL seconds to prevent
         connection timeouts during long-running agent operations.
@@ -238,10 +301,8 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
         import json
         from datetime import datetime, timezone
         
-        settings = get_settings()
-        
         # Create parent span for entire research session
-        # This provides the operation_Id for all subagent trace correlation
+        # This provides the operation_Id for all trace correlation in App Insights
         with tracer.start_as_current_span("research_session") as session_span:
             set_session_context(session_span, session_id, session.query)
             session_span.set_attribute("workflow.type", "research")
@@ -253,29 +314,8 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
             logger.info(f"Session ID: {session_id}")
             logger.info(f"Operation ID (trace_id): {operation_id}")
             logger.info(f"Query: {session.query[:100]}...")
-            logger.info(f"Span context valid: {span_context.is_valid}")
             
-            # Check if trace polling is configured
-            trace_polling_active = settings.trace_polling_configured
-            logger.info(f"=== TRACE POLLING CONFIG ===")
-            logger.info(f"trace_polling_enabled setting: {settings.trace_polling_enabled}")
-            logger.info(f"log_analytics_workspace_id: {settings.log_analytics_workspace_id or 'NOT SET'}")
-            logger.info(f"trace_polling_configured (computed): {settings.trace_polling_configured}")
-            logger.info(f"trace_polling_active (will use): {trace_polling_active}")
-            
-            if trace_polling_active:
-                logger.info(
-                    f"Trace polling ENABLED for session {session_id}: "
-                    f"workspace_id={settings.log_analytics_workspace_id}, "
-                    f"interval={settings.trace_polling_interval_seconds}s"
-                )
-            else:
-                logger.info(
-                    f"Trace polling DISABLED for session {session_id}: "
-                    f"LOG_ANALYTICS_WORKSPACE_ID not configured or polling disabled"
-                )
-            
-            # Emit operation_id as first event so frontend can track it
+            # Emit workflow_started with operation_id for trace correlation
             workflow_started_payload = {
                 "event_type": "workflow_started",
                 "session_id": session_id,
@@ -283,10 +323,9 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
                 "data": {
                     "session_id": session_id,
                     "operation_id": operation_id,
-                    "trace_polling_enabled": trace_polling_active,
                 },
             }
-            logger.info(f"SSE EMIT: workflow_started - {workflow_started_payload}")
+            logger.info(f"SSE EMIT: workflow_started - session={session_id[:8]}")
             yield {
                 "event": "workflow_started",
                 "data": json.dumps(workflow_started_payload),
@@ -295,32 +334,8 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
             workflow_gen = orchestrator.run_research_workflow(session_id)
             workflow_exhausted = False
             pending_event_task: asyncio.Task | None = None
-            trace_poller: AppInsightsTracePoller | None = None
-            trace_poll_task: asyncio.Task | None = None
             
             try:
-                # Initialize trace poller if configured
-                if trace_polling_active:
-                    logger.info(f"=== INITIALIZING TRACE POLLER ===")
-                    logger.info(f"Workspace ID: {settings.log_analytics_workspace_id}")
-                    logger.info(f"Session ID: {session_id}")
-                    logger.info(f"Operation ID: {operation_id}")
-                    try:
-                        trace_poller = AppInsightsTracePoller(
-                            workspace_id=settings.log_analytics_workspace_id,
-                            session_id=session_id,
-                            operation_id=operation_id,
-                        )
-                        await trace_poller.__aenter__()
-                        logger.info(f"Trace poller initialized successfully for session {session_id}")
-                    except Exception as e:
-                        logger.error(f"Failed to initialize trace poller: {e}")
-                        import traceback
-                        logger.error(f"Trace poller init traceback: {traceback.format_exc()}")
-                        trace_poller = None
-                else:
-                    logger.info(f"Skipping trace poller initialization (not configured)")
-                
                 while not workflow_exhausted:
                     # Check if client disconnected
                     if await request.is_disconnected():
@@ -332,18 +347,9 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
                     if pending_event_task is None:
                         pending_event_task = asyncio.create_task(workflow_gen.__anext__())
                     
-                    # Create task for trace polling if poller is active and no poll pending
-                    if trace_poller and trace_poll_task is None:
-                        trace_poll_task = asyncio.create_task(trace_poller.poll_once())
-                    
-                    # Build set of tasks to wait on
-                    tasks_to_wait: set[asyncio.Task] = {pending_event_task}
-                    if trace_poll_task:
-                        tasks_to_wait.add(trace_poll_task)
-                    
-                    # Wait for any task or heartbeat timeout
+                    # Wait for workflow event or heartbeat timeout
                     done, _ = await asyncio.wait(
-                        tasks_to_wait,
+                        {pending_event_task},
                         timeout=SSE_HEARTBEAT_INTERVAL,
                         return_when=asyncio.FIRST_COMPLETED
                     )
@@ -352,51 +358,23 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
                     if pending_event_task in done:
                         try:
                             event = pending_event_task.result()
-                            logger.info(f"SSE EMIT (workflow): {event.event_type.value} - session={session_id[:8]}")
-                            logger.debug(f"SSE EMIT (workflow) data: {event.model_dump_json()[:500]}")
+                            # Log high-frequency events at DEBUG, key events at INFO
+                            if event.event_type.value in ("subagent_progress", "heartbeat"):
+                                logger.debug(f"SSE EMIT: {event.event_type.value} - session={session_id[:8]}")
+                            else:
+                                logger.info(f"SSE EMIT: {event.event_type.value} - session={session_id[:8]}")
                             yield {
                                 "event": event.event_type.value,
                                 "data": event.model_dump_json(),
                             }
                             pending_event_task = None  # Clear for next iteration
                         except StopAsyncIteration:
-                            logger.info(f"Workflow generator exhausted for session {session_id[:8]}...")
+                            logger.info(f"Workflow generator exhausted for session {session_id[:8]}")
                             workflow_exhausted = True
                             pending_event_task = None
-                    
-                    # Process completed trace poll
-                    if trace_poll_task and trace_poll_task in done:
-                        logger.info(f"=== TRACE POLL COMPLETED ===")
-                        try:
-                            trace_events = trace_poll_task.result()
-                            logger.info(f"Trace poll returned {len(trace_events)} events")
-                            if trace_events:
-                                logger.info(f"SSE EMIT (trace): {len(trace_events)} trace events for session {session_id}")
-                            else:
-                                logger.info(f"No trace events found in this poll cycle")
-                            for trace_event in trace_events:
-                                logger.info(
-                                    f"SSE EMIT (trace): {trace_event.event_type.value} - "
-                                    f"data={trace_event.data}"
-                                )
-                                yield {
-                                    "event": trace_event.event_type.value,
-                                    "data": trace_event.model_dump_json(),
-                                }
-                        except Exception as e:
-                            logger.warning(f"Trace poll failed: {e}")
-                            import traceback
-                            logger.warning(f"Trace poll traceback: {traceback.format_exc()}")
-                        finally:
-                            trace_poll_task = None
-                            # Schedule next poll after interval
-                            if trace_poller and not workflow_exhausted:
-                                logger.info(f"Scheduling next trace poll in {settings.trace_polling_interval_seconds}s")
-                                await asyncio.sleep(settings.trace_polling_interval_seconds)
-                    
-                    # If nothing completed, send heartbeat
-                    if not done:
-                        logger.info(f"SSE EMIT: heartbeat for session {session_id[:8]}")
+                    else:
+                        # Timeout - send heartbeat
+                        logger.debug(f"SSE EMIT: heartbeat for session {session_id[:8]}")
                         heartbeat_payload = {
                             "event_type": "heartbeat",
                             "session_id": session_id,
@@ -410,23 +388,8 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
                             "data": json.dumps(heartbeat_payload),
                         }
                 
-                # Workflow complete - do one final trace poll to catch remaining spans
-                if trace_poller:
-                    logger.info(f"Workflow complete, doing final trace poll for session {session_id[:8]}...")
-                    try:
-                        # Wait a bit for final traces to be ingested
-                        await asyncio.sleep(2.0)
-                        final_traces = await trace_poller.poll_once()
-                        for trace_event in final_traces:
-                            yield {
-                                "event": trace_event.event_type.value,
-                                "data": trace_event.model_dump_json(),
-                            }
-                        logger.info(f"Final trace poll yielded {len(final_traces)} events")
-                    except Exception as e:
-                        logger.warning(f"Final trace poll failed: {e}")
-                
                 session_span.set_attribute("workflow.completed", True)
+                logger.info(f"=== RESEARCH SESSION COMPLETE === session={session_id[:8]}")
                         
             except RuntimeError as e:
                 # Handle cross-task cancel scope errors from MCP cleanup
@@ -455,20 +418,6 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
                     except (asyncio.CancelledError, StopAsyncIteration):
                         pass
                 
-                if trace_poll_task and not trace_poll_task.done():
-                    trace_poll_task.cancel()
-                    try:
-                        await trace_poll_task
-                    except asyncio.CancelledError:
-                        pass
-                
-                # Cleanup trace poller
-                if trace_poller:
-                    try:
-                        await trace_poller.__aexit__(None, None, None)
-                    except Exception as e:
-                        logger.debug(f"Error closing trace poller: {e}")
-                
                 # Explicitly close the workflow generator
                 try:
                     await workflow_gen.aclose()
@@ -480,7 +429,7 @@ async def start_session(session_id: str, request: Request) -> EventSourceRespons
                 except Exception as e:
                     logger.debug(f"Error closing workflow generator: {e}")
                 
-                logger.info(f"SSE generator cleanup complete for session {session_id[:8]}...")
+                logger.info(f"SSE generator cleanup complete for session {session_id[:8]}")
 
     return EventSourceResponse(event_generator())
 

@@ -1,201 +1,386 @@
-# SSE Event Contract - Trace-Based Architecture
-# ==============================================
-# All events are derived from Application Insights trace polling.
-# Events are streamed to the frontend via Server-Sent Events (SSE).
+# SSE Event Contract - Direct Orchestrator Events (ADR-007)
+# =========================================================
+# Events are generated directly by the orchestrator middleware and streamed
+# to the frontend via Server-Sent Events (SSE).
+#
+# This replaces the trace-based architecture (ADR-005) which had 2-5 second
+# latency due to App Insights ingestion delays. Direct events provide
+# real-time updates with no polling overhead.
 
 ---
 # Event Type Enumeration
 event_types:
-  - workflow_started      # Research session initialized
-  - trace_span_started    # Agent or tool span started
-  - trace_span_completed  # Agent or tool span completed
-  - trace_tool_call       # Tool invocation detected
-  - heartbeat             # Keep-alive signal
+  # Workflow Lifecycle
+  - workflow_started      # Research workflow initialized
   - workflow_completed    # Research workflow finished successfully
   - workflow_failed       # Research workflow failed
+  
+  # Agent Operations (from orchestrator)
+  - agent_started         # Subagent invocation started
+  - agent_completed       # Subagent invocation completed
+  - agent_response        # Subagent response with preview
+  - agent_progress        # Subagent progress update
+  
+  # Tool Calls (from middleware)
+  - tool_call_started     # Tool call initiated
+  - tool_call_completed   # Tool call completed with results
+  - tool_call_failed      # Tool call error
+  
+  # Subagent Tool Calls (from stream_callback)
+  - subagent_tool_started    # Subagent's tool call started
+  - subagent_tool_completed  # Subagent's tool call completed
+  - subagent_progress        # Subagent streaming progress
+  
+  # Scratchpad Operations
+  - scratchpad_updated    # Scratchpad write operation completed
+  
+  # Synthesis
+  - synthesis_completed   # Final report ready
+  
+  # Keep-alive
+  - heartbeat             # Keep-alive signal
 
 ---
 # Event Schemas
 
 workflow_started:
   description: Emitted when a new research workflow begins
+  source: orchestrator
   payload:
     session_id:
       type: string
       description: Unique identifier for the research session
       example: "550e8400-e29b-41d4-a716-446655440000"
-    workflow_id:
+    operation_id:
       type: string
-      description: Unique identifier for the workflow execution
-      example: "wf_abc123"
+      description: OpenTelemetry operation ID for trace correlation
+      example: "abc123def456"
     query:
       type: string
       description: The research query being processed
       example: "Analyze the coffee shop market in Prague"
+    mode:
+      type: string
+      description: Orchestration mode
+      example: "dynamic_orchestration"
     timestamp:
       type: string
       format: ISO 8601
       example: "2025-01-15T10:30:00Z"
 
-trace_span_started:
-  description: Emitted when an agent or operation span begins (from App Insights traces)
+agent_started:
+  description: Emitted when the orchestrator delegates to a subagent
+  source: orchestrator
   payload:
     session_id:
       type: string
-      description: Research session identifier
-    workflow_id:
+    phase:
       type: string
-      description: Workflow execution identifier
-    span_id:
+      description: Current workflow phase
+      example: "orchestration"
+    agent_name:
       type: string
-      description: Unique identifier for this span
-      example: "span_xyz789"
-    span_name:
+      description: Name of the agent being invoked
+      example: "market-analyst"
+    description:
       type: string
-      description: Name of the span (agent name or operation)
-      example: "MarketAnalyst.run"
-    parent_span_id:
-      type: string
-      nullable: true
-      description: Parent span ID if nested
-    attributes:
-      type: object
-      description: Additional span attributes from App Insights
-      properties:
-        gen_ai.system:
-          type: string
-          example: "az.ai.agents"
-        gen_ai.operation.name:
-          type: string
-          example: "run"
+      description: Description of what the agent is doing
+      example: "Analyzing market opportunities"
+    available_tools:
+      type: array
+      items:
+        type: string
+      description: Tools available to the agent
+    scratchpad_enabled:
+      type: boolean
+      description: Whether MCP scratchpad is available
     timestamp:
       type: string
       format: ISO 8601
 
-trace_span_completed:
-  description: Emitted when an agent or operation span completes (from App Insights traces)
+agent_completed:
+  description: Emitted when a subagent finishes its work
+  source: orchestrator
   payload:
     session_id:
       type: string
-      description: Research session identifier
-    workflow_id:
+    agent_name:
       type: string
-      description: Workflow execution identifier
-    span_id:
+      description: Name of the completed agent
+    content:
       type: string
-      description: Identifier matching the started span
-    span_name:
-      type: string
-      description: Name of the completed span
-    duration_ms:
-      type: number
-      description: Duration of the span in milliseconds
-      example: 1523
-    status:
-      type: string
-      enum: [success, error]
-      description: Completion status of the span
-    error_message:
-      type: string
-      nullable: true
-      description: Error details if status is error
-    attributes:
-      type: object
-      description: Additional span attributes
+      description: Agent's output content
+    execution_time_ms:
+      type: integer
+      description: Execution time in milliseconds
     timestamp:
       type: string
       format: ISO 8601
 
-trace_tool_call:
-  description: Emitted when a tool invocation is detected in traces
+agent_response:
+  description: Emitted when a subagent returns a response
+  source: orchestrator
   payload:
     session_id:
       type: string
-      description: Research session identifier
-    workflow_id:
+    agent_name:
       type: string
-      description: Workflow execution identifier
-    span_id:
+    response_preview:
       type: string
-      description: Span identifier for the tool call
+      description: Preview of agent response (truncated to ~500 chars)
+    execution_time_ms:
+      type: integer
+    timestamp:
+      type: string
+      format: ISO 8601
+
+tool_call_started:
+  description: Emitted when a tool call begins (intercepted by middleware)
+  source: middleware
+  payload:
+    session_id:
+      type: string
     tool_name:
       type: string
       description: Name of the tool being called
-      example: "scratchpad_write"
-    tool_input:
-      type: object
-      nullable: true
-      description: Input parameters to the tool (if ENABLE_SENSITIVE_DATA=true)
-    tool_output:
-      type: object
-      nullable: true
-      description: Tool response (if ENABLE_SENSITIVE_DATA=true)
-    duration_ms:
-      type: number
-      nullable: true
-      description: Tool execution duration
-    status:
+      example: "add_note"
+    tool_call_id:
       type: string
-      enum: [started, completed, error]
+      description: Unique identifier for this tool call
+      example: "add_note_1_abc12345"
+    agent_name:
+      type: string
+      description: Agent making the tool call
+      example: "research-orchestrator"
+    input_args:
+      type: object
+      description: Arguments passed to the tool
+    call_number:
+      type: integer
+      description: Sequential call number for this tool type
     timestamp:
       type: string
       format: ISO 8601
 
-heartbeat:
-  description: Keep-alive signal sent periodically to maintain SSE connection
+tool_call_completed:
+  description: Emitted when a tool call completes successfully
+  source: middleware
   payload:
     session_id:
       type: string
-      description: Research session identifier
+    tool_name:
+      type: string
+    tool_call_id:
+      type: string
+    agent_name:
+      type: string
+    output:
+      type: any
+      description: Tool output (serialized for JSON)
+    execution_time_ms:
+      type: integer
+      description: Tool execution duration
+    call_number:
+      type: integer
     timestamp:
       type: string
       format: ISO 8601
-    polls_completed:
+
+tool_call_failed:
+  description: Emitted when a tool call fails
+  source: middleware
+  payload:
+    session_id:
+      type: string
+    tool_name:
+      type: string
+    tool_call_id:
+      type: string
+    agent_name:
+      type: string
+    error:
+      type: string
+      description: Error message
+    error_type:
+      type: string
+      description: Error type/class name
+    call_number:
       type: integer
-      description: Number of App Insights polling cycles completed
-      example: 42
+    timestamp:
+      type: string
+      format: ISO 8601
+
+subagent_tool_started:
+  description: Emitted when a subagent calls a tool (captured via stream_callback)
+  source: stream_callback
+  payload:
+    session_id:
+      type: string
+    subagent_name:
+      type: string
+      description: Name of the subagent making the call
+      example: "market-analyst"
+    tool_name:
+      type: string
+      description: Tool being called by the subagent
+      example: "add_note"
+    tool_call_id:
+      type: string
+    input_preview:
+      type: string
+      nullable: true
+      description: Preview of input arguments (truncated)
+    timestamp:
+      type: string
+      format: ISO 8601
+
+subagent_tool_completed:
+  description: Emitted when a subagent's tool call completes
+  source: stream_callback
+  payload:
+    session_id:
+      type: string
+    subagent_name:
+      type: string
+    tool_name:
+      type: string
+    tool_call_id:
+      type: string
+    output_preview:
+      type: string
+      nullable: true
+      description: Preview of tool output (truncated)
+    timestamp:
+      type: string
+      format: ISO 8601
+
+subagent_progress:
+  description: Streaming progress from a subagent
+  source: stream_callback
+  payload:
+    session_id:
+      type: string
+    subagent_name:
+      type: string
+    text_chunk:
+      type: string
+      description: Text chunk from subagent (max 500 chars)
+    timestamp:
+      type: string
+      format: ISO 8601
+
+scratchpad_updated:
+  description: Emitted when a scratchpad write operation completes
+  source: middleware
+  payload:
+    session_id:
+      type: string
+    section_name:
+      type: string
+      description: Scratchpad section affected
+      example: "plan"
+    operation:
+      type: string
+      enum: [created, updated]
+    updated_by:
+      type: string
+      description: Agent that made the update
+    tool_type:
+      type: string
+      description: Specific tool used
+      example: "add_tasks"
+    content_preview:
+      type: string
+      nullable: true
+      description: Preview of content (truncated)
+    tasks_created:
+      type: integer
+      nullable: true
+      description: Number of tasks created (for add_tasks)
+    tasks:
+      type: array
+      nullable: true
+      description: Task details (for add_tasks)
+    task_update:
+      type: object
+      nullable: true
+      description: Task update details (for update_task)
+    timestamp:
+      type: string
+      format: ISO 8601
+
+synthesis_completed:
+  description: Emitted when the final synthesis/report is ready
+  source: orchestrator
+  payload:
+    session_id:
+      type: string
+    agent:
+      type: string
+      example: "research-orchestrator"
+    execution_time_ms:
+      type: integer
+    synthesis:
+      type: string
+      description: Full synthesized report content
+    tool_calls_made:
+      type: array
+      description: Log of all tool calls during workflow
+    agent_call_counts:
+      type: object
+      description: Count of calls per agent type
+    timestamp:
+      type: string
+      format: ISO 8601
 
 workflow_completed:
   description: Emitted when the research workflow completes successfully
+  source: orchestrator
   payload:
     session_id:
       type: string
-      description: Research session identifier
-    workflow_id:
-      type: string
-      description: Workflow execution identifier
-    duration_ms:
-      type: number
-      description: Total workflow duration in milliseconds
-    final_report:
+    total_tool_calls:
+      type: integer
+      description: Total number of tool calls made
+    agent_call_counts:
       type: object
-      nullable: true
-      description: The synthesized research report (if available)
+      description: Count of calls per agent
+    total_time_ms:
+      type: integer
+      description: Total workflow duration
+    synthesis:
+      type: string
+      description: Final synthesized report
     timestamp:
       type: string
       format: ISO 8601
 
 workflow_failed:
   description: Emitted when the research workflow fails
+  source: orchestrator
   payload:
     session_id:
       type: string
-      description: Research session identifier
-    workflow_id:
-      type: string
-      nullable: true
-      description: Workflow execution identifier if available
     error:
       type: string
       description: Error message
     error_type:
       type: string
-      description: Error classification
-      example: "timeout"
-    duration_ms:
-      type: number
       nullable: true
-      description: Duration before failure
+      description: Error classification
+    tool_calls_before_failure:
+      type: array
+      description: Tool calls made before failure
+    timestamp:
+      type: string
+      format: ISO 8601
+
+heartbeat:
+  description: Keep-alive signal sent periodically to maintain SSE connection
+  source: api
+  payload:
+    session_id:
+      type: string
     timestamp:
       type: string
       format: ISO 8601
@@ -215,46 +400,52 @@ sse_format:
   
   example: |
     event: workflow_started
-    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","workflow_id":"wf_abc123","query":"Analyze coffee shop market","timestamp":"2025-01-15T10:30:00Z"}
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","operation_id":"abc123","query":"Analyze coffee shop market","timestamp":"2025-01-15T10:30:00Z"}
     
-    event: trace_span_started
-    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","workflow_id":"wf_abc123","span_id":"span_001","span_name":"MarketAnalyst.run","timestamp":"2025-01-15T10:30:01Z"}
+    event: agent_started
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","phase":"orchestration","description":"Starting research workflow","timestamp":"2025-01-15T10:30:01Z"}
     
-    event: trace_tool_call
-    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","workflow_id":"wf_abc123","span_id":"span_002","tool_name":"web_search","status":"started","timestamp":"2025-01-15T10:30:02Z"}
+    event: tool_call_started
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","tool_name":"add_tasks","agent_name":"research-orchestrator","input_args":{"tasks":[...]},"timestamp":"2025-01-15T10:30:02Z"}
+    
+    event: tool_call_completed
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","tool_name":"add_tasks","execution_time_ms":150,"timestamp":"2025-01-15T10:30:02Z"}
     
     event: heartbeat
-    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","timestamp":"2025-01-15T10:30:05Z","polls_completed":3}
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","timestamp":"2025-01-15T10:30:05Z"}
 
 ---
-# Data Sensitivity
+# Architecture Notes
 
-sensitive_data:
+architecture:
   description: |
-    When ENABLE_SENSITIVE_DATA=true is set in the orchestrator environment,
-    additional fields are populated in trace events:
+    Events flow directly from the orchestrator to the UI via SSE:
     
-    - trace_tool_call: tool_input and tool_output fields contain actual data
-    - trace_span_completed: may include prompt/response content in attributes
+    1. Orchestrator middleware intercepts tool calls in real-time
+    2. Events are queued in ToolCallEventQueue
+    3. The streaming loop yields events immediately as SSE
+    4. Frontend processes events and updates UI state
     
-    When ENABLE_SENSITIVE_DATA=false (default), these fields are omitted
-    to avoid exposing potentially sensitive information in logs and streams.
+    OpenTelemetry traces are still emitted for observability but are NOT
+    used for UI events (per ADR-007). Traces flow to App Insights for
+    dashboards and debugging.
+    
+    This architecture provides:
+    - Real-time updates (no polling delay)
+    - Reliable event delivery (no App Insights dependency)
+    - Simple correlation (events carry session_id directly)
 
 ---
-# Polling Architecture
+# Deprecated (Observability Only)
 
-polling_architecture:
+deprecated_events:
   description: |
-    The orchestrator polls Azure Application Insights every 2 seconds
-    for new trace data. Traces are processed and converted to SSE events.
+    The following events were part of the trace-based architecture (ADR-005)
+    and are no longer emitted to the UI SSE stream. They remain in the codebase
+    for potential future observability tools but are not part of the UI contract.
     
-    Trace sources:
-    - Azure AI Agent Service spans (gen_ai.system = "az.ai.agents")
-    - Tool call spans
-    - Custom telemetry from the orchestrator
+    - trace_span_started
+    - trace_span_completed  
+    - trace_tool_call
     
-    The trace_poller module handles:
-    1. Querying Log Analytics workspace
-    2. Deduplicating spans (by operation_Id + span_id)
-    3. Converting trace records to SSE events
-    4. Managing polling lifecycle
+    See ADR-007 for the rationale behind this change.

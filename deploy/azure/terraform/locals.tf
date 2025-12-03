@@ -30,6 +30,12 @@ locals {
   # MCP Demographics image
   mcp_demographics_image = "${azurerm_container_registry.main.login_server}/mcp-demographics:latest"
 
+  # MCP Real Estate image
+  mcp_real_estate_image = "${azurerm_container_registry.main.login_server}/mcp-real-estate:latest"
+
+  # MCP Calculator image
+  mcp_calculator_image = "${azurerm_container_registry.main.login_server}/mcp-calculator:latest"
+
   # ============================================================================
   # AI Foundry Endpoints (computed from Terraform-managed resources)
   # ============================================================================

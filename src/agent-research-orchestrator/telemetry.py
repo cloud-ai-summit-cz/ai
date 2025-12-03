@@ -35,6 +35,12 @@ def configure_telemetry(service_name: str = "agent-research-orchestrator") -> No
         logger.debug("Telemetry already configured, skipping")
         return
 
+    # Suppress noisy OpenTelemetry context warnings that occur when spans cross
+    # async boundaries. These are harmless but create log noise.
+    # See: https://github.com/open-telemetry/opentelemetry-python/issues/2606
+    logging.getLogger("opentelemetry.context").setLevel(logging.CRITICAL)
+    logging.getLogger("opentelemetry.sdk.trace").setLevel(logging.ERROR)
+
     connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
 
     if not connection_string:

@@ -1,11 +1,14 @@
-"""Agent provisioner for Competitor Analyst.
+"""Agent provisioner for Finance Analyst.
 
-Creates and destroys the competitor-analyst agent in Azure AI Foundry Agent Service.
+Creates and destroys the finance-analyst agent in Azure AI Foundry Agent Service.
 
 ADR-006: MCP Tools are now managed by the orchestrator, not configured here.
 This agent is provisioned as a prompt-only agent. The orchestrator injects:
 - mcp-scratchpad: Session-scoped shared memory (with X-Session-ID headers)
-- mcp-business-registry: Company data, financials, industry players
+- mcp-calculator: Financial calculations
+- mcp-real-estate: Rental rates, property data
+- mcp-government-data: Tax rates, regulations
+- mcp-business-registry: Company financials
 
 This enables real-time SSE streaming of tool calls via MAF middleware.
 """
@@ -31,8 +34,8 @@ os.environ["PYTHONIOENCODING"] = "utf-8"
 
 console = Console(force_terminal=True)
 
-AGENT_NAME = "competitor-analyst"
-AGENT_DISPLAY_NAME = "Competitor Analyst"
+AGENT_NAME = "finance-analyst"
+AGENT_DISPLAY_NAME = "Finance Analyst"
 
 
 def get_client() -> AIProjectClient:
@@ -49,18 +52,15 @@ def get_instructions() -> str:
     settings = get_settings()
     template_content = settings.get_prompt("system_prompt")
     template = Template(template_content)
-    return template.render(
-        industry="coffee shop and café",
-        company_name="Cofilot",
-    )
+    return template.render(industry="coffee shop expansion")
 
 
 def create_agent() -> None:
-    """Create the competitor-analyst agent in AI Foundry.
+    """Create the finance-analyst agent in AI Foundry.
 
     This function is idempotent - it will delete existing agent before creating new one.
     
-    Configures MCP tools for business registry, scratchpad, and web search.
+    Configures MCP tools for calculator, real-estate, government-data, business-registry, and scratchpad.
     Uses project_connection_id for static MCP tools (auth stored in Foundry connections).
     """
     console.print(f"[bold blue]Creating {AGENT_DISPLAY_NAME} Agent[/bold blue]\n")
@@ -97,6 +97,9 @@ def create_agent() -> None:
                 #
                 # The orchestrator will inject:
                 # - mcp-scratchpad (session-scoped)
+                # - mcp-calculator
+                # - mcp-real-estate
+                # - mcp-government-data
                 # - mcp-business-registry
                 mcp_tools: list = []
 
@@ -117,7 +120,7 @@ def create_agent() -> None:
                     f"(name: {AGENT_NAME})"
                 )
                 console.print(f"  [dim]Prompt-only agent (ADR-006)[/dim]")
-                console.print(f"  [dim]MCP tools injected by orchestrator: scratchpad, business-registry[/dim]")
+                console.print(f"  [dim]MCP tools injected by orchestrator: scratchpad, calculator, real-estate, government-data, business-registry[/dim]")
                 
             except Exception as e:
                 console.print(f"[FAIL] Failed to create [red]{AGENT_DISPLAY_NAME}[/red]: {e}")
@@ -152,7 +155,7 @@ def list_agents() -> None:
 
 
 def destroy_agent() -> None:
-    """Destroy the competitor-analyst agent."""
+    """Destroy the finance-analyst agent."""
     console.print(f"[bold red]Destroying {AGENT_DISPLAY_NAME} Agent[/bold red]\n")
 
     client = get_client()

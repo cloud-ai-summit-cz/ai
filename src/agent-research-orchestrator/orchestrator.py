@@ -40,6 +40,8 @@ from config import (
     get_settings,
     MARKET_ANALYST_AGENT_NAME,
     COMPETITOR_ANALYST_AGENT_NAME,
+    LOCATION_SCOUT_AGENT_NAME,
+    FINANCE_ANALYST_AGENT_NAME,
     SYNTHESIZER_AGENT_NAME,
 )
 from models import (
@@ -185,6 +187,17 @@ class ToolCallEventQueue:
         except asyncio.QueueEmpty:
             return None
     
+    async def get(self, timeout: float | None = None) -> dict[str, Any] | None:
+        """Get an event, optionally with timeout. Returns None on timeout or if closed."""
+        try:
+            if timeout is not None:
+                return await asyncio.wait_for(self._queue.get(), timeout=timeout)
+            return await self._queue.get()
+        except asyncio.TimeoutError:
+            return None
+        except asyncio.QueueEmpty:
+            return None
+    
     def close(self) -> None:
         """Mark the queue as closed."""
         self._closed = True
@@ -196,7 +209,7 @@ SCRATCHPAD_READ_TOOLS = {"read_section", "list_sections"}
 SCRATCHPAD_QUESTION_TOOLS = {"add_question", "get_pending_questions", "get_answered_questions", "submit_answers"}
 
 # Agent tool names (subagents exposed as tools to orchestrator)
-AGENT_TOOL_NAMES = {"market_analysis", "competitor_analysis", "synthesize_findings"}
+AGENT_TOOL_NAMES = {"market_analysis", "competitor_analysis", "location_scouting", "finance_analysis", "synthesize_findings"}
 
 
 def create_subagent_stream_callback(
@@ -228,23 +241,23 @@ def create_subagent_stream_callback(
         nonlocal update_count
         update_count += 1
         
-        # Log ALL updates for debugging
-        logger.info(f"[SUBAGENT_STREAM] {subagent_name} update #{update_count}: type={type(update).__name__}")
+        # Log updates at DEBUG level to reduce noise
+        logger.debug(f"[SUBAGENT_STREAM] {subagent_name} update #{update_count}: type={type(update).__name__}")
         if hasattr(update, "__dict__"):
-            logger.info(f"[SUBAGENT_STREAM] {subagent_name} update attrs: {list(update.__dict__.keys())}")
+            logger.debug(f"[SUBAGENT_STREAM] {subagent_name} update attrs: {list(update.__dict__.keys())}")
         
         # AgentRunResponseUpdate has a .contents list
         if not hasattr(update, "contents") or not update.contents:
-            logger.info(f"[SUBAGENT_STREAM] {subagent_name} update has no contents (or empty)")
+            logger.debug(f"[SUBAGENT_STREAM] {subagent_name} update has no contents (or empty)")
             if hasattr(update, "text"):
-                logger.info(f"[SUBAGENT_STREAM] {subagent_name} update.text: {str(update.text)[:100]}")
+                logger.debug(f"[SUBAGENT_STREAM] {subagent_name} update.text: {str(update.text)[:100]}")
             return
         
-        logger.info(f"[SUBAGENT_STREAM] {subagent_name} update has {len(update.contents)} content items")
+        logger.debug(f"[SUBAGENT_STREAM] {subagent_name} update has {len(update.contents)} content items")
         
         for idx, content in enumerate(update.contents):
             content_type = getattr(content, "type", None)
-            logger.info(
+            logger.debug(
                 f"[SUBAGENT_STREAM] {subagent_name} content[{idx}]: type={content_type}, "
                 f"class={type(content).__name__}, has_call_id={hasattr(content, 'call_id')}"
             )
@@ -297,13 +310,19 @@ def create_subagent_stream_callback(
                 
                 logger.info(f"[SUBAGENT_STREAM] {subagent_name} TOOL RESULT DETECTED: {tool_name} (call_id={call_id})")
                 
-                # Create output preview
+                # Create output preview - serialize properly to JSON-friendly format
                 output_preview = None
                 if result:
-                    if isinstance(result, str):
-                        output_preview = result[:200]
+                    # Use _serialize_tool_output to handle TextContent and other complex types
+                    serialized = _serialize_tool_output(result)
+                    if isinstance(serialized, str):
+                        output_preview = serialized[:500]
                     else:
-                        output_preview = str(result)[:200]
+                        # Convert to JSON string for display
+                        try:
+                            output_preview = json.dumps(serialized, indent=2, ensure_ascii=False)[:500]
+                        except (TypeError, ValueError):
+                            output_preview = str(serialized)[:500]
                 
                 await event_queue.put({
                     "type": "subagent_tool_completed",
@@ -440,6 +459,8 @@ def create_tool_call_middleware(
                 subagent_mapping = {
                     "market_analysis": "market-analyst",
                     "competitor_analysis": "competitor-analyst",
+                    "location_scouting": "location-scout",
+                    "finance_analysis": "finance-analyst",
                     "synthesize_findings": "synthesizer",
                 }
                 span.set_attribute("subagent.name", subagent_mapping.get(function_name, function_name))
@@ -465,7 +486,14 @@ def create_tool_call_middleware(
                 "is_scratchpad_question": function_name in SCRATCHPAD_QUESTION_TOOLS,
             })
             
-            logger.info(f"Tool call started: {function_name} (call #{call_number}) args={input_args}")
+            # Log MCP tool calls prominently at INFO level (truncate args for readability)
+            args_preview = str(input_args)[:200] + "..." if len(str(input_args)) > 200 else str(input_args)
+            if function_name in SCRATCHPAD_WRITE_TOOLS | SCRATCHPAD_READ_TOOLS | SCRATCHPAD_QUESTION_TOOLS:
+                logger.info(f"[MCP] Scratchpad call: {function_name} (call #{call_number}) args={args_preview}")
+            elif function_name in AGENT_TOOL_NAMES:
+                logger.info(f"[AGENT] Subagent call: {function_name} (call #{call_number}) args={args_preview}")
+            else:
+                logger.info(f"[MCP] Tool call: {function_name} (call #{call_number}) args={args_preview}")
             start_time = datetime.now(timezone.utc)
             
             error_occurred = False
@@ -537,7 +565,13 @@ def create_tool_call_middleware(
                         "tool_type": function_name,  # Include tool type for frontend routing
                     })
                     
-                    logger.info(f"Tool call completed: {function_name} in {execution_time_ms}ms")
+                    # Log MCP tool completions prominently at INFO level
+                    if function_name in SCRATCHPAD_WRITE_TOOLS | SCRATCHPAD_READ_TOOLS | SCRATCHPAD_QUESTION_TOOLS:
+                        logger.info(f"[MCP] Scratchpad completed: {function_name} in {execution_time_ms}ms")
+                    elif function_name in AGENT_TOOL_NAMES:
+                        logger.info(f"[AGENT] Subagent completed: {function_name} in {execution_time_ms}ms")
+                    else:
+                        logger.info(f"[MCP] Tool completed: {function_name} in {execution_time_ms}ms")
     
     return tool_call_middleware
 
@@ -712,6 +746,157 @@ class AgentOrchestrator:
                     logger.debug(f"Cleaned up MCP tool: {key}")
                 except Exception as e:
                     logger.debug(f"Error cleaning up MCP tool {key}: {e}")
+
+    async def _create_mcp_tools_for_agent(
+        self,
+        agent_name: str,
+        session_id: str,
+    ) -> list[MCPStreamableHTTPTool]:
+        """Create MCP tools for a specific agent based on their role.
+        
+        ADR-006: MCP tools are now managed by the orchestrator instead of being
+        configured at agent provisioning time in Foundry. This enables:
+        - Real-time SSE streaming of tool calls via middleware
+        - Session isolation for scratchpad via X-Session-ID headers
+        - Full observability without App Insights polling latency
+        
+        Agent to MCP tool mapping:
+        - market-analyst: scratchpad, demographics
+        - competitor-analyst: scratchpad, business-registry
+        - synthesizer: scratchpad only
+        - research-orchestrator: scratchpad only
+        
+        Args:
+            agent_name: Name of the agent (e.g., "market-analyst").
+            session_id: Session ID for scratchpad isolation.
+            
+        Returns:
+            List of MCPStreamableHTTPTool instances for the agent.
+        """
+        tools: list[MCPStreamableHTTPTool] = []
+        
+        # Session-scoped scratchpad (always included if configured)
+        scratchpad_tool = await self._get_session_mcp_tool(session_id, caller_agent=agent_name)
+        if scratchpad_tool:
+            tools.append(scratchpad_tool)
+        
+        # Agent-specific MCP tools (ADR-006: orchestrator-managed)
+        if agent_name == "market-analyst":
+            # Demographics for population, income, consumer behavior
+            if self.settings.mcp_demographics_enabled:
+                demographics_tool = MCPStreamableHTTPTool(
+                    name="demographics",
+                    url=self.settings.mcp_demographics_url,
+                    headers={"Authorization": f"Bearer {self.settings.mcp_demographics_api_key}"},
+                    description="Demographic and consumer behavior data: population, income, age distribution, spending patterns",
+                )
+                await demographics_tool.__aenter__()
+                tools.append(demographics_tool)
+                logger.info(f"Added mcp-demographics to {agent_name}")
+        
+        elif agent_name == "competitor-analyst":
+            # Business registry for company data, financials, industry players
+            if self.settings.mcp_business_registry_enabled:
+                business_registry_tool = MCPStreamableHTTPTool(
+                    name="business_registry",
+                    url=self.settings.mcp_business_registry_url,
+                    headers={"Authorization": f"Bearer {self.settings.mcp_business_registry_api_key}"},
+                    description="Business registry: company profiles, financials, locations, industry players",
+                )
+                await business_registry_tool.__aenter__()
+                tools.append(business_registry_tool)
+                logger.info(f"Added mcp-business-registry to {agent_name}")
+        
+        elif agent_name == "location-scout":
+            # Government data for regulations, permits, zoning
+            if self.settings.mcp_government_data_enabled:
+                government_data_tool = MCPStreamableHTTPTool(
+                    name="government_data",
+                    url=self.settings.mcp_government_data_url,
+                    headers={"Authorization": f"Bearer {self.settings.mcp_government_data_api_key}"},
+                    description="Government data: permits, zoning, regulations, tax rates, licensing requirements",
+                )
+                await government_data_tool.__aenter__()
+                tools.append(government_data_tool)
+                logger.info(f"Added mcp-government-data to {agent_name}")
+            
+            # Demographics for location analysis
+            if self.settings.mcp_demographics_enabled:
+                demographics_tool = MCPStreamableHTTPTool(
+                    name="demographics",
+                    url=self.settings.mcp_demographics_url,
+                    headers={"Authorization": f"Bearer {self.settings.mcp_demographics_api_key}"},
+                    description="Demographic and consumer behavior data: population, income, age distribution, spending patterns",
+                )
+                await demographics_tool.__aenter__()
+                tools.append(demographics_tool)
+                logger.info(f"Added mcp-demographics to {agent_name}")
+            
+            # Real estate for property listings and location scores
+            if self.settings.mcp_real_estate_enabled:
+                real_estate_tool = MCPStreamableHTTPTool(
+                    name="real_estate",
+                    url=self.settings.mcp_real_estate_url,
+                    headers={"Authorization": f"Bearer {self.settings.mcp_real_estate_api_key}"},
+                    description="Real estate data: commercial properties, rental rates, foot traffic, location scores",
+                )
+                await real_estate_tool.__aenter__()
+                tools.append(real_estate_tool)
+                logger.info(f"Added mcp-real-estate to {agent_name}")
+        
+        elif agent_name == "finance-analyst":
+            # Calculator for financial projections
+            if self.settings.mcp_calculator_enabled:
+                calculator_tool = MCPStreamableHTTPTool(
+                    name="calculator",
+                    url=self.settings.mcp_calculator_url,
+                    headers={"Authorization": f"Bearer {self.settings.mcp_calculator_api_key}"},
+                    description="Financial calculator: startup costs, operating costs, revenue projections, break-even, ROI, NPV, cash flow",
+                )
+                await calculator_tool.__aenter__()
+                tools.append(calculator_tool)
+                logger.info(f"Added mcp-calculator to {agent_name}")
+            
+            # Real estate for rental costs
+            if self.settings.mcp_real_estate_enabled:
+                real_estate_tool = MCPStreamableHTTPTool(
+                    name="real_estate",
+                    url=self.settings.mcp_real_estate_url,
+                    headers={"Authorization": f"Bearer {self.settings.mcp_real_estate_api_key}"},
+                    description="Real estate data: commercial properties, rental rates, foot traffic, location scores",
+                )
+                await real_estate_tool.__aenter__()
+                tools.append(real_estate_tool)
+                logger.info(f"Added mcp-real-estate to {agent_name}")
+            
+            # Government data for tax rates and regulatory costs
+            if self.settings.mcp_government_data_enabled:
+                government_data_tool = MCPStreamableHTTPTool(
+                    name="government_data",
+                    url=self.settings.mcp_government_data_url,
+                    headers={"Authorization": f"Bearer {self.settings.mcp_government_data_api_key}"},
+                    description="Government data: permits, zoning, regulations, tax rates, licensing requirements",
+                )
+                await government_data_tool.__aenter__()
+                tools.append(government_data_tool)
+                logger.info(f"Added mcp-government-data to {agent_name}")
+            
+            # Business registry for competitor financial benchmarks
+            if self.settings.mcp_business_registry_enabled:
+                business_registry_tool = MCPStreamableHTTPTool(
+                    name="business_registry",
+                    url=self.settings.mcp_business_registry_url,
+                    headers={"Authorization": f"Bearer {self.settings.mcp_business_registry_api_key}"},
+                    description="Business registry: company profiles, financials, locations, industry players",
+                )
+                await business_registry_tool.__aenter__()
+                tools.append(business_registry_tool)
+                logger.info(f"Added mcp-business-registry to {agent_name}")
+        
+        # synthesizer and research-orchestrator only need scratchpad (already added above)
+        
+        logger.info(f"Created {len(tools)} MCP tools for {agent_name}: {[t.name for t in tools]}")
+        return tools
 
     async def _get_scratchpad_snapshot_for_session(self, session_id: str) -> ScratchpadSnapshotData | None:
         """Fetch current scratchpad state for a specific session.
@@ -1286,29 +1471,39 @@ class AgentOrchestrator:
         # Track clients for cleanup - initialized before try block
         agents_to_cleanup: list[ChatAgent] = []
         clients_to_cleanup: list[AzureAIAgentClient] = []
+        # Track MCP tools created for agents (for cleanup)
+        agent_mcp_tools: list[MCPStreamableHTTPTool] = []
 
         try:
-            # Create session-scoped MCP scratchpad tools with X-Session-ID header
-            # SECURITY: This ensures each session's data is isolated
+            # Create MCP tools for orchestrator (scratchpad only)
+            # ADR-006: MCP tools are now managed by orchestrator for real-time SSE streaming
             session_mcp_orchestrator = await self._get_session_mcp_tool(
                 session_id, caller_agent="research-orchestrator"
             )
-            session_mcp_market = await self._get_session_mcp_tool(
-                session_id, caller_agent="market-analyst"
-            )
-            session_mcp_competitor = await self._get_session_mcp_tool(
-                session_id, caller_agent="competitor-analyst"
-            )
-            session_mcp_synthesizer = await self._get_session_mcp_tool(
-                session_id, caller_agent="synthesizer"
-            )
             
-            # Create specialist agents with session-scoped MCP scratchpad access
-            # Each agent gets its own MCP tool with appropriate X-Caller-Agent header
+            # Create MCP tools for each specialist agent
+            # ADR-006: Each agent gets scratchpad + their role-specific MCP tools
+            market_tools = await self._create_mcp_tools_for_agent("market-analyst", session_id)
+            agent_mcp_tools.extend([t for t in market_tools if t.name != f"scratchpad-{session_id[:8]}"])
+            
+            competitor_tools = await self._create_mcp_tools_for_agent("competitor-analyst", session_id)
+            agent_mcp_tools.extend([t for t in competitor_tools if t.name != f"scratchpad-{session_id[:8]}"])
+            
+            location_tools = await self._create_mcp_tools_for_agent("location-scout", session_id)
+            agent_mcp_tools.extend([t for t in location_tools if t.name != f"scratchpad-{session_id[:8]}"])
+            
+            finance_tools = await self._create_mcp_tools_for_agent("finance-analyst", session_id)
+            agent_mcp_tools.extend([t for t in finance_tools if t.name != f"scratchpad-{session_id[:8]}"])
+            
+            synthesizer_tools = await self._create_mcp_tools_for_agent("synthesizer", session_id)
+            # synthesizer only has scratchpad, no additional tools to track
+            
+            # Create specialist agents with their MCP tools
+            # ADR-006: Tools injected here instead of at Foundry provisioning time
             market_agent, market_client = self._create_foundry_agent(
                 agent_name=MARKET_ANALYST_AGENT_NAME,
                 description="Analyzes market opportunities, trends, customer segments, TAM/SAM/SOM, and market dynamics.",
-                tools=[session_mcp_market] if session_mcp_market else [],
+                tools=market_tools,
             )
             agents_to_cleanup.append(market_agent)
             clients_to_cleanup.append(market_client)
@@ -1316,15 +1511,31 @@ class AgentOrchestrator:
             competitor_agent, competitor_client = self._create_foundry_agent(
                 agent_name=COMPETITOR_ANALYST_AGENT_NAME,
                 description="Analyzes competitive landscape, competitor strengths and weaknesses, market positioning, and competitive threats.",
-                tools=[session_mcp_competitor] if session_mcp_competitor else [],
+                tools=competitor_tools,
             )
             agents_to_cleanup.append(competitor_agent)
             clients_to_cleanup.append(competitor_client)
             
+            location_agent, location_client = self._create_foundry_agent(
+                agent_name=LOCATION_SCOUT_AGENT_NAME,
+                description="Evaluates specific locations, districts, commercial properties, regulations, permits, and site viability.",
+                tools=location_tools,
+            )
+            agents_to_cleanup.append(location_agent)
+            clients_to_cleanup.append(location_client)
+            
+            finance_agent, finance_client = self._create_foundry_agent(
+                agent_name=FINANCE_ANALYST_AGENT_NAME,
+                description="Analyzes financial viability: startup costs, operating costs, revenue projections, break-even, ROI, and investment returns.",
+                tools=finance_tools,
+            )
+            agents_to_cleanup.append(finance_agent)
+            clients_to_cleanup.append(finance_client)
+            
             synthesizer_agent, synthesizer_client = self._create_foundry_agent(
                 agent_name=SYNTHESIZER_AGENT_NAME,
                 description="Synthesizes research findings into cohesive reports with actionable recommendations.",
-                tools=[session_mcp_synthesizer] if session_mcp_synthesizer else [],
+                tools=synthesizer_tools,
             )
             agents_to_cleanup.append(synthesizer_agent)
             clients_to_cleanup.append(synthesizer_client)
@@ -1353,9 +1564,23 @@ class AgentOrchestrator:
                 arg_description="The specific competitor analysis question or aspect to investigate",
                 stream_callback=create_subagent_stream_callback(event_queue, "competitor-analyst", session_id),
             )
+            location_tool = location_agent.as_tool(
+                name="location_scouting",
+                description="Call this tool to evaluate specific locations, districts, commercial properties, regulations, permits, and site viability for expansion.",
+                arg_name="query",
+                arg_description="The specific location analysis question or district/property to investigate",
+                stream_callback=create_subagent_stream_callback(event_queue, "location-scout", session_id),
+            )
+            finance_tool = finance_agent.as_tool(
+                name="finance_analysis",
+                description="Call this tool to analyze financial viability: startup costs, operating costs, revenue projections, break-even analysis, ROI, and investment returns.",
+                arg_name="query",
+                arg_description="The specific financial analysis question or scenario to evaluate",
+                stream_callback=create_subagent_stream_callback(event_queue, "finance-analyst", session_id),
+            )
             synthesizer_tool = synthesizer_agent.as_tool(
                 name="synthesize_findings",
-                description="Call this tool AFTER gathering market and competitor insights to create a final synthesized report with recommendations.",
+                description="Call this tool AFTER gathering market, competitor, location, and finance insights to create a final synthesized report with recommendations.",
                 arg_name="context",
                 arg_description="All the gathered research findings and insights to synthesize into a final report",
                 stream_callback=create_subagent_stream_callback(event_queue, "synthesizer", session_id),
@@ -1367,7 +1592,7 @@ class AgentOrchestrator:
                 data={
                     "phase": "orchestration",
                     "description": "Orchestrator starting dynamic research workflow",
-                    "available_tools": ["market_analysis", "competitor_analysis", "synthesize_findings"],
+                    "available_tools": ["market_analysis", "competitor_analysis", "location_scouting", "finance_analysis", "synthesize_findings"],
                     "scratchpad_enabled": session_mcp_orchestrator is not None,
                     "scratchpad_tools": [f.name for f in session_mcp_orchestrator.functions] if session_mcp_orchestrator else [],
                     "session_isolation": True,  # Indicate session isolation is active
@@ -1375,7 +1600,7 @@ class AgentOrchestrator:
             )
 
             # Build the tools list - agent tools + session-scoped MCP scratchpad
-            tools_list: list[Any] = [market_tool, competitor_tool, synthesizer_tool]
+            tools_list: list[Any] = [market_tool, competitor_tool, location_tool, finance_tool, synthesizer_tool]
             
             # Add session-scoped MCP Scratchpad to orchestrator
             # SECURITY: Uses X-Session-ID header for isolation
@@ -1408,74 +1633,100 @@ class AgentOrchestrator:
             orchestrator_thread = orchestrator_agent.get_new_thread()
             accumulated_content = ""
             scratchpad_sections_seen: set[str] = set()
-
-            # Stream the orchestrator's execution with middleware for tool call interception
-            async for update in orchestrator_agent.run_stream(
-                f"Please conduct comprehensive research on: {session.query}",
-                thread=orchestrator_thread,
-                middleware=[tool_middleware],
-            ):
-                # Check for queued tool call events from middleware
-                while True:
-                    tool_event = event_queue.get_nowait()
-                    if tool_event is None:
-                        break
-                    
-                    if tool_event["type"] == "tool_started":
-                        event_data: ToolCallStartedData = tool_event["event_data"]
-                        # Use the timestamp from when middleware captured the event
-                        event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
-                        yield SSEEvent(
-                            event_type=SSEEventType.TOOL_CALL_STARTED,
-                            session_id=session_id,
-                            timestamp=event_timestamp,
-                            data={
-                                "tool_name": event_data.tool_name,
-                                "tool_call_id": event_data.tool_call_id,
-                                "agent_name": event_data.agent_name,
-                                "input_args": event_data.input_args,
-                                "call_number": tool_event["call_number"],
-                            },
-                        )
-                        self._tool_call_log.append({
-                            "tool": event_data.tool_name,
+            synthesizer_output: str | None = None  # Capture synthesizer's full output
+            
+            # Helper to process a single tool event and yield SSE events
+            async def process_tool_event(tool_event: dict[str, Any]) -> AsyncGenerator[SSEEvent, None]:
+                """Process a tool event from the queue and yield SSE events."""
+                nonlocal scratchpad_sections_seen, synthesizer_output
+                
+                if tool_event["type"] == "tool_started":
+                    event_data: ToolCallStartedData = tool_event["event_data"]
+                    event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
+                    yield SSEEvent(
+                        event_type=SSEEventType.TOOL_CALL_STARTED,
+                        session_id=session_id,
+                        timestamp=event_timestamp,
+                        data={
+                            "tool_name": event_data.tool_name,
                             "tool_call_id": event_data.tool_call_id,
-                            "started_at": tool_event["timestamp"],
-                            "call_number": tool_event["call_number"],
+                            "agent_name": event_data.agent_name,
                             "input_args": event_data.input_args,
-                        })
+                            "call_number": tool_event["call_number"],
+                        },
+                    )
+                    self._tool_call_log.append({
+                        "tool": event_data.tool_name,
+                        "tool_call_id": event_data.tool_call_id,
+                        "started_at": tool_event["timestamp"],
+                        "call_number": tool_event["call_number"],
+                        "input_args": event_data.input_args,
+                    })
+                
+                elif tool_event["type"] == "tool_completed":
+                    event_data_completed: ToolCallCompletedData = tool_event["event_data"]
+                    tool_name = event_data_completed.tool_name
+                    event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
+                    yield SSEEvent(
+                        event_type=SSEEventType.TOOL_CALL_COMPLETED,
+                        session_id=session_id,
+                        timestamp=event_timestamp,
+                        data={
+                            "tool_name": tool_name,
+                            "tool_call_id": event_data_completed.tool_call_id,
+                            "agent_name": event_data_completed.agent_name,
+                            "output": event_data_completed.output,
+                            "execution_time_ms": event_data_completed.execution_time_ms,
+                            "call_number": tool_event["call_number"],
+                        },
+                    )
                     
-                    elif tool_event["type"] == "tool_completed":
-                        event_data_completed: ToolCallCompletedData = tool_event["event_data"]
-                        tool_name = event_data_completed.tool_name
-                        # Use the timestamp from when middleware captured the event
-                        event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
+                    # Check if this was a subagent tool - emit agent_response
+                    if tool_name in AGENT_TOOL_NAMES:
+                        output = event_data_completed.output
+                        response_preview = ""
+                        
+                        if isinstance(output, str):
+                            response_preview = output[:500]
+                        elif isinstance(output, list):
+                            text_parts = []
+                            for item in output:
+                                if isinstance(item, dict):
+                                    text = item.get("text", item.get("content", ""))
+                                    if text:
+                                        text_parts.append(str(text))
+                                elif isinstance(item, str):
+                                    text_parts.append(item)
+                            response_preview = "\n".join(text_parts)[:500]
+                        elif isinstance(output, dict):
+                            for key in ["text", "content", "summary", "response", "result"]:
+                                if key in output and output[key]:
+                                    response_preview = str(output[key])[:500]
+                                    break
+                            if not response_preview:
+                                response_preview = str(output)[:500]
+                        
+                        if len(response_preview) >= 500:
+                            response_preview = response_preview[:497] + "..."
+                        
                         yield SSEEvent(
-                            event_type=SSEEventType.TOOL_CALL_COMPLETED,
+                            event_type=SSEEventType.AGENT_RESPONSE,
                             session_id=session_id,
-                            timestamp=event_timestamp,
                             data={
-                                "tool_name": tool_name,
-                                "tool_call_id": event_data_completed.tool_call_id,
-                                "agent_name": event_data_completed.agent_name,
-                                "output": event_data_completed.output,
+                                "agent_name": tool_name.replace("_", "-"),
+                                "response_preview": response_preview,
                                 "execution_time_ms": event_data_completed.execution_time_ms,
-                                "call_number": tool_event["call_number"],
                             },
                         )
                         
-                        # Check if this was a subagent tool - emit agent_response
-                        # so UI knows to poll scratchpad for updated notes/draft
-                        if tool_name in AGENT_TOOL_NAMES:
-                            # Extract a response preview from the tool output
-                            output = event_data_completed.output
-                            response_preview = ""
-                            
-                            # Try to extract meaningful preview text from the response
+                        # Special handling for synthesize_findings - emit synthesis_completed immediately
+                        # This ensures the final report is available even if the orchestrator stream drops
+                        if tool_name == "synthesize_findings":
+                            # Extract full synthesis text (not truncated)
+                            full_synthesis = ""
                             if isinstance(output, str):
-                                response_preview = output[:500]
+                                full_synthesis = output
                             elif isinstance(output, list):
-                                # Handle list of content blocks (common MAF output format)
                                 text_parts = []
                                 for item in output:
                                     if isinstance(item, dict):
@@ -1484,183 +1735,83 @@ class AgentOrchestrator:
                                             text_parts.append(str(text))
                                     elif isinstance(item, str):
                                         text_parts.append(item)
-                                response_preview = "\n".join(text_parts)[:500]
+                                full_synthesis = "\n".join(text_parts)
                             elif isinstance(output, dict):
-                                # Check common response fields
                                 for key in ["text", "content", "summary", "response", "result"]:
                                     if key in output and output[key]:
-                                        response_preview = str(output[key])[:500]
+                                        full_synthesis = str(output[key])
                                         break
-                                if not response_preview:
-                                    response_preview = str(output)[:500]
+                                if not full_synthesis:
+                                    full_synthesis = str(output)
                             
-                            # Truncate and add ellipsis if needed
-                            if len(response_preview) >= 500:
-                                response_preview = response_preview[:497] + "..."
+                            synthesizer_output = full_synthesis
+                            logger.info(f"Captured synthesizer output ({len(full_synthesis)} chars)")
                             
+                            # Emit synthesis_completed immediately so UI gets the report
                             yield SSEEvent(
-                                event_type=SSEEventType.AGENT_RESPONSE,
+                                event_type=SSEEventType.SYNTHESIS_COMPLETED,
                                 session_id=session_id,
                                 data={
-                                    "agent_name": tool_name.replace("_", "-"),
-                                    "response_preview": response_preview,
+                                    "agent": "synthesizer",
                                     "execution_time_ms": event_data_completed.execution_time_ms,
+                                    "synthesis": full_synthesis,
                                 },
                             )
+                    
+                    # If this was a scratchpad write, emit a scratchpad updated event
+                    if tool_event.get("is_scratchpad_write"):
+                        section_name = tool_event.get("section_name", "unknown")
+                        tool_type = tool_event.get("tool_type")
+                        operation = "created" if section_name not in scratchpad_sections_seen else "updated"
+                        scratchpad_sections_seen.add(section_name)
                         
-                        # If this was a scratchpad write, emit a scratchpad updated event
-                        if tool_event.get("is_scratchpad_write"):
-                            section_name = tool_event.get("section_name", "unknown")
-                            tool_type = tool_event.get("tool_type")
-                            operation = "created" if section_name not in scratchpad_sections_seen else "updated"
-                            scratchpad_sections_seen.add(section_name)
-                            
-                            # Extract content preview from input args
-                            input_args = self._tool_call_log[-1].get("input_args", {}) if self._tool_call_log else {}
-                            content_preview = None
-                            tasks_created = None
-                            tasks_list = None
-                            task_update = None
-                            
-                            if tool_type == "add_note":
-                                content_preview = str(input_args.get("content", ""))[:500]
-                            elif tool_type == "add_tasks":
-                                tasks = input_args.get("tasks", [])
-                                tasks_created = len(tasks) if isinstance(tasks, list) else 0
-                                
-                                # Try to extract created tasks with IDs from tool output
-                                tool_output = event_data_completed.output
-                                if isinstance(tool_output, dict):
-                                    created_tasks = tool_output.get("tasks", [])
-                                    if created_tasks:
-                                        # Use output tasks (have server-assigned IDs)
-                                        tasks_list = created_tasks
-                                    else:
-                                        # Fallback to input tasks
-                                        tasks_list = tasks if isinstance(tasks, list) else []
-                                else:
-                                    tasks_list = tasks if isinstance(tasks, list) else []
-                                    
-                                # Create preview from task descriptions (still useful for logging)
-                                if tasks:
-                                    descriptions = [t.get("description", "") for t in tasks if isinstance(t, dict)]
-                                    content_preview = "; ".join(descriptions)[:500]
-                            elif tool_type == "update_task":
-                                # Send the task update details
-                                task_update = {
-                                    "task_id": input_args.get("task_id"),
-                                    "status": input_args.get("status"),
-                                    "assigned_to": input_args.get("assigned_to"),
-                                }
-                                content_preview = f"Task {input_args.get('task_id')} → {input_args.get('status')}"
-                            elif tool_type == "write_draft_section":
-                                content_preview = str(input_args.get("content", ""))[:500]
-                            
-                            yield SSEEvent(
-                                event_type=SSEEventType.SCRATCHPAD_UPDATED,
-                                session_id=session_id,
-                                data=ScratchpadUpdatedData(
-                                    section_name=section_name,
-                                    operation=operation,
-                                    updated_by=event_data_completed.agent_name,
-                                    content_preview=content_preview,
-                                    tool_type=tool_type,
-                                    tasks_created=tasks_created,
-                                    tasks=tasks_list,
-                                    task_update=task_update,
-                                ).model_dump(),
-                            )
-                    
-                    elif tool_event["type"] == "tool_failed":
-                        event_data_failed: ToolCallFailedData = tool_event["event_data"]
-                        event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
+                        input_args = self._tool_call_log[-1].get("input_args", {}) if self._tool_call_log else {}
+                        content_preview = None
+                        tasks_created = None
+                        tasks_list = None
+                        task_update = None
+                        
+                        if tool_type == "add_note":
+                            content_preview = str(input_args.get("content", ""))[:500]
+                        elif tool_type == "add_tasks":
+                            tasks = input_args.get("tasks", [])
+                            tasks_created = len(tasks) if isinstance(tasks, list) else 0
+                            tool_output = event_data_completed.output
+                            if isinstance(tool_output, dict):
+                                created_tasks = tool_output.get("tasks", [])
+                                tasks_list = created_tasks if created_tasks else (tasks if isinstance(tasks, list) else [])
+                            else:
+                                tasks_list = tasks if isinstance(tasks, list) else []
+                            if tasks:
+                                descriptions = [t.get("description", "") for t in tasks if isinstance(t, dict)]
+                                content_preview = "; ".join(descriptions)[:500]
+                        elif tool_type == "update_task":
+                            task_update = {
+                                "task_id": input_args.get("task_id"),
+                                "status": input_args.get("status"),
+                                "assigned_to": input_args.get("assigned_to"),
+                            }
+                            content_preview = f"Task {input_args.get('task_id')} → {input_args.get('status')}"
+                        elif tool_type == "write_draft_section":
+                            content_preview = str(input_args.get("content", ""))[:500]
+                        
                         yield SSEEvent(
-                            event_type=SSEEventType.TOOL_CALL_FAILED,
+                            event_type=SSEEventType.SCRATCHPAD_UPDATED,
                             session_id=session_id,
-                            timestamp=event_timestamp,
-                            data={
-                                "tool_name": event_data_failed.tool_name,
-                                "tool_call_id": event_data_failed.tool_call_id,
-                                "agent_name": event_data_failed.agent_name,
-                                "error": event_data_failed.error,
-                                "error_type": event_data_failed.error_type,
-                                "call_number": tool_event["call_number"],
-                            },
+                            data=ScratchpadUpdatedData(
+                                section_name=section_name,
+                                operation=operation,
+                                updated_by=event_data_completed.agent_name,
+                                content_preview=content_preview,
+                                tool_type=tool_type,
+                                tasks_created=tasks_created,
+                                tasks=tasks_list,
+                                task_update=task_update,
+                            ).model_dump(),
                         )
-                    
-                    # === Subagent streaming events (from stream_callback) ===
-                    elif tool_event["type"] == "subagent_tool_started":
-                        subagent_event: SubagentToolStartedData = tool_event["event_data"]
-                        event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
-                        yield SSEEvent(
-                            event_type=SSEEventType.SUBAGENT_TOOL_STARTED,
-                            session_id=session_id,
-                            timestamp=event_timestamp,
-                            data={
-                                "subagent_name": subagent_event.subagent_name,
-                                "tool_name": subagent_event.tool_name,
-                                "tool_call_id": subagent_event.tool_call_id,
-                                "input_preview": subagent_event.input_preview,
-                            },
-                        )
-                    
-                    elif tool_event["type"] == "subagent_tool_completed":
-                        subagent_completed: SubagentToolCompletedData = tool_event["event_data"]
-                        event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
-                        yield SSEEvent(
-                            event_type=SSEEventType.SUBAGENT_TOOL_COMPLETED,
-                            session_id=session_id,
-                            timestamp=event_timestamp,
-                            data={
-                                "subagent_name": subagent_completed.subagent_name,
-                                "tool_name": subagent_completed.tool_name,
-                                "tool_call_id": subagent_completed.tool_call_id,
-                                "output_preview": subagent_completed.output_preview,
-                            },
-                        )
-                    
-                    elif tool_event["type"] == "subagent_progress":
-                        subagent_progress: SubagentProgressData = tool_event["event_data"]
-                        event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
-                        yield SSEEvent(
-                            event_type=SSEEventType.SUBAGENT_PROGRESS,
-                            session_id=session_id,
-                            timestamp=event_timestamp,
-                            data={
-                                "subagent_name": subagent_progress.subagent_name,
-                                "text_chunk": subagent_progress.text_chunk,
-                            },
-                        )
-
-                # Accumulate text output silently - no streaming events
-                # We'll emit one final message when the workflow completes
-                if update.text:
-                    accumulated_content += update.text
-
-            # Drain any remaining events from the queue
-            event_queue.close()
-            while True:
-                tool_event = event_queue.get_nowait()
-                if tool_event is None:
-                    break
-                if tool_event["type"] == "tool_completed":
-                    event_data_completed = tool_event["event_data"]
-                    event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
-                    yield SSEEvent(
-                        event_type=SSEEventType.TOOL_CALL_COMPLETED,
-                        session_id=session_id,
-                        timestamp=event_timestamp,
-                        data={
-                            "tool_name": event_data_completed.tool_name,
-                            "tool_call_id": event_data_completed.tool_call_id,
-                            "agent_name": event_data_completed.agent_name,
-                            "output": event_data_completed.output,
-                            "execution_time_ms": event_data_completed.execution_time_ms,
-                            "call_number": tool_event["call_number"],
-                        },
-                    )
+                
                 elif tool_event["type"] == "tool_failed":
-                    event_data_failed = tool_event["event_data"]
+                    event_data_failed: ToolCallFailedData = tool_event["event_data"]
                     event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
                     yield SSEEvent(
                         event_type=SSEEventType.TOOL_CALL_FAILED,
@@ -1675,6 +1826,107 @@ class AgentOrchestrator:
                             "call_number": tool_event["call_number"],
                         },
                     )
+                
+                # === Subagent streaming events (from stream_callback) ===
+                elif tool_event["type"] == "subagent_tool_started":
+                    subagent_event: SubagentToolStartedData = tool_event["event_data"]
+                    event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
+                    yield SSEEvent(
+                        event_type=SSEEventType.SUBAGENT_TOOL_STARTED,
+                        session_id=session_id,
+                        timestamp=event_timestamp,
+                        data={
+                            "subagent_name": subagent_event.subagent_name,
+                            "tool_name": subagent_event.tool_name,
+                            "tool_call_id": subagent_event.tool_call_id,
+                            "input_preview": subagent_event.input_preview,
+                        },
+                    )
+                
+                elif tool_event["type"] == "subagent_tool_completed":
+                    subagent_completed: SubagentToolCompletedData = tool_event["event_data"]
+                    event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
+                    yield SSEEvent(
+                        event_type=SSEEventType.SUBAGENT_TOOL_COMPLETED,
+                        session_id=session_id,
+                        timestamp=event_timestamp,
+                        data={
+                            "subagent_name": subagent_completed.subagent_name,
+                            "tool_name": subagent_completed.tool_name,
+                            "tool_call_id": subagent_completed.tool_call_id,
+                            "output_preview": subagent_completed.output_preview,
+                        },
+                    )
+                
+                elif tool_event["type"] == "subagent_progress":
+                    subagent_progress: SubagentProgressData = tool_event["event_data"]
+                    event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
+                    yield SSEEvent(
+                        event_type=SSEEventType.SUBAGENT_PROGRESS,
+                        session_id=session_id,
+                        timestamp=event_timestamp,
+                        data={
+                            "subagent_name": subagent_progress.subagent_name,
+                            "text_chunk": subagent_progress.text_chunk,
+                        },
+                    )
+
+            # Stream the orchestrator's execution with concurrent queue processing
+            # Use asyncio to interleave queue events with stream updates
+            stream_iter = orchestrator_agent.run_stream(
+                f"Please conduct comprehensive research on: {session.query}",
+                thread=orchestrator_thread,
+                middleware=[tool_middleware],
+            ).__aiter__()
+            
+            stream_exhausted = False
+            pending_stream_task: asyncio.Task | None = None
+            
+            while not stream_exhausted:
+                # Create task for next stream update if not already pending
+                if pending_stream_task is None:
+                    pending_stream_task = asyncio.create_task(stream_iter.__anext__())
+                
+                # Wait for either: stream update OR queue event (with short timeout)
+                # This allows us to emit queue events even while waiting for stream
+                queue_event = await event_queue.get(timeout=0.1)
+                
+                if queue_event is not None:
+                    # Process queue event immediately
+                    async for sse_event in process_tool_event(queue_event):
+                        yield sse_event
+                    continue  # Check for more queue events before waiting on stream
+                
+                # No queue events - check if stream task is done
+                if pending_stream_task.done():
+                    try:
+                        update = pending_stream_task.result()
+                        pending_stream_task = None
+                        
+                        # Drain any remaining queue events
+                        while True:
+                            tool_event = event_queue.get_nowait()
+                            if tool_event is None:
+                                break
+                            async for sse_event in process_tool_event(tool_event):
+                                yield sse_event
+                        
+                        # Accumulate text output
+                        if update.text:
+                            accumulated_content += update.text
+                            
+                    except StopAsyncIteration:
+                        stream_exhausted = True
+                        pending_stream_task = None
+
+            # Drain any remaining events from the queue
+            event_queue.close()
+            while True:
+                tool_event = event_queue.get_nowait()
+                if tool_event is None:
+                    break
+                async for sse_event in process_tool_event(tool_event):
+                    yield sse_event
 
             end_time = datetime.now(timezone.utc)
             execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
@@ -1702,11 +1954,14 @@ class AgentOrchestrator:
                     )
 
             # Record the orchestrator's result
+            # Use synthesizer output if captured, otherwise fall back to accumulated content
+            final_synthesis_content = synthesizer_full_output or accumulated_content
+            
             session.agent_results.append(
                 AgentResult(
                     agent_type=AgentType.SYNTHESIZER,  # Final output is the synthesis
                     agent_name="research-orchestrator",
-                    content=accumulated_content,
+                    content=final_synthesis_content,
                     execution_time_ms=execution_time_ms,
                     timestamp=end_time,
                     metadata={
@@ -1715,19 +1970,21 @@ class AgentOrchestrator:
                     },
                 )
             )
-            session.final_synthesis = accumulated_content
+            session.final_synthesis = final_synthesis_content
 
-            yield SSEEvent(
-                event_type=SSEEventType.SYNTHESIS_COMPLETED,
-                session_id=session_id,
-                data={
-                    "agent": "research-orchestrator",
-                    "execution_time_ms": execution_time_ms,
-                    "tool_calls_made": self._tool_call_log,
-                    "agent_call_counts": agent_call_count,
-                    "synthesis": accumulated_content,  # Full synthesis for Final Report tab
-                },
-            )
+            # Only emit synthesis_completed if we didn't already emit it from the synthesizer tool
+            if not synthesizer_full_output:
+                yield SSEEvent(
+                    event_type=SSEEventType.SYNTHESIS_COMPLETED,
+                    session_id=session_id,
+                    data={
+                        "agent": "research-orchestrator",
+                        "execution_time_ms": execution_time_ms,
+                        "tool_calls_made": self._tool_call_log,
+                        "agent_call_counts": agent_call_count,
+                        "synthesis": accumulated_content,  # Full synthesis for Final Report tab
+                    },
+                )
 
             # Workflow complete
             session.status = ResearchSessionStatus.COMPLETED
@@ -1742,7 +1999,7 @@ class AgentOrchestrator:
                     "total_time_ms": int(
                         (session.completed_at - session.started_at).total_seconds() * 1000
                     ),
-                    "synthesis": accumulated_content,
+                    "synthesis": final_synthesis_content,
                 },
             )
 
@@ -1762,7 +2019,16 @@ class AgentOrchestrator:
             )
         
         finally:
-            # Clean up MCP tools for this session first (before closing agent clients)
+            # Clean up agent-specific MCP tools (demographics, business-registry, etc.)
+            # ADR-006: These are created per-workflow and must be cleaned up
+            for mcp_tool in agent_mcp_tools:
+                try:
+                    await mcp_tool.__aexit__(None, None, None)
+                    logger.debug(f"Cleaned up agent MCP tool: {mcp_tool.name}")
+                except Exception as e:
+                    logger.debug(f"Error cleaning up agent MCP tool {mcp_tool.name}: {e}")
+            
+            # Clean up session-scoped scratchpad MCP tools
             # This prevents ClosedResourceError when API proxy tries to use stale cached tools
             await self._cleanup_session_mcp_tools(session_id)
             

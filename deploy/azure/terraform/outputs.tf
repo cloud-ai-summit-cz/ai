@@ -169,6 +169,16 @@ output "mcp_demographics_url" {
   value       = "https://${azapi_resource.capp_mcp_demographics.output.properties.configuration.ingress.fqdn}/mcp"
 }
 
+output "mcp_real_estate_url" {
+  description = "The URL for the MCP Real Estate server"
+  value       = "https://${azapi_resource.capp_mcp_real_estate.output.properties.configuration.ingress.fqdn}/mcp"
+}
+
+output "mcp_calculator_url" {
+  description = "The URL for the MCP Calculator server"
+  value       = "https://${azapi_resource.capp_mcp_calculator.output.properties.configuration.ingress.fqdn}/mcp"
+}
+
 # ============================================================================
 # MCP Project Connection Names
 # ============================================================================
@@ -192,4 +202,14 @@ output "mcp_connection_government_data" {
 output "mcp_connection_demographics" {
   description = "The Foundry project connection name for MCP Demographics"
   value       = azapi_resource.mcp_connection_demographics.name
+}
+
+output "mcp_connection_real_estate" {
+  description = "The Foundry project connection name for MCP Real Estate"
+  value       = azapi_resource.mcp_connection_real_estate.name
+}
+
+output "mcp_connection_calculator" {
+  description = "The Foundry project connection name for MCP Calculator"
+  value       = azapi_resource.mcp_connection_calculator.name
 }

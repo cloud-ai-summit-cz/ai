@@ -30,6 +30,12 @@ function getStatusIndicator(status: SessionStatus) {
         text: 'Researching...',
         color: 'text-accent',
       };
+    case 'preparing':
+      return {
+        icon: <Loader2 className="w-4 h-4 animate-spin" />,
+        text: 'Preparing...',
+        color: 'text-yellow-400',
+      };
     case 'pending':
       return {
         icon: <AlertCircle className="w-4 h-4" />,

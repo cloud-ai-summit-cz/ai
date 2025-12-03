@@ -298,37 +298,65 @@ async def invoke_agent(agent_name: str, message: str):
 
 ---
 
-## Real-Time Agent Observability (ADR-005)
+## Real-Time UI Events (ADR-007)
 
-The Research Orchestrator provides real-time visibility into subagent tool calls by polling Application Insights and streaming traces to the frontend via SSE.
+The Research Orchestrator provides real-time visibility into subagent activity via direct events streamed to the frontend over SSE.
 
-> **See**: `specs/platform/decisions/ADR-005-realtime-agent-observability.md` for full architecture decision.
-
-### Why This Approach?
-
-**Problem**: Azure AI Foundry Hosted Agents execute tools server-side. The MAF `stream_callback` only receives text tokens, not `FunctionCallContent` from tool executions. This means we cannot capture subagent tool calls via streaming alone.
-
-**Solution**: Use OpenTelemetry traces as the source of truth. All agents export to Application Insights. The orchestrator polls App Insights for traces matching the session's `operation_Id` and streams them to the frontend.
+> **See**: `specs/platform/decisions/ADR-007-direct-orchestrator-events-for-ui.md` for the current architecture decision.
+>
+> **Historical Note**: ADR-005 originally proposed using trace polling for UI events, but this was superseded due to 2-5 second App Insights ingestion latency. See ADR-007 for details.
 
 ### Architecture
 
 ```
-┌─────────────┐      SSE        ┌───────────────────────┐     Query      ┌──────────────────────┐
-│   Frontend  │ ◄─────────────  │ Research Orchestrator │ ◄───────────── │ Application Insights │
-│   (React)   │                 │     (Backend API)     │                │  (via Azure SDK)     │
-└─────────────┘                 └───────────────────────┘                └──────────────────────┘
-                                         ▲                                         ▲
-                                         │ OTEL Traces                             │
-                                         └───────────────┬─────────────────────────┘
-                                                         │
-                               ┌─────────────────────────┼─────────────────────────┐
-                               │                         │                         │
-                       ┌───────▼──────┐          ┌───────▼──────┐          ┌───────▼──────┐
-                       │ market-      │          │ location-    │          │ mcp-         │
-                       │ analyst      │          │ scout        │          │ scratchpad   │
-                       │ (Foundry)    │          │ (Hosted)     │          │ (MCP)        │
-                       └──────────────┘          └──────────────┘          └──────────────┘
+┌─────────────┐      SSE        ┌───────────────────────┐
+│   Frontend  │ ◄─────────────  │ Research Orchestrator │
+│   (React)   │  Direct Events  │     (Backend API)     │
+└─────────────┘                 └───────────────────────┘
+                                         │
+                                         │ Middleware intercepts
+                                         │ agent/tool calls
+                                         ▼
+                               ┌─────────────────────────┐
+                               │    Event Middleware     │
+                               │  (emit_agent_event())   │
+                               └─────────────────────────┘
+                                         │
+                               ┌─────────┼─────────┐
+                               │         │         │
+                       ┌───────▼──┐ ┌────▼────┐ ┌──▼──────┐
+                       │ market-  │ │location-│ │ mcp-    │
+                       │ analyst  │ │ scout   │ │scratchpad│
+                       └──────────┘ └─────────┘ └─────────┘
 ```
+
+### SSE Event Types for UI
+
+| Event Type | Payload | When Emitted |
+|------------|---------|--------------|
+| `tool_call_started` | `{tool, mcp_server, agent, timestamp}` | Tool invocation begins |
+| `tool_call_completed` | `{tool, mcp_server, agent, duration_ms, success}` | Tool invocation ends |
+| `agent_started` | `{agent, timestamp}` | Agent invocation begins |
+| `agent_completed` | `{agent, duration_ms, success}` | Agent invocation ends |
+| `scratchpad_updated` | `{section, content_preview}` | Scratchpad content changes |
+| `synthesis_completed` | `{report_length}` | Final report ready |
+| `heartbeat` | `{timestamp}` | Connection keep-alive (every 15s) |
+
+### Latency Expectations
+
+| Stage | Expected Latency |
+|-------|------------------|
+| Event emitted by middleware | Immediate |
+| SSE delivery to frontend | < 100ms |
+| **Total end-to-end** | **< 100ms** |
+
+---
+
+## Observability-Only Trace Polling (ADR-005)
+
+While UI events are now delivered directly, the original trace polling infrastructure remains available for backend observability, debugging, and dashboard queries.
+
+> **Note**: This is **not** used for real-time UI updates. It's for post-hoc analysis and dashboards.
 
 ### Session Correlation via operation_Id
 
@@ -337,77 +365,13 @@ All traces within a research session share the same `operation_Id` (W3C trace ID
 ```python
 # At session start, orchestrator creates trace context
 from opentelemetry import trace
-from opentelemetry.trace import SpanContext, TraceFlags
-import uuid
 
-session_trace_id = uuid.uuid4().hex  # 32 hex chars
-
-# Create parent span for entire session
 tracer = trace.get_tracer("research-orchestrator")
 with tracer.start_as_current_span("research_session") as span:
     span.set_attribute("session.id", session_id)
     span.set_attribute("research.query", user_query)
     # All subagent calls inherit this operation_Id
 ```
-
-### Polling Application Insights
-
-```python
-# app/services/trace_poller.py
-from azure.monitor.query import LogsQueryClient
-from azure.identity import DefaultAzureCredential
-
-class AppInsightsTracePoller:
-    def __init__(self, workspace_id: str):
-        self.client = LogsQueryClient(DefaultAzureCredential())
-        self.workspace_id = workspace_id
-    
-    async def poll_traces(
-        self, 
-        operation_id: str, 
-        since: datetime
-    ) -> list[TraceEvent]:
-        """Poll for new traces matching session operation_id."""
-        query = f"""
-        union traces, dependencies
-        | where operation_Id == '{operation_id}'
-        | where timestamp > datetime({since.isoformat()}Z)
-        | project 
-            timestamp,
-            name,
-            operation_Name,
-            customDimensions,
-            duration,
-            success
-        | order by timestamp asc
-        """
-        
-        result = await self.client.query_workspace(
-            workspace_id=self.workspace_id,
-            query=query,
-            timespan=timedelta(minutes=30)
-        )
-        
-        return [self._to_trace_event(row) for row in result.tables[0].rows]
-```
-
-### SSE Event Types for Traces
-
-| Event Type | Payload | When Emitted |
-|------------|---------|--------------|
-| `trace_span_started` | `{span_name, agent, operation_id, timestamp}` | New span detected |
-| `trace_span_completed` | `{span_name, agent, duration_ms, success}` | Span ended |
-| `trace_tool_call` | `{tool_name, mcp_server, agent, arguments_preview}` | MCP tool call detected |
-
-### Latency Expectations
-
-| Stage | Expected Latency |
-|-------|------------------|
-| Agent emits trace | Immediate |
-| App Insights ingestion | 2-5 seconds |
-| Backend polls App Insights | Every 2 seconds |
-| SSE delivery to frontend | < 100ms |
-| **Total end-to-end** | **3-8 seconds** |
 
 ### KQL Queries for Trace Analysis
 
@@ -431,18 +395,6 @@ union traces, dependencies
 | project timestamp, name, duration, customDimensions
 | order by timestamp asc
 | render timechart
-```
-
-### Required Dependencies
-
-Add to `pyproject.toml`:
-
-```toml
-[project]
-dependencies = [
-    "azure-monitor-query>=1.3.0",
-    # ... existing deps
-]
 ```
 
 ---

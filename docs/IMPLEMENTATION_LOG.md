@@ -2,6 +2,47 @@
 
 Technical decisions and implementation notes for the Copilot AI Platform project.
 
+## 2025-01-XX: ADR-007 - Direct Orchestrator Events for UI (Reverting Trace-Based SSE)
+
+### Context
+Implemented ADR-007 to revert from trace-based SSE events to direct orchestrator-generated events for the UI. The trace polling approach (ADR-005) had 2-5 second latency due to App Insights ingestion delays, making UI updates feel sluggish.
+
+### Changes Made
+
+#### 1. Documentation
+- Created `specs/platform/decisions/ADR-007-direct-orchestrator-events-for-ui.md`
+- Updated `specs/services/agent-research-orchestrator/contracts/sse-events.yaml` to document direct events as primary
+
+#### 2. Backend (`src/agent-research-orchestrator/`)
+- **api.py**: Removed trace poller integration from `event_generator()`, simplified to only emit workflow events from orchestrator
+- **models.py**: Updated `SSEEventType` enum - removed "Legacy" labels from direct events, marked trace events as observability-only
+
+#### 3. Frontend
+- No changes needed - `store.ts` already handled both trace and direct events
+
+### Architecture After Change
+```
+Orchestrator → SSE Stream → UI        (real-time, <100ms latency)
+     ↓
+OpenTelemetry → App Insights          (observability, 2-5s latency, for dashboards)
+```
+
+### What's Kept
+- OpenTelemetry spans in orchestrator middleware (for App Insights dashboards)
+- `trace_poller.py` module (dormant, kept for potential future use)
+- Trace event types in models (marked as observability-only)
+
+### What's Removed
+- Trace polling from SSE event generator
+- Complex parallel task management in api.py
+- UI dependency on App Insights availability
+
+### Reference
+- ADR-007: `specs/platform/decisions/ADR-007-direct-orchestrator-events-for-ui.md`
+- Related: ADR-005 (partially superseded), ADR-006 (MCP tools in orchestrator)
+
+---
+
 ## 2025-12-02: Fix Session Isolation - Remove Static Scratchpad Registration
 
 ### Context

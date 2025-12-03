@@ -1,0 +1,53 @@
+"""Configuration management for Finance Analyst agent."""
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # Azure AI Foundry connection
+    azure_ai_foundry_endpoint: str
+
+    # Model deployment
+    model_deployment_name: str = "gpt-5"
+
+    # Note: MCP tools are injected by the research-orchestrator at runtime
+    # per ADR-006, not configured statically in the agent
+
+    @property
+    def prompts_dir(self) -> Path:
+        """Get the prompts directory path."""
+        return Path(__file__).parent / "prompts"
+
+    def get_prompt(self, prompt_name: str = "system_prompt") -> str:
+        """Load a prompt file.
+
+        Args:
+            prompt_name: The prompt file name (without .jinja2 extension)
+
+        Returns:
+            The prompt content as a string.
+
+        Raises:
+            FileNotFoundError: If the prompt file doesn't exist.
+        """
+        prompt_path = self.prompts_dir / f"{prompt_name}.jinja2"
+        if not prompt_path.exists():
+            raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
+        return prompt_path.read_text(encoding="utf-8")
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Get cached settings instance."""
+    return Settings()

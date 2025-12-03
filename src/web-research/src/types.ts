@@ -1,8 +1,8 @@
 /**
  * Type definitions for the web-research frontend.
  *
- * Simplified for the new trace-based architecture (ADR-005).
- * All agent activity is captured via App Insights trace polling.
+ * ADR-007: UI events are generated directly by the orchestrator middleware,
+ * providing real-time updates. Trace events are kept for observability only.
  */
 
 // === Session & Workflow Types ===
@@ -10,7 +10,8 @@
 export type SessionStatus =
   | 'idle'
   | 'pending'
-  | 'running'
+  | 'preparing'  // MCP tools being injected, agents being configured
+  | 'running'     // Dynamic research workflow started
   | 'completed'
   | 'failed';
 
@@ -127,35 +128,38 @@ export interface ScratchpadState {
   questions: Question[];
 }
 
-// === SSE Event Types (simplified for trace-based architecture) ===
+// === SSE Event Types (ADR-007: Direct orchestrator events) ===
 
 export type SSEEventType =
   // Workflow lifecycle
   | 'workflow_started'    // Initial event with operation_id
   | 'workflow_completed'
   | 'workflow_failed'
-  // Trace events from App Insights (primary event source)
-  | 'trace_span_started'
-  | 'trace_span_completed'
-  | 'trace_tool_call'
-  // Subagent events (from stream_callback - visibility into subagent tool calls)
-  | 'subagent_tool_started'
-  | 'subagent_tool_completed'
-  | 'subagent_progress'
-  // Keep-alive
-  | 'heartbeat'
-  // Error fallback
-  | 'error'
-  // Legacy events (emitted by backend, handled gracefully)
+  // Agent events (primary - from orchestrator)
   | 'session_started'
   | 'agent_started'
   | 'agent_progress'
   | 'agent_completed'
   | 'agent_response'
+  // Tool call events (primary - from middleware)
   | 'tool_call_started'
   | 'tool_call_completed'
+  // Subagent events (primary - from stream_callback)
+  | 'subagent_tool_started'
+  | 'subagent_tool_completed'
+  | 'subagent_progress'
+  // Scratchpad events (primary - from middleware)
   | 'scratchpad_updated'
-  | 'synthesis_completed';
+  // Synthesis events
+  | 'synthesis_completed'
+  // Keep-alive
+  | 'heartbeat'
+  // Error fallback
+  | 'error'
+  // Trace events (observability only - not actively used for UI)
+  | 'trace_span_started'
+  | 'trace_span_completed'
+  | 'trace_tool_call';
 
 /**
  * SSE Event structure as received from the backend.

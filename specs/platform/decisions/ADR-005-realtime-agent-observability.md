@@ -2,10 +2,12 @@
 
 - **ADR ID**: ADR-005
 - **Title**: Real-time Agent Observability via OpenTelemetry and Application Insights
-- **Status**: Accepted
+- **Status**: Partially Superseded by ADR-007
 - **Date**: 2025-12-01
 - **Authors**: Platform Team
 - **Related Docs**: `specs/platform/OBSERVABILITY.md`, `specs/services/agent-research-orchestrator/ARCHITECTURE.md`
+
+> **Note**: ADR-007 supersedes the UI SSE event generation approach. OpenTelemetry traces to App Insights remain for observability dashboards, but trace polling is no longer used for UI events (due to 2-5 second latency). UI events are now generated directly by orchestrator middleware.
 
 ---
 

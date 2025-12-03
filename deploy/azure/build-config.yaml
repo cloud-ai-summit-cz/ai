@@ -40,6 +40,16 @@ containers:
     image: mcp-demographics
     tag: latest
 
+  - name: mcp-real-estate
+    path: ../../src/mcp-real-estate
+    image: mcp-real-estate
+    tag: latest
+
+  - name: mcp-calculator
+    path: ../../src/mcp-calculator
+    image: mcp-calculator
+    tag: latest
+
 # Optional: build all containers by default
 # Set to false to require explicit --container flag
 build_all_by_default: true

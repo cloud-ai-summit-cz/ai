@@ -10,6 +10,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Well-known agent names (hardcoded, must match provisioned agents in Foundry)
 MARKET_ANALYST_AGENT_NAME = "market-analyst"
 COMPETITOR_ANALYST_AGENT_NAME = "competitor-analyst"
+LOCATION_SCOUT_AGENT_NAME = "location-scout"
+FINANCE_ANALYST_AGENT_NAME = "finance-analyst"
 SYNTHESIZER_AGENT_NAME = "synthesizer"
 
 
@@ -46,6 +48,66 @@ class Settings(BaseSettings):
         description="API key for MCP Scratchpad authentication",
     )
 
+    # MCP Demographics configuration (ADR-006: orchestrator-managed)
+    mcp_demographics_url: str = Field(
+        default="",
+        alias="MCP_DEMOGRAPHICS_URL",
+        description="URL to the MCP Demographics server",
+    )
+    mcp_demographics_api_key: str = Field(
+        default="",
+        alias="MCP_DEMOGRAPHICS_API_KEY",
+        description="API key for MCP Demographics authentication",
+    )
+
+    # MCP Business Registry configuration (ADR-006: orchestrator-managed)
+    mcp_business_registry_url: str = Field(
+        default="",
+        alias="MCP_BUSINESS_REGISTRY_URL",
+        description="URL to the MCP Business Registry server",
+    )
+    mcp_business_registry_api_key: str = Field(
+        default="",
+        alias="MCP_BUSINESS_REGISTRY_API_KEY",
+        description="API key for MCP Business Registry authentication",
+    )
+
+    # MCP Government Data configuration (ADR-006: orchestrator-managed)
+    mcp_government_data_url: str = Field(
+        default="",
+        alias="MCP_GOVERNMENT_DATA_URL",
+        description="URL to the MCP Government Data server",
+    )
+    mcp_government_data_api_key: str = Field(
+        default="",
+        alias="MCP_GOVERNMENT_DATA_API_KEY",
+        description="API key for MCP Government Data authentication",
+    )
+
+    # MCP Real Estate configuration (ADR-006: orchestrator-managed)
+    mcp_real_estate_url: str = Field(
+        default="",
+        alias="MCP_REAL_ESTATE_URL",
+        description="URL to the MCP Real Estate server",
+    )
+    mcp_real_estate_api_key: str = Field(
+        default="",
+        alias="MCP_REAL_ESTATE_API_KEY",
+        description="API key for MCP Real Estate authentication",
+    )
+
+    # MCP Calculator configuration (ADR-006: orchestrator-managed)
+    mcp_calculator_url: str = Field(
+        default="",
+        alias="MCP_CALCULATOR_URL",
+        description="URL to the MCP Calculator server",
+    )
+    mcp_calculator_api_key: str = Field(
+        default="",
+        alias="MCP_CALCULATOR_API_KEY",
+        description="API key for MCP Calculator authentication",
+    )
+
     # Application Insights / Log Analytics configuration (ADR-005)
     log_analytics_workspace_id: str = Field(
         default="",
@@ -66,7 +128,7 @@ class Settings(BaseSettings):
     # API Configuration
     api_host: str = Field(default="0.0.0.0", description="API host")
     api_port: int = Field(default=8000, description="API port")
-    api_reload: bool = Field(default=True, description="Enable auto-reload for development")
+    api_reload: bool = Field(default=False, description="Enable auto-reload for development")
 
     # Timeouts
     agent_timeout_seconds: int = Field(
@@ -87,6 +149,31 @@ class Settings(BaseSettings):
     def mcp_scratchpad_enabled(self) -> bool:
         """Check if MCP Scratchpad is configured."""
         return bool(self.mcp_scratchpad_url and self.mcp_scratchpad_api_key)
+
+    @property
+    def mcp_demographics_enabled(self) -> bool:
+        """Check if MCP Demographics is configured (ADR-006)."""
+        return bool(self.mcp_demographics_url and self.mcp_demographics_api_key)
+
+    @property
+    def mcp_business_registry_enabled(self) -> bool:
+        """Check if MCP Business Registry is configured (ADR-006)."""
+        return bool(self.mcp_business_registry_url and self.mcp_business_registry_api_key)
+
+    @property
+    def mcp_government_data_enabled(self) -> bool:
+        """Check if MCP Government Data is configured (ADR-006)."""
+        return bool(self.mcp_government_data_url and self.mcp_government_data_api_key)
+
+    @property
+    def mcp_real_estate_enabled(self) -> bool:
+        """Check if MCP Real Estate is configured (ADR-006)."""
+        return bool(self.mcp_real_estate_url and self.mcp_real_estate_api_key)
+
+    @property
+    def mcp_calculator_enabled(self) -> bool:
+        """Check if MCP Calculator is configured (ADR-006)."""
+        return bool(self.mcp_calculator_url and self.mcp_calculator_api_key)
 
     @property
     def trace_polling_configured(self) -> bool:

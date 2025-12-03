@@ -51,13 +51,15 @@ resource "azurerm_role_assignment" "cognitive_services_contributor_current" {
 # Azure AI Foundry Project Access for Current User (development)
 # ============================================================================
 
-# Azure AI User role for the current user on the Foundry project
+# Azure AI Developer role for the current user on the Foundry project
 # This allows creating/managing agents via the Azure AI Foundry SDK
-# Required for: Microsoft.CognitiveServices/accounts/AIServices/agents/* dataActions
+# Required for: Microsoft.MachineLearningServices/workspaces/agents/* actions
+# Note: "Azure AI User" only grants data-plane access; "Azure AI Developer" 
+# includes control-plane agent CRUD operations
 # See: https://learn.microsoft.com/en-us/azure/ai-foundry/concepts/rbac-azure-ai-foundry
-resource "azurerm_role_assignment" "ai_user_current" {
+resource "azurerm_role_assignment" "ai_developer_current" {
   scope                = azapi_resource.ai_foundry_project.id
-  role_definition_name = "Azure AI User"
+  role_definition_name = "Azure AI Developer"
   principal_id         = data.azurerm_client_config.current.object_id
 }
 

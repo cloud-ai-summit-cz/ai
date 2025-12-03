@@ -2,19 +2,19 @@
 
 Creates and destroys the market-analyst agent in Azure AI Foundry Agent Service.
 
-MCP Tools configured at provisioning time (static):
-- mcp-web-search: Web search capabilities  
+ADR-006: MCP Tools are now managed by the orchestrator, not configured here.
+This agent is provisioned as a prompt-only agent. The orchestrator injects:
+- mcp-scratchpad: Session-scoped shared memory (with X-Session-ID headers)
 - mcp-demographics: Population, income, consumer behavior data
 
-MCP Tools added dynamically by orchestrator (with session headers):
-- mcp-scratchpad: Shared memory for notes and draft sections
+This enables real-time SSE streaming of tool calls via MAF middleware.
 """
 
 import os
 import sys
 
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import PromptAgentDefinition, MCPTool
+from azure.ai.projects.models import PromptAgentDefinition
 from azure.identity import DefaultAzureCredential
 from jinja2 import Template
 from rich.console import Console
@@ -85,28 +85,17 @@ def create_agent() -> None:
             try:
                 instructions = get_instructions()
 
-                # Configure MCP tools using project_connection_id
-                # Connections are created by Terraform in foundry.connections.tf
-                # and store the MCP server URL + auth credentials securely
+                # ADR-006: No MCP tools configured here!
+                # MCP tools are now injected by the orchestrator at runtime.
+                # This enables:
+                # - Real-time SSE streaming of tool calls via MAF middleware
+                # - Session isolation for scratchpad via X-Session-ID headers
+                # - Full observability without App Insights polling latency
                 #
-                # NOTE: mcp-scratchpad is NOT included here!
-                # Scratchpad must be added DYNAMICALLY by the orchestrator with
-                # X-Session-ID headers for session isolation. See ARCHITECTURE.md
-                # "Session Isolation Architecture" section.
-                mcp_tools = [
-                    MCPTool(
-                        server_label="web_search",
-                        server_url=settings.mcp_web_search_url,
-                        require_approval="never",
-                        project_connection_id="mcp-web-search",
-                    ),
-                    MCPTool(
-                        server_label="demographics",
-                        server_url=settings.mcp_demographics_url,
-                        require_approval="never",
-                        project_connection_id="mcp-demographics",
-                    ),
-                ]
+                # The orchestrator will inject:
+                # - mcp-scratchpad (session-scoped)
+                # - mcp-demographics
+                mcp_tools: list = []
 
                 agent_def = PromptAgentDefinition(
                     model=settings.model_deployment_name,
@@ -124,9 +113,8 @@ def create_agent() -> None:
                     f"[OK] Created [green]{AGENT_DISPLAY_NAME}[/green] "
                     f"(name: {AGENT_NAME})"
                 )
-                console.print(f"  Static Tools: web_search, demographics")
-                console.print(f"  Dynamic Tools: scratchpad (added by orchestrator with session headers)")
-                console.print(f"  [dim]Using project connections for auth[/dim]")
+                console.print(f"  [dim]Prompt-only agent (ADR-006)[/dim]")
+                console.print(f"  [dim]MCP tools injected by orchestrator: scratchpad, demographics[/dim]")
                 
             except Exception as e:
                 console.print(f"[FAIL] Failed to create [red]{AGENT_DISPLAY_NAME}[/red]: {e}")

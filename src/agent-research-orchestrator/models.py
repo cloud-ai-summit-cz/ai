@@ -89,15 +89,25 @@ class SessionListResponse(BaseModel):
     total: int
 
 
-# === SSE Event Models (Trace-Based Architecture - ADR-005) ===
+# === SSE Event Models (ADR-007: Direct Orchestrator Events) ===
 
 
 class SSEEventType(str, Enum):
     """Types of Server-Sent Events.
     
-    Primary events are derived from Application Insights trace polling (ADR-005).
-    Legacy events are still emitted by orchestrator for backward compatibility
-    but frontend only processes the trace-based events.
+    ADR-007: UI events are now generated directly by the orchestrator middleware,
+    providing real-time updates without the 2-5 second latency from App Insights polling.
+    
+    Primary events (sent to UI):
+    - Workflow lifecycle: workflow_started, workflow_completed, workflow_failed
+    - Agent operations: agent_started, agent_completed, agent_response, agent_progress
+    - Tool calls: tool_call_started, tool_call_completed, tool_call_failed
+    - Subagent operations: subagent_tool_started, subagent_tool_completed, subagent_progress
+    - Scratchpad: scratchpad_updated, scratchpad_snapshot
+    - Synthesis: synthesis_completed
+    
+    Observability-only events (NOT sent to UI, kept for potential future dashboards):
+    - Trace events: trace_span_started, trace_span_completed, trace_tool_call
     """
 
     # Workflow lifecycle (primary)
@@ -105,15 +115,7 @@ class SSEEventType(str, Enum):
     WORKFLOW_COMPLETED = "workflow_completed"   # Research workflow finished successfully
     WORKFLOW_FAILED = "workflow_failed"         # Research workflow failed
     
-    # Trace events from App Insights polling (primary)
-    TRACE_SPAN_STARTED = "trace_span_started"     # Agent/operation span began
-    TRACE_SPAN_COMPLETED = "trace_span_completed" # Agent/operation span ended
-    TRACE_TOOL_CALL = "trace_tool_call"           # MCP tool call detected
-    
-    # Connection management
-    HEARTBEAT = "heartbeat"                       # Keep-alive signal
-    
-    # Legacy events (emitted by orchestrator, not processed by new frontend)
+    # Agent operations (primary - from orchestrator)
     SESSION_STARTED = "session_started"
     AGENT_STARTED = "agent_started"
     AGENT_PROGRESS = "agent_progress"
@@ -121,19 +123,37 @@ class SSEEventType(str, Enum):
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
     AGENT_RESPONSE = "agent_response"
+    
+    # Subagent operations (primary - from stream_callback)
     SUBAGENT_TOOL_STARTED = "subagent_tool_started"
     SUBAGENT_TOOL_COMPLETED = "subagent_tool_completed"
     SUBAGENT_PROGRESS = "subagent_progress"
+    
+    # Tool calls (primary - from middleware)
     TOOL_CALL_STARTED = "tool_call_started"
     TOOL_CALL_COMPLETED = "tool_call_completed"
     TOOL_CALL_FAILED = "tool_call_failed"
+    
+    # Scratchpad operations (primary - from middleware)
     SCRATCHPAD_UPDATED = "scratchpad_updated"
     SCRATCHPAD_SNAPSHOT = "scratchpad_snapshot"
+    
+    # Questions (primary)
     QUESTION_ADDED = "question_added"
     QUESTION_ANSWERED = "question_answered"
+    
+    # Synthesis (primary)
     SYNTHESIS_STARTED = "synthesis_started"
     SYNTHESIS_PROGRESS = "synthesis_progress"
     SYNTHESIS_COMPLETED = "synthesis_completed"
+    
+    # Connection management
+    HEARTBEAT = "heartbeat"                       # Keep-alive signal
+    
+    # Trace events (observability-only, NOT sent to UI - see ADR-007)
+    TRACE_SPAN_STARTED = "trace_span_started"     # Agent/operation span began
+    TRACE_SPAN_COMPLETED = "trace_span_completed" # Agent/operation span ended
+    TRACE_TOOL_CALL = "trace_tool_call"           # MCP tool call detected
 
 
 class SSEEvent(BaseModel):
@@ -149,11 +169,14 @@ class SSEEvent(BaseModel):
         return f"event: {self.event_type.value}\ndata: {self.model_dump_json()}\n\n"
 
 
-# === Trace Event Models (ADR-005: App Insights Polling) ===
+# === Trace Event Models (Observability-Only - ADR-007) ===
+# NOTE: These events are NOT sent to the UI SSE stream.
+# They are kept for potential future observability dashboards.
+# UI events now come directly from the orchestrator middleware (ADR-007).
 
 
 class TraceSpanStartedData(BaseModel):
-    """Data for TRACE_SPAN_STARTED event (from App Insights polling)."""
+    """Data for TRACE_SPAN_STARTED event (observability-only, not sent to UI)."""
     
     span_id: str = Field(description="Unique span identifier")
     span_name: str = Field(description="Name of the span (e.g., 'MarketAnalyst.run')")
@@ -164,7 +187,7 @@ class TraceSpanStartedData(BaseModel):
 
 
 class TraceSpanCompletedData(BaseModel):
-    """Data for TRACE_SPAN_COMPLETED event (from App Insights polling)."""
+    """Data for TRACE_SPAN_COMPLETED event (observability-only, not sent to UI)."""
     
     span_id: str = Field(description="Unique span identifier")
     span_name: str = Field(description="Name of the span that completed")
@@ -177,7 +200,7 @@ class TraceSpanCompletedData(BaseModel):
 
 
 class TraceToolCallData(BaseModel):
-    """Data for TRACE_TOOL_CALL event (MCP tool call from App Insights)."""
+    """Data for TRACE_TOOL_CALL event (observability-only, not sent to UI)."""
     
     span_id: str = Field(description="Unique span identifier")
     tool_name: str = Field(description="Name of the MCP tool called")
@@ -228,11 +251,12 @@ class HeartbeatData(BaseModel):
     polls_completed: int = Field(description="Number of App Insights polling cycles")
 
 
-# === Internal Models (used by orchestrator, not exposed as SSE events) ===
+# === Tool Call Event Models (Primary SSE Events - ADR-007) ===
+# These models are used for real-time SSE streaming to the UI.
 
 
 class ToolCallStartedData(BaseModel):
-    """Internal: Data for tool call tracking."""
+    """Data for TOOL_CALL_STARTED event (sent to UI via SSE)."""
     
     tool_name: str = Field(description="Name of the tool being called")
     tool_call_id: str = Field(description="Unique identifier for this tool invocation")
@@ -244,7 +268,7 @@ class ToolCallStartedData(BaseModel):
 
 
 class ToolCallCompletedData(BaseModel):
-    """Internal: Data for tool call completion tracking."""
+    """Data for TOOL_CALL_COMPLETED event (sent to UI via SSE)."""
     
     tool_name: str = Field(description="Name of the tool that completed")
     tool_call_id: str = Field(description="Unique identifier for this tool invocation")
@@ -254,7 +278,7 @@ class ToolCallCompletedData(BaseModel):
 
 
 class ToolCallFailedData(BaseModel):
-    """Internal: Data for tool call failure tracking."""
+    """Data for TOOL_CALL_FAILED event (sent to UI via SSE)."""
     
     tool_name: str = Field(description="Name of the tool that failed")
     tool_call_id: str = Field(description="Unique identifier for this tool invocation")
@@ -264,7 +288,7 @@ class ToolCallFailedData(BaseModel):
 
 
 class SubagentToolStartedData(BaseModel):
-    """Internal: Data for subagent tool call tracking."""
+    """Data for SUBAGENT_TOOL_STARTED event (sent to UI via SSE)."""
     
     subagent_name: str = Field(description="Name of the subagent making the tool call")
     tool_name: str = Field(description="Name of the tool being called")
@@ -276,7 +300,7 @@ class SubagentToolStartedData(BaseModel):
 
 
 class SubagentToolCompletedData(BaseModel):
-    """Internal: Data for subagent tool completion tracking."""
+    """Data for SUBAGENT_TOOL_COMPLETED event (sent to UI via SSE)."""
     
     subagent_name: str = Field(description="Name of the subagent that made the tool call")
     tool_name: str = Field(description="Name of the tool that completed")
@@ -288,14 +312,17 @@ class SubagentToolCompletedData(BaseModel):
 
 
 class SubagentProgressData(BaseModel):
-    """Internal: Data for subagent streaming progress."""
+    """Data for SUBAGENT_PROGRESS event (sent to UI via SSE)."""
     
     subagent_name: str = Field(description="Name of the subagent generating content")
     text_chunk: str = Field(description="Text chunk from the subagent")
 
 
+# === Scratchpad Models (for SSE events and internal use) ===
+
+
 class ScratchpadSection(BaseModel):
-    """Internal: A single section in the scratchpad."""
+    """A single section in the scratchpad."""
     
     name: str = Field(description="Section name/identifier")
     content: str = Field(description="Section content")
@@ -304,7 +331,7 @@ class ScratchpadSection(BaseModel):
 
 
 class ScratchpadSnapshotData(BaseModel):
-    """Internal: Full scratchpad state (for orchestrator use)."""
+    """Full scratchpad state for SCRATCHPAD_SNAPSHOT event."""
     
     sections: list[ScratchpadSection] = Field(
         default_factory=list,
@@ -319,7 +346,7 @@ class ScratchpadSnapshotData(BaseModel):
 
 
 class ScratchpadUpdatedData(BaseModel):
-    """Internal: Data for scratchpad updates (used by orchestrator logging)."""
+    """Data for SCRATCHPAD_UPDATED event (sent to UI via SSE)."""
     
     section_name: str = Field(description="Pillar/section that changed")
     operation: str = Field(description="Operation: 'created', 'updated', 'appended', 'deleted'")

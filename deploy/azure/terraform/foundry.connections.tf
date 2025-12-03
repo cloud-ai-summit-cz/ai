@@ -115,6 +115,78 @@ resource "azapi_resource" "mcp_connection_demographics" {
 }
 
 # ============================================================================
+# MCP Real Estate Connection
+# ============================================================================
+# Tools: search_commercial_properties, get_rental_rates, get_foot_traffic,
+#        get_nearby_amenities, get_location_score, get_vacancy_rates,
+#        compare_locations
+
+resource "azapi_resource" "mcp_connection_real_estate" {
+  type      = "Microsoft.CognitiveServices/accounts/projects/connections@2025-04-01-preview"
+  name      = "mcp-real-estate"
+  parent_id = azapi_resource.ai_foundry_project.id
+
+  body = {
+    properties = {
+      authType      = "CustomKeys"
+      category      = "RemoteTool"
+      target        = "https://${azapi_resource.capp_mcp_real_estate.output.properties.configuration.ingress.fqdn}/mcp"
+      isSharedToAll = true
+      credentials = {
+        keys = {
+          Authorization = "Bearer ${var.mcp_auth_token}"
+        }
+      }
+      metadata = {
+        ApiType     = "MCP"
+        ServiceName = "real-estate"
+      }
+    }
+  }
+
+  depends_on = [
+    azapi_resource.ai_foundry_project_capability_host,
+    azapi_resource.capp_mcp_real_estate
+  ]
+}
+
+# ============================================================================
+# MCP Calculator Connection
+# ============================================================================
+# Tools: calculate_startup_costs, calculate_operating_costs, project_revenue,
+#        calculate_break_even, calculate_roi, project_cash_flow,
+#        calculate_npv, sensitivity_analysis
+
+resource "azapi_resource" "mcp_connection_calculator" {
+  type      = "Microsoft.CognitiveServices/accounts/projects/connections@2025-04-01-preview"
+  name      = "mcp-calculator"
+  parent_id = azapi_resource.ai_foundry_project.id
+
+  body = {
+    properties = {
+      authType      = "CustomKeys"
+      category      = "RemoteTool"
+      target        = "https://${azapi_resource.capp_mcp_calculator.output.properties.configuration.ingress.fqdn}/mcp"
+      isSharedToAll = true
+      credentials = {
+        keys = {
+          Authorization = "Bearer ${var.mcp_auth_token}"
+        }
+      }
+      metadata = {
+        ApiType     = "MCP"
+        ServiceName = "calculator"
+      }
+    }
+  }
+
+  depends_on = [
+    azapi_resource.ai_foundry_project_capability_host,
+    azapi_resource.capp_mcp_calculator
+  ]
+}
+
+# ============================================================================
 # MCP Scratchpad Connection
 # ============================================================================
 # Tools: write_note, read_note, list_notes, delete_note, write_draft_section,
