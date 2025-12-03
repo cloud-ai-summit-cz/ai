@@ -144,3 +144,52 @@ output "application_insights_connection_string" {
   value       = azurerm_application_insights.main.connection_string
   sensitive   = true
 }
+
+# ============================================================================
+# MCP Server Container App Outputs
+# ============================================================================
+
+output "mcp_scratchpad_url" {
+  description = "The URL for the MCP Scratchpad server"
+  value       = "https://${azapi_resource.capp_mcp_scratchpad.output.properties.configuration.ingress.fqdn}/mcp"
+}
+
+output "mcp_business_registry_url" {
+  description = "The URL for the MCP Business Registry server"
+  value       = "https://${azapi_resource.capp_mcp_business_registry.output.properties.configuration.ingress.fqdn}/mcp"
+}
+
+output "mcp_government_data_url" {
+  description = "The URL for the MCP Government Data server"
+  value       = "https://${azapi_resource.capp_mcp_government_data.output.properties.configuration.ingress.fqdn}/mcp"
+}
+
+output "mcp_demographics_url" {
+  description = "The URL for the MCP Demographics server"
+  value       = "https://${azapi_resource.capp_mcp_demographics.output.properties.configuration.ingress.fqdn}/mcp"
+}
+
+# ============================================================================
+# MCP Project Connection Names
+# ============================================================================
+# These are the connection names to use with project_connection_id in MCPTool
+
+output "mcp_connection_scratchpad" {
+  description = "The Foundry project connection name for MCP Scratchpad"
+  value       = azapi_resource.mcp_connection_scratchpad.name
+}
+
+output "mcp_connection_business_registry" {
+  description = "The Foundry project connection name for MCP Business Registry"
+  value       = azapi_resource.mcp_connection_business_registry.name
+}
+
+output "mcp_connection_government_data" {
+  description = "The Foundry project connection name for MCP Government Data"
+  value       = azapi_resource.mcp_connection_government_data.name
+}
+
+output "mcp_connection_demographics" {
+  description = "The Foundry project connection name for MCP Demographics"
+  value       = azapi_resource.mcp_connection_demographics.name
+}

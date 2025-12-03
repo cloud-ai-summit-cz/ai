@@ -250,7 +250,13 @@ def create_subagent_stream_callback(
             )
             
             # Handle tool call started (FunctionCallContent)
-            if content_type == "function_call" or hasattr(content, "call_id"):
+            # Check for function_call type OR (has call_id AND has name AND no result)
+            # This avoids matching FunctionResultContent which has call_id but no name
+            is_tool_call = (
+                content_type == "function_call" 
+                or (hasattr(content, "call_id") and hasattr(content, "name") and not hasattr(content, "result"))
+            )
+            if is_tool_call:
                 call_id = getattr(content, "call_id", None) or getattr(content, "id", str(uuid4()))
                 tool_name = getattr(content, "name", "unknown_tool")
                 arguments = getattr(content, "arguments", {})

@@ -25,6 +25,21 @@ containers:
     image: test-hosted-agent
     tag: latest
 
+  - name: mcp-business-registry
+    path: ../../src/mcp-business-registry
+    image: mcp-business-registry
+    tag: latest
+
+  - name: mcp-government-data
+    path: ../../src/mcp-government-data
+    image: mcp-government-data
+    tag: latest
+
+  - name: mcp-demographics
+    path: ../../src/mcp-demographics
+    image: mcp-demographics
+    tag: latest
+
 # Optional: build all containers by default
 # Set to false to require explicit --container flag
 build_all_by_default: true

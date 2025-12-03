@@ -49,37 +49,37 @@ mcp_servers:
   scratchpad:
     enabled: false
     port: 8010
-    # command: "uv run uvicorn mcp_scratchpad.main:app --host 0.0.0.0 --port {port}"
+    command: "uv run python main.py"
 
   web-search:
-    enabled: true
+    enabled: false
     port: 8011
-    # command: "uv run uvicorn mcp_web_search.main:app --host 0.0.0.0 --port {port}"
+    command: "uv run python main.py"
 
   business-registry:
-    enabled: true
+    enabled: false
     port: 8012
-    # command: "uv run uvicorn mcp_business_registry.main:app --host 0.0.0.0 --port {port}"
+    command: "uv run python main.py"
 
   government-data:
-    enabled: true
+    enabled: false
     port: 8013
-    # command: "uv run uvicorn mcp_government_data.main:app --host 0.0.0.0 --port {port}"
+    command: "uv run python main.py"
 
   demographics:
-    enabled: true
+    enabled: false
     port: 8014
-    # command: "uv run uvicorn mcp_demographics.main:app --host 0.0.0.0 --port {port}"
+    command: "uv run python main.py"
 
   real-estate:
-    enabled: true
+    enabled: false
     port: 8015
-    # command: "uv run uvicorn mcp_real_estate.main:app --host 0.0.0.0 --port {port}"
+    command: "uv run python main.py"
 
   calculator:
-    enabled: true
+    enabled: false
     port: 8016
-    # command: "uv run uvicorn mcp_calculator.main:app --host 0.0.0.0 --port {port}"
+    command: "uv run python main.py"
 
 # Global Settings
 # ---------------

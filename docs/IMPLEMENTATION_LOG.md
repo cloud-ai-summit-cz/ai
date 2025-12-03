@@ -2,6 +2,142 @@
 
 Technical decisions and implementation notes for the Copilot AI Platform project.
 
+## 2025-12-02: Fix Session Isolation - Remove Static Scratchpad Registration
+
+### Context
+MCP Scratchpad was incorrectly registered as a static tool in all Foundry Native agent provision scripts (`market-analyst`, `competitor-analyst`, `synthesizer`). This violated the session isolation architecture documented in `ARCHITECTURE.md`.
+
+### The Problem
+When the `project_connection_id` feature was implemented to satisfy Azure's security requirement about headers, the developer applied it uniformly to ALL MCP tools including scratchpad. This was incorrect because:
+
+1. **Session Isolation Architecture** (per `ARCHITECTURE.md`) requires scratchpad to be added **dynamically by the orchestrator** with `X-Session-ID` headers
+2. Static registration means agents get scratchpad tools **without** session headers
+3. This breaks session isolation - agents could potentially read/write data from other sessions
+
+### The Fix
+Removed `mcp-scratchpad` from static tool registration in all provision.py files:
+- `src/agent-competitor-analyst/provision.py` - Now only registers: web_search, business_registry
+- `src/agent-market-analyst/provision.py` - Now only registers: web_search, demographics  
+- `src/agent-synthesizer/provision.py` - Now only registers: calculator
+
+The orchestrator in `agent-research-orchestrator/orchestrator.py` correctly adds scratchpad dynamically via `SessionScopedMCPTool` which injects `X-Session-ID` headers.
+
+### Static vs Dynamic MCP Tools
+
+| Tool | Registration | Why |
+|------|-------------|-----|
+| mcp-scratchpad | **Dynamic** (orchestrator) | Requires X-Session-ID header for session isolation |
+| mcp-web-search | Static (provision.py) | No session-specific data |
+| mcp-demographics | Static (provision.py) | Reference data, no session state |
+| mcp-business-registry | Static (provision.py) | Reference data, no session state |
+| mcp-calculator | Static (provision.py) | Stateless calculations |
+
+### Deployment Steps
+1. Re-run agent provisioning for each agent:
+   ```bash
+   cd src/agent-market-analyst && uv run python provision.py create
+   cd src/agent-competitor-analyst && uv run python provision.py create
+   cd src/agent-synthesizer && uv run python provision.py create
+   ```
+
+### Reference
+- `specs/platform/ARCHITECTURE.md` - "Session Isolation Architecture" section
+- `src/agent-research-orchestrator/orchestrator.py` - `SessionScopedMCPTool` class
+
+---
+
+## 2025-01-XX: Project Connections for Static MCP Tools (project_connection_id)
+
+### Context
+Agent provisioning was failing with `ValidationError: "Headers that can include sensitive information are not allowed in the headers property for MCP tools. Use project_connection_id instead."` This Azure AI Foundry requirement means sensitive auth headers (like `Authorization: Bearer xxx`) must be stored in Foundry project connections rather than passed directly in `MCPTool` headers.
+
+### What is project_connection_id?
+A **project connection** in Azure AI Foundry securely stores:
+- **target**: MCP server URL (e.g., `https://ca-mcp-demographics.xxx.azurecontainerapps.io/mcp`)
+- **authType**: Authentication method (`CustomKeys` for API key auth)
+- **credentials**: Secret values (e.g., `{"Authorization": "Bearer dev-xxx-key"}`)
+- **category**: Set to `RemoteTool` for MCP servers
+
+When an agent's `MCPTool` references `project_connection_id`, Foundry:
+1. Retrieves the connection at runtime
+2. Extracts URL and credentials
+3. Injects auth headers automatically
+
+### Benefits
+- ✅ **UI Visibility**: Tools appear in Foundry portal connected resources
+- ✅ **Secure Secrets**: Credentials stored in Azure, not in agent definition
+- ✅ **Azure Compliance**: Required for production - headers block disallowed
+
+### Implementation
+
+#### 1. Terraform: Created project connections (`foundry.connections.tf`)
+```terraform
+resource "azapi_resource" "mcp_connection_demographics" {
+  type      = "Microsoft.CognitiveServices/accounts/projects/connections@2025-04-01-preview"
+  name      = "mcp-demographics"
+  parent_id = azapi_resource.ai_foundry_project.id
+
+  body = {
+    properties = {
+      authType      = "CustomKeys"
+      category      = "RemoteTool"
+      target        = "https://${azapi_resource.capp_mcp_demographics.output.properties.configuration.ingress.fqdn}/mcp"
+      isSharedToAll = true
+      credentials = {
+        keys = {
+          Authorization = "Bearer ${var.mcp_auth_token}"
+        }
+      }
+      metadata = {
+        ApiType     = "MCP"
+        ServiceName = "demographics"
+      }
+    }
+  }
+}
+```
+
+Created connections for: `mcp-scratchpad`, `mcp-business-registry`, `mcp-government-data`, `mcp-demographics`
+
+#### 2. Python provision.py: Updated all agents to use project_connection_id
+```python
+# Before (BLOCKED):
+MCPTool(
+    server_label="demographics",
+    server_url=settings.mcp_demographics_url,
+    headers={"Authorization": f"Bearer {settings.mcp_auth_token}"},  # ❌
+)
+
+# After:
+MCPTool(
+    server_label="demographics",
+    server_url=settings.mcp_demographics_url,
+    project_connection_id="mcp-demographics",  # ✅
+)
+```
+
+Updated agents: market-analyst, competitor-analyst, synthesizer
+
+#### 3. Terraform outputs
+Added outputs for MCP URLs and connection names for reference.
+
+### Files Changed
+- `deploy/azure/terraform/foundry.connections.tf` - NEW: 4 project connections
+- `deploy/azure/terraform/outputs.tf` - Added MCP URL and connection name outputs
+- `src/agent-market-analyst/provision.py` - Use project_connection_id
+- `src/agent-competitor-analyst/provision.py` - Use project_connection_id
+- `src/agent-synthesizer/provision.py` - Use project_connection_id
+
+### Deployment Steps
+1. Run `terraform apply` to create the project connections
+2. Re-run agent provisioning: `uv run python provision.py create`
+
+### Reference
+- [MS Learn: MCP Authentication](https://learn.microsoft.com/en-us/azure/ai-foundry/agents/how-to/tools/model-context-protocol-authentication)
+- [MS Learn: Knowledge Retrieval with MCP](https://learn.microsoft.com/en-us/azure/ai-foundry/agents/how-to/tools/knowledge-retrieval)
+
+---
+
 ## 2025-12-02: Subagent Tool Call Visibility Debugging
 
 ### Context
@@ -335,6 +471,98 @@ resource "azapi_resource" "foundry_appinsights_connection" {
 ### Reference
 - [GitHub: foundry-samples/connection-application-insights.bicep](https://github.com/azure-ai-foundry/foundry-samples/tree/main/samples/microsoft/infrastructure-setup/01-connections/connection-application-insights.bicep)
 - [MS Learn: Foundry Connections](https://learn.microsoft.com/en-us/azure/ai-foundry/how-to/connections-add)
+
+---
+
+## 2024-01-XX: MCP Tool Servers Implementation (Business Registry, Government Data, Demographics)
+
+### Context
+Implemented three new MCP tool servers to provide reference data for the research agents. These servers provide mock data for company information, regulatory requirements, and demographic data for European cities.
+
+### Servers Implemented
+
+| Server | Port | Purpose | Tools |
+|--------|------|---------|-------|
+| `mcp-business-registry` | 8012 | Company data, financials, industry players | search_companies, get_company_profile, get_company_financials, get_company_locations, get_industry_players, get_company_news |
+| `mcp-government-data` | 8013 | Permits, zoning, regulations, tax rates | get_business_permits, get_zoning_info, get_regulations, get_tax_rates, get_licensing_requirements, get_health_safety_codes, get_labor_laws |
+| `mcp-demographics` | 8014 | Population, income, consumer behavior | get_population_stats, get_income_distribution, get_age_distribution, get_consumer_spending, get_lifestyle_segments, get_commuter_patterns |
+
+### Architecture Pattern
+- **Simple MCP Server**: No dynamic header handling (unlike mcp-scratchpad with session isolation)
+- **StaticTokenVerifier**: Simple API key authentication via Bearer token
+- **Mock Data Strategy**: Curated data for known cities (Vienna, Prague, Munich, Salzburg, Brno) + seeded random generation for flexibility
+- **Seeded Randomization**: Uses MD5 hash of location string for consistent yet flexible mock data generation
+
+### Files Created Per Server
+- `config.py` - Settings with port, API key, debug flag
+- `models.py` - Pydantic data models
+- `mock_data.py` - Curated and generated mock data
+- `server.py` - FastMCP server with tool definitions
+- `main.py` - Entry point with Azure Monitor telemetry
+- `pyproject.toml` - Dependencies
+- `Dockerfile` - Container definition
+- `README.md` - Documentation
+
+### Infrastructure Updates
+
+#### Terraform (`deploy/azure/terraform/`)
+- Added `capp.mcp-business-registry.tf` - Container App for business registry
+- Added `capp.mcp-government-data.tf` - Container App for government data
+- Added `capp.mcp-demographics.tf` - Container App for demographics
+- Updated `locals.tf` - Added image references for new containers
+
+#### Build Configuration (`deploy/azure/build-config.yaml`)
+- Added mcp-business-registry, mcp-government-data, mcp-demographics to container builds
+
+### Agent Provisioning Updates
+
+Updated Foundry Native agents to include MCP tools at provisioning time (shows in Foundry UI):
+
+| Agent | MCP Tools |
+|-------|-----------|
+| market-analyst | scratchpad, web_search, demographics |
+| competitor-analyst | scratchpad, web_search, business_registry |
+| synthesizer | scratchpad, calculator |
+
+#### Changes Made
+- Updated `config.py` for each agent with MCP endpoint URLs
+- Updated `provision.py` to use `MCPTool` from `azure.ai.projects.models`
+- Tools configured with `require_approval="never"` and Bearer token auth
+
+### Mock Data Highlights
+
+#### Business Registry
+- Coffee chains: Starbucks, Aida, Costa Coffee, Cafe Central, Kavárna, etc.
+- Financial data: Revenue (€50M-€50B), employees (500-50k), growth rates
+- Industry players: Top 10 competitors per region
+
+#### Government Data
+- Permits: Business license, food handling, health certificate, etc.
+- Zoning: Commercial districts with specific regulations
+- Tax rates: Corporate tax (19-25%), VAT (19-21%), local business tax
+- Labor laws: Minimum wage, working hours, leave policies
+
+#### Demographics
+- Population stats: City/district population, density, growth rates
+- Income: Median/mean income, purchasing power index, unemployment
+- Age distribution: 7 age brackets with percentages
+- Lifestyle segments: Urban Professionals, Students, Remote Workers, etc.
+- Commuter patterns: Peak hours, foot traffic, transit modes
+
+### Configuration
+
+Environment variables for each server:
+```bash
+HOST=0.0.0.0
+PORT=801X
+API_KEY=dev-{service}-key
+APPLICATIONINSIGHTS_CONNECTION_STRING=...  # Optional
+DEBUG=false
+```
+
+### Reference
+- Architecture spec: `specs/platform/ARCHITECTURE.md`
+- Tool contracts: `specs/services/mcp-*/contracts/mcp-tools.json`
 
 ---
 

@@ -21,6 +21,15 @@ locals {
     : "${azurerm_container_registry.main.login_server}/agent-location-scout:latest"
   )
 
+  # MCP Business Registry image
+  mcp_business_registry_image = "${azurerm_container_registry.main.login_server}/mcp-business-registry:latest"
+
+  # MCP Government Data image
+  mcp_government_data_image = "${azurerm_container_registry.main.login_server}/mcp-government-data:latest"
+
+  # MCP Demographics image
+  mcp_demographics_image = "${azurerm_container_registry.main.login_server}/mcp-demographics:latest"
+
   # ============================================================================
   # AI Foundry Endpoints (computed from Terraform-managed resources)
   # ============================================================================

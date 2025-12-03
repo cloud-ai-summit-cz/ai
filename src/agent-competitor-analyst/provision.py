@@ -2,17 +2,19 @@
 
 Creates and destroys the competitor-analyst agent in Azure AI Foundry Agent Service.
 
-NOTE: MCP Scratchpad is NOT configured at agent creation time.
-The orchestrator provides session-scoped MCP tools dynamically at runtime
-with proper X-Session-ID headers for session isolation.
-See: agent-research-orchestrator/orchestrator.py::_get_session_mcp_tool()
+MCP Tools configured at provisioning time (static):
+- mcp-web-search: Web search capabilities
+- mcp-business-registry: Company data, financials, industry players
+
+MCP Tools added dynamically by orchestrator (with session headers):
+- mcp-scratchpad: Shared memory for notes and draft sections
 """
 
 import os
 import sys
 
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import PromptAgentDefinition
+from azure.ai.projects.models import PromptAgentDefinition, MCPTool
 from azure.identity import DefaultAzureCredential
 from jinja2 import Template
 from rich.console import Console
@@ -58,8 +60,8 @@ def create_agent() -> None:
 
     This function is idempotent - it will delete existing agent before creating new one.
     
-    NOTE: MCP Scratchpad tools are provided by the orchestrator at runtime,
-    not configured here. This ensures session isolation via X-Session-ID headers.
+    Configures MCP tools for business registry, scratchpad, and web search.
+    Uses project_connection_id for static MCP tools (auth stored in Foundry connections).
     """
     console.print(f"[bold blue]Creating {AGENT_DISPLAY_NAME} Agent[/bold blue]\n")
 
@@ -86,11 +88,33 @@ def create_agent() -> None:
             try:
                 instructions = get_instructions()
 
-                # NOTE: No tools configured here - MCP Scratchpad is injected
-                # by the orchestrator at runtime with session-scoped headers
+                # Configure MCP tools using project_connection_id
+                # Connections are created by Terraform in foundry.connections.tf
+                # and store the MCP server URL + auth credentials securely
+                #
+                # NOTE: mcp-scratchpad is NOT included here!
+                # Scratchpad must be added DYNAMICALLY by the orchestrator with
+                # X-Session-ID headers for session isolation. See ARCHITECTURE.md
+                # "Session Isolation Architecture" section.
+                mcp_tools = [
+                    MCPTool(
+                        server_label="web_search",
+                        server_url=settings.mcp_web_search_url,
+                        require_approval="never",
+                        project_connection_id="mcp-web-search",
+                    ),
+                    MCPTool(
+                        server_label="business_registry",
+                        server_url=settings.mcp_business_registry_url,
+                        require_approval="never",
+                        project_connection_id="mcp-business-registry",
+                    ),
+                ]
+
                 agent_def = PromptAgentDefinition(
                     model=settings.model_deployment_name,
                     instructions=instructions,
+                    tools=mcp_tools,
                 )
 
                 agent = client.agents.create(
@@ -103,6 +127,9 @@ def create_agent() -> None:
                     f"[OK] Created [green]{AGENT_DISPLAY_NAME}[/green] "
                     f"(name: {AGENT_NAME})"
                 )
+                console.print(f"  Static Tools: web_search, business_registry")
+                console.print(f"  Dynamic Tools: scratchpad (added by orchestrator with session headers)")
+                console.print(f"  [dim]Using project connections for auth[/dim]")
                 
             except Exception as e:
                 console.print(f"[FAIL] Failed to create [red]{AGENT_DISPLAY_NAME}[/red]: {e}")

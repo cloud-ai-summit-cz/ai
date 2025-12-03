@@ -21,10 +21,14 @@ class Settings(BaseSettings):
     # Model deployment
     model_deployment_name: str = "gpt-5"
 
-    # NOTE: MCP Scratchpad is NOT configured here.
-    # The orchestrator provides session-scoped MCP tools dynamically at runtime
-    # with proper X-Session-ID headers for session isolation.
-    # See: agent-research-orchestrator/orchestrator.py::_get_session_mcp_tool()
+    # MCP Server endpoints (for fixed tool provisioning)
+    # These are configured at agent creation time for Foundry UI visibility
+    mcp_business_registry_url: str = "http://localhost:8012/mcp"
+    mcp_scratchpad_url: str = "http://localhost:8010/mcp"
+    mcp_web_search_url: str = "http://localhost:8011/mcp"
+
+    # MCP Auth token (shared across MCP servers)
+    mcp_auth_token: str = "dev-mcp-auth-key"
 
     @property
     def prompts_dir(self) -> Path:
