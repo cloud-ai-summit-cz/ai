@@ -1,147 +1,132 @@
-# Agent Location Scout
+# Location Scout Agent
 
-LangGraph-based agent hosted in Azure AI Foundry as a Hosted Agent for location analysis and market research.
+Analyzes commercial real estate and business locations for Cofilot's expansion to Brno and Vienna.
 
-## Overview
+## Agent Structure
 
-This agent analyzes business locations, evaluates market potential, assesses competition, and provides strategic recommendations for retail, commercial, or service-based business placement.
+```
+agent-location-scout/
+├── prompts/
+│   └── system_prompt.md          # Agent instructions (plain markdown)
+│
+├── standalone/                    # Self-hosted agent variants
+│   ├── a2a/                       # A2A protocol servers
+│   │   ├── maf/                   # Microsoft Agent Framework implementation
+│   │   └── langgraph/             # LangGraph implementation
+│   │
+│   └── foundry/                   # Azure AI Foundry hosted agents
+│       ├── maf/                   # MAF-based hosted agent
+│       └── langgraph/             # LangGraph-based hosted agent ✅ IMPLEMENTED
+│           ├── agent.py           # LangGraph agent definition
+│           ├── main.py            # Entry point using from_langgraph()
+│           ├── Dockerfile         # Container definition
+│           ├── provision.py       # Deploy/start/stop hosted agent
+│           └── pyproject.toml     # Dependencies
+│
+├── provision_foundry_agent_base.py   # Create prompt-only agent in Foundry
+├── provision_foundry_agent_full.py   # Create agent with MCP tools in Foundry (future)
+├── config.py                         # Shared configuration
+└── pyproject.toml                    # Python dependencies
+```
 
-## Architecture
+## Deployment Options
 
-- **Framework**: LangGraph with `StateGraph` and `MessagesState`
-- **Hosting**: Azure AI Foundry Hosted Agent (containerized)
-- **Integration**: Uses `azure-ai-agentserver-langgraph` adapter package
-- **API**: Invoked via Foundry Responses API (same as MAF agents)
+### Option 1: Foundry Prompt Agent
 
-## Prerequisites
-
-- Python 3.12+
-- Azure AI Foundry project with deployed model (e.g., GPT-4o)
-- Docker (for containerized deployment)
-- Azure CLI authenticated (`az login`)
-
-## Local Development
-
-### Setup
+Agent lives in Azure AI Foundry as a prompt-only definition. The research orchestrator:
+- References the agent by name
+- Injects MCP tools at runtime (scratchpad, real-estate, government-data, demographics)
+- Manages tool execution with SSE streaming
 
 ```bash
-# Install uv if not already installed
-pip install uv
+uv run python provision_foundry_agent_base.py create
+```
 
+### Option 2: Foundry Full Agent (Future)
+
+Agent in Foundry with MCP tools configured directly. Uses Project Connections for auth.
+
+```bash
+uv run python provision_foundry_agent_full.py create
+```
+
+### Option 3: Standalone A2A Server (Future)
+
+Self-hosted agent exposing A2A protocol. Can use MAF or LangGraph.
+
+```bash
+# MAF variant
+cd standalone/a2a/maf
+uv run python main.py
+
+# LangGraph variant  
+cd standalone/a2a/langgraph
+uv run python main.py
+```
+
+### Option 4: Foundry Hosted Agent ✅ IMPLEMENTED
+
+Containerized LangGraph agent deployed to Foundry as a hosted agent.
+
+```bash
+# Build container
+./build.sh
+
+# Deploy to Foundry
+cd standalone/foundry/langgraph
+uv run python provision.py deploy
+uv run python provision.py start
+uv run python provision.py status
+```
+
+## Container Naming Convention
+
+When building containers, the naming follows:
+`{agent-name}-{protocol}-{framework}`
+
+Examples:
+- `location-scout-a2a-maf`
+- `location-scout-a2a-langgraph`
+- `location-scout-foundry-maf`
+- `location-scout-foundry-langgraph`
+
+## MCP Tools
+
+This agent uses the following MCP servers (injected by orchestrator):
+- **mcp-scratchpad**: Shared workspace for notes and drafts
+- **mcp-real-estate**: Rental rates, property data
+- **mcp-government-data**: Permits, regulations, zoning
+- **mcp-demographics**: Population, income, foot traffic data
+
+## Development
+
+```bash
 # Install dependencies
-cd src/agent-location-scout
 uv sync
 
-# Copy environment template
-cp .env.example .env
-# Edit .env with your values
+# Provision prompt-only agent to Foundry
+uv run python provision_foundry_agent_base.py create
+
+# OR deploy as hosted container agent
+cd standalone/foundry/langgraph
+uv run python provision.py deploy
+uv run python provision.py start
+
+# List agents
+uv run python provision_foundry_agent_base.py list
+
+# Destroy agent
+uv run python provision_foundry_agent_base.py destroy
 ```
 
-### Environment Variables
+## Authentication
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `AZURE_AI_FOUNDRY_ENDPOINT` | Foundry project endpoint | `https://your-project.region.api.azureml.ms` |
-| `MODEL_DEPLOYMENT_NAME` | Deployed model name | `gpt-4o` |
-| `CONTAINER_IMAGE_URI` | Container image URI | `ghcr.io/owner/agent-location-scout:latest` |
+Uses `DefaultAzureCredential` - run `az login` first or configure managed identity.
 
-### Run Locally
+## Hosted Agent Details
 
-```bash
-# Run the agent server locally (for testing)
-uv run python -m main
-```
-
-## Container Build
-
-### Build Locally
-
-```bash
-docker build -t agent-location-scout:local .
-```
-
-### Run Container
-
-```bash
-docker run -p 8088:8088 \
-  -e AZURE_AI_FOUNDRY_ENDPOINT=https://your-project.region.api.azureml.ms \
-  -e MODEL_DEPLOYMENT_NAME=gpt-4o \
-  agent-location-scout:local
-```
-
-## Deployment to Azure AI Foundry
-
-### Provision Hosted Agent
-
-```bash
-# Create a new hosted agent version
-uv run python provision.py create
-
-# List existing versions
-uv run python provision.py list
-
-# Destroy a specific version
-uv run python provision.py destroy --version 1
-```
-
-### CI/CD
-
-The GitHub Actions workflow (`.github/workflows/agent-location-scout.yml`) automatically:
-1. Runs linting and tests on PRs
-2. Builds and pushes container to GHCR on main branch
-3. Tags images with `latest`, `sha-<commit>`, and branch name
-
-## Invoking the Agent
-
-Once deployed, invoke via the Foundry Responses API:
-
-```python
-from azure.ai.projects import AIProjectClient
-from azure.identity import DefaultAzureCredential
-
-client = AIProjectClient.from_connection_string(
-    credential=DefaultAzureCredential(),
-    conn_str="your-connection-string"
-)
-
-response = client.agents.create_response(
-    agent_name="location-scout",
-    input="Analyze potential for a coffee shop in downtown Seattle near Pike Place Market"
-)
-
-print(response.output_text)
-```
-
-## Project Structure
-
-```
-src/agent-location-scout/
-├── __init__.py           # Package marker
-├── agent.py              # LangGraph agent definition
-├── config.py             # Configuration (pydantic-settings)
-├── main.py               # Entry point with from_langgraph
-├── provision.py          # SDK-based deployment script
-├── pyproject.toml        # Dependencies (uv)
-├── Dockerfile            # Container definition
-├── .env.example          # Environment template
-├── prompts/
-│   └── system_prompt.jinja2  # Agent system prompt
-└── README.md             # This file
-```
-
-## Testing
-
-```bash
-# Run tests
-uv run pytest
-
-# Run linting
-uv run ruff check .
-uv run ruff format --check .
-```
-
-## Related Documentation
-
-- [Architecture Spec](../../specs/services/agent-location-scout/ARCHITECTURE.md)
-- [Platform Architecture](../../specs/platform/ARCHITECTURE.md)
-- [Azure AI Foundry Hosted Agents](https://learn.microsoft.com/azure/ai-studio/how-to/develop/hosted-agents)
+The LangGraph hosted agent in `standalone/foundry/langgraph/`:
+- Uses `azure-ai-agentserver-langgraph` adapter
+- Authenticates via Managed Identity when running in Foundry
+- Supports API key auth for local development
+- Container logs sent to Application Insights

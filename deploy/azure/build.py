@@ -69,13 +69,14 @@ def build_container(acr_name: str, container: dict, base_path: Path) -> bool:
     image = container["image"]
     tag = container.get("tag", "latest")
     context_path = (base_path / container["path"]).resolve()
+    dockerfile_rel = container.get("dockerfile", "Dockerfile")
     
     if not context_path.exists():
         print(f"Error: Build context not found: {context_path}", file=sys.stderr)
         return False
     
     # Check for Dockerfile
-    dockerfile = context_path / "Dockerfile"
+    dockerfile = context_path / dockerfile_rel
     if not dockerfile.exists():
         print(f"Error: Dockerfile not found: {dockerfile}", file=sys.stderr)
         return False
@@ -85,14 +86,21 @@ def build_container(acr_name: str, container: dict, base_path: Path) -> bool:
     print(f"Building: {name}")
     print(f"  Image: {acr_name}.azurecr.io/{full_image}")
     print(f"  Context: {context_path}")
+    if dockerfile_rel != "Dockerfile":
+        print(f"  Dockerfile: {dockerfile_rel}")
     print(f"{'='*60}\n")
     
     cmd = [
         "az", "acr", "build",
         "--registry", acr_name,
         "--image", full_image,
-        str(context_path),
     ]
+    
+    # Add dockerfile argument if not default
+    if dockerfile_rel != "Dockerfile":
+        cmd.extend(["--file", str(dockerfile)])
+    
+    cmd.append(str(context_path))
     
     try:
         # shell=True required on Windows to find az.cmd
@@ -113,9 +121,12 @@ def list_containers(config: dict) -> None:
         image = container["image"]
         tag = container.get("tag", "latest")
         path = container["path"]
+        dockerfile = container.get("dockerfile")
         print(f"  {name}")
         print(f"    Image: {image}:{tag}")
         print(f"    Path:  {path}")
+        if dockerfile:
+            print(f"    Dockerfile: {dockerfile}")
         print()
 
 

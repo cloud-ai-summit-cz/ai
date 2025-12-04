@@ -1,0 +1,29 @@
+# Agent Provisioning Configuration
+# =================================
+# Defines all agents to provision to Azure AI Foundry.
+# Each agent has a path (relative to src/) and a command to run.
+
+agents:
+  - name: competitor-analyst
+    path: agent-competitor-analyst
+    command: uv run python provision_foundry_agent_base.py create
+
+  - name: finance-analyst
+    path: agent-finance-analyst
+    command: uv run python provision_foundry_agent_base.py create
+
+  - name: market-analyst
+    path: agent-market-analyst
+    command: uv run python provision_foundry_agent_base.py create
+
+  - name: synthesizer
+    path: agent-synthesizer
+    command: uv run python provision_foundry_agent_base.py create
+
+  - name: location-scout
+    path: agent-location-scout
+    command: uv run python provision_foundry_agent_base.py create
+
+settings:
+  # Source directory relative to this config file
+  src_dir: "../../src"

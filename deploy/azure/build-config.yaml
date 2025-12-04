@@ -3,7 +3,7 @@
 
 # Azure Container Registry name (auto-detected from Terraform output)
 # Can be overridden via --acr-name flag
-acr_name: ""
+acr_name: acrrgsummitai5oxyy5
 
 # Container definitions
 containers:
@@ -50,6 +50,12 @@ containers:
     image: mcp-calculator
     tag: latest
 
-# Optional: build all containers by default
-# Set to false to require explicit --container flag
+  - name: agent-market-analyst-a2a
+    # Build context is agent-market-analyst (to include prompts/)
+    path: ../../src/agent-market-analyst
+    # Dockerfile is in standalone/a2a/maf/ subdirectory
+    dockerfile: standalone/a2a/maf/Dockerfile
+    image: agent-market-analyst-a2a
+    tag: latest
+
 build_all_by_default: true

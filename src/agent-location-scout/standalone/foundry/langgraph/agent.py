@@ -1,7 +1,7 @@
 """LangGraph agent definition for Location Scout.
 
 This module defines the LangGraph StateGraph for location analysis.
-Currently a simple ReAct-style agent without tools - tools will be added later.
+Currently a simple conversational agent without tools - tools will be added later.
 
 When running as a hosted agent in Azure AI Foundry, authentication is handled
 via Azure Managed Identity with explicit token provider for cognitive services.
@@ -9,6 +9,7 @@ via Azure Managed Identity with explicit token provider for cognitive services.
 
 import logging
 import os
+from pathlib import Path
 
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from langchain.chat_models import init_chat_model
@@ -68,8 +69,11 @@ def get_system_prompt() -> str:
     Returns:
         The system prompt string.
     """
-    from pathlib import Path
-    prompt_path = Path(__file__).parent / "prompts" / "system_prompt.jinja2"
+    # Look for prompt relative to this file's location
+    prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "system_prompt.md"
+    if not prompt_path.exists():
+        # Fallback - try relative to cwd
+        prompt_path = Path("prompts/system_prompt.md")
     if not prompt_path.exists():
         return "You are a helpful location scout assistant."
     return prompt_path.read_text(encoding="utf-8")

@@ -25,6 +25,14 @@ This directory contains Terraform configuration for deploying the Cofilot AI Pla
 - **Container Apps Environment**: Managed environment for containers
 - **Container App (MCP Scratchpad)**: Shared scratchpad MCP server
 
+### API Management (AI Gateway)
+- **API Management (Standard V2)**: Centralized API gateway for AI model access
+- **Azure OpenAI API**: Imported API with chat completions, list/get deployments
+- **AI Gateway Connection**: Account-level ApiManagement connection with `isDefault=true`
+  - Enables the "AI Gateway" tab in Foundry Admin console
+  - Allows token rate limiting and quota management per project
+  - Automatically inherited by all projects in the Foundry resource
+
 ### RBAC & Security
 - **AcrPull roles**: For Foundry project and Container Apps identities
 - **Cognitive Services roles**: For accessing Azure OpenAI
@@ -75,6 +83,9 @@ This directory contains Terraform configuration for deploying the Cofilot AI Pla
 | `location` | `northcentralus` | Azure region (North Central US for hosted agents preview) |
 | `gpt5_capacity` | `50` | Tokens per minute (thousands) for gpt-5 |
 | `gpt5_mini_capacity` | `100` | Tokens per minute (thousands) for gpt-5-mini |
+| `apim_publisher_email` | `api-admin@example.com` | Email for APIM publisher |
+| `apim_publisher_name` | `AI Platform` | Organization name for APIM |
+| `apim_capacity` | `1` | Scale units for APIM Standard V2 |
 
 ## Key Outputs
 

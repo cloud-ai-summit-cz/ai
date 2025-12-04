@@ -28,10 +28,12 @@ class Settings(BaseSettings):
     # Azure OpenAI (for LangGraph agent)
     azure_openai_endpoint: str | None = None
 
-    # Model deployment name
-    # Can be set via AZURE_OPENAI_DEPLOYMENT or MODEL_NAME env vars
+    # Model deployment name (for base provisioning)
+    model_deployment_name: str = "gpt-5"
+
+    # Alternative model env vars (for hosted LangGraph agent)
     azure_openai_deployment: str = "gpt-5"
-    model_name: str | None = None  # Alternative env var name used by provision.py
+    model_name: str | None = None
 
     # Container image (for hosted agent deployment)
     # Set via CONTAINER_IMAGE env var or use terraform output: agent_location_scout_image

@@ -36,6 +36,9 @@ locals {
   # MCP Calculator image
   mcp_calculator_image = "${azurerm_container_registry.main.login_server}/mcp-calculator:latest"
 
+  # Agent Market Analyst A2A image
+  agent_market_analyst_a2a_image = "${azurerm_container_registry.main.login_server}/agent-market-analyst-a2a:latest"
+
   # ============================================================================
   # AI Foundry Endpoints (computed from Terraform-managed resources)
   # ============================================================================

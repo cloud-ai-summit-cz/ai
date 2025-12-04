@@ -1,59 +1,112 @@
-# agent-market-analyst
+# Market Analyst Agent
 
-Foundry Native agent for market research and analysis.
+Researches market size, growth trends, customer segments, and coffee culture for Cofilot's expansion analysis.
 
-## Overview
-
-This agent researches market size, growth trends, customer segments, and coffee culture for expansion analysis. It is deployed as an AI Foundry managed agent.
-
-## Setup
-
-```powershell
-cd src/agent-market-analyst
-uv sync
-
-# Copy environment file and configure
-cp .env.example .env
-# Edit .env with your Azure AI Foundry credentials
-```
-
-## Usage
-
-### Provision Agent
-
-Create the agent in AI Foundry (idempotent - recreates if exists):
-
-```powershell
-uv run python -m market_analyst.provision create
-```
-
-List agents:
-
-```powershell
-uv run python -m market_analyst.provision list
-```
-
-Destroy agent:
-
-```powershell
-uv run python -m market_analyst.provision destroy
-```
-
-## Project Structure
+## Agent Structure
 
 ```
 agent-market-analyst/
-├── market_analyst/
-│   ├── __init__.py
-│   ├── config.py             # Configuration from environment
-│   ├── provision.py          # CLI for agent provisioning
-│   └── prompts/
-│       └── system_prompt.jinja2
-├── pyproject.toml
-├── .env.example
-└── README.md
+├── prompts/
+│   └── system_prompt.md          # Agent instructions (plain markdown)
+│
+├── standalone/                    # Self-hosted agent variants
+│   ├── a2a/                       # A2A protocol servers
+│   │   ├── maf/                   # Microsoft Agent Framework implementation
+│   │   └── langgraph/             # LangGraph implementation
+│   │
+│   └── foundry/                   # Azure AI Foundry hosted agents
+│       ├── maf/                   # MAF-based hosted agent
+│       └── langgraph/             # LangGraph-based hosted agent
+│
+├── provision_foundry_agent_base.py   # Create prompt-only agent in Foundry
+├── provision_foundry_agent_full.py   # Create agent with MCP tools in Foundry (future)
+├── config.py                         # Shared configuration
+└── pyproject.toml                    # Python dependencies
+```
+
+## Deployment Options
+
+### Option 1: Foundry Prompt Agent (Current)
+
+Agent lives in Azure AI Foundry as a prompt-only definition. The research orchestrator:
+- References the agent by name
+- Injects MCP tools at runtime (scratchpad, demographics)
+- Manages tool execution with SSE streaming
+
+```bash
+uv run python provision_foundry_agent_base.py create
+```
+
+### Option 2: Foundry Full Agent (Future)
+
+Agent in Foundry with MCP tools configured directly. Uses Project Connections for auth.
+
+```bash
+uv run python provision_foundry_agent_full.py create
+```
+
+### Option 3: Standalone A2A Server (Future)
+
+Self-hosted agent exposing A2A protocol. Can use MAF or LangGraph.
+
+```bash
+# MAF variant
+cd standalone/a2a/maf
+uv run python main.py
+
+# LangGraph variant  
+cd standalone/a2a/langgraph
+uv run python main.py
+```
+
+### Option 4: Foundry Hosted Agent (Future)
+
+Containerized agent deployed to Foundry as a hosted agent.
+
+```bash
+# Build container
+./build.sh
+
+# Deploy to Foundry
+cd standalone/foundry/langgraph
+uv run python provision.py deploy
+uv run python provision.py start
+```
+
+## Container Naming Convention
+
+When building containers, the naming follows:
+`{agent-name}-{protocol}-{framework}`
+
+Examples:
+- `market-analyst-a2a-maf`
+- `market-analyst-a2a-langgraph`
+- `market-analyst-foundry-maf`
+- `market-analyst-foundry-langgraph`
+
+## MCP Tools
+
+This agent uses the following MCP servers (injected by orchestrator):
+- **mcp-scratchpad**: Shared workspace for notes and drafts
+- **mcp-demographics**: Population, income, consumer behavior data
+
+## Development
+
+```bash
+# Install dependencies
+uv sync
+
+# Provision to Foundry
+uv run python provision_foundry_agent_base.py create
+
+# List agents
+uv run python provision_foundry_agent_base.py list
+
+# Destroy agent
+uv run python provision_foundry_agent_base.py destroy
 ```
 
 ## Authentication
 
 Uses `DefaultAzureCredential` - run `az login` first or configure managed identity.
+

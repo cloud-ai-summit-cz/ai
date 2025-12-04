@@ -1,0 +1,45 @@
+[project]
+name = "agent-test"
+version = "0.1.0"
+description = "Test agent that connects to Market Analyst via A2A protocol"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # Microsoft Agent Framework with A2A support
+    "agent-framework-a2a>=1.0.0b251120",
+    
+    # HTTP client for A2A card resolution
+    "httpx>=0.28.0",
+    
+    # Configuration
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.5.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.5.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

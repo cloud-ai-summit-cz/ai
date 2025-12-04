@@ -1,0 +1,22 @@
+[project]
+name = "location-scout-foundry-langgraph"
+version = "0.1.0"
+description = "Location Scout agent - Foundry Hosted Agent using LangGraph"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.2",
+    "langchain>=0.3",
+    "langchain-openai>=0.3",
+    "azure-ai-agentserver-langgraph>=1.0.0b1",
+    "azure-ai-projects>=1.0.0b7",
+    "azure-identity>=1.19.0",
+    "azure-monitor-opentelemetry>=1.6",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
