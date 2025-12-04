@@ -12,12 +12,18 @@ import uvicorn
 from a2a_server import build_app
 from config import get_settings
 
-# Configure logging
+# Configure logging - set up root logger to capture all modules
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,  # Override any existing configuration
 )
+
+# Explicitly set log levels for our modules
+logging.getLogger("agent").setLevel(logging.INFO)
+logging.getLogger("a2a_server").setLevel(logging.INFO)
+logging.getLogger("config").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 

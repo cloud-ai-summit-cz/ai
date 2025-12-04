@@ -30,6 +30,10 @@ class Settings(BaseSettings):
         endpoint = self.azure_openai_endpoint.rstrip("/")
         return f"{endpoint}/openai/v1/"
 
+    # MCP Demographics Configuration
+    mcp_demographics_url: str = "https://ca-mcp-demographics.yellowground-57e949f0.northcentralus.azurecontainerapps.io/mcp"
+    mcp_demographics_api_key: str = "Azure12345678"
+
     # A2A Server Configuration
     a2a_server_host: str = "0.0.0.0"
     a2a_server_port: int = 8020

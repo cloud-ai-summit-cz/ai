@@ -1,6 +1,6 @@
 # Market Analyst A2A Agent (Microsoft Agent Framework)
 
-A standalone Market Analyst agent implemented using the **Microsoft Agent Framework** with **A2A (Agent-to-Agent) protocol** support for inter-agent communication.
+A standalone Market Analyst agent implemented using the **Microsoft Agent Framework** with **A2A (Agent-to-Agent) protocol** support for inter-agent communication and **MCP (Model Context Protocol)** integration for real-time demographic data.
 
 ## Overview
 
@@ -9,6 +9,7 @@ This implementation exposes the Market Analyst agent as an **A2A-compliant servi
 - **Microsoft Agent Framework** with `AzureOpenAIResponsesClient` for AI capabilities
 - **Azure OpenAI** with `gpt-5` model for inference
 - **A2A Protocol** for standardized agent-to-agent communication
+- **MCP Demographics Tool** for real-time demographic and consumer behavior data
 
 ### A2A Protocol Integration
 
@@ -51,6 +52,18 @@ Since Microsoft Agent Framework's built-in A2A hosting for Python is still in de
 │  - Microsoft Agent Framework (AzureOpenAIResponsesClient)        │
 │  - Azure OpenAI gpt-5 model                                      │
 │  - Market analysis system prompt                                 │
+│  - MCP Demographics Tool (MCPStreamableHTTPTool)                 │
+└─────────────────────────────────┬───────────────────────────────┘
+                                  │ MCP Protocol (HTTP)
+                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    MCP Demographics Server                       │
+│  - Population statistics                                         │
+│  - Income distribution                                           │
+│  - Age distribution                                              │
+│  - Consumer spending patterns                                    │
+│  - Lifestyle segments                                            │
+│  - Commuter patterns                                             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -83,6 +96,8 @@ Set the following environment variables in `.env`:
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL | `https://myresource.openai.azure.com/` |
 | `MODEL_DEPLOYMENT_NAME` | Model deployment name | `gpt-5` |
 | `AZURE_OPENAI_API_VERSION` | API version | `preview` |
+| `MCP_DEMOGRAPHICS_URL` | MCP Demographics server URL | `https://your-server/mcp` |
+| `MCP_DEMOGRAPHICS_API_KEY` | API key for MCP Demographics | `your-api-key` |
 | `A2A_SERVER_HOST` | Server bind address | `0.0.0.0` |
 | `A2A_SERVER_PORT` | Server port | `8020` |
 
@@ -282,10 +297,25 @@ docker run -d \
 |----------|-------------|
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL |
 | `MODEL_DEPLOYMENT_NAME` | Model deployment name (default: `gpt-5`) |
+| `MCP_DEMOGRAPHICS_URL` | MCP Demographics server URL |
+| `MCP_DEMOGRAPHICS_API_KEY` | API key for MCP Demographics |
 | `A2A_PUBLIC_HOST` | Public hostname for AgentCard URL |
 | `A2A_API_KEY` | API key for authentication |
 
 Note: In containers, `PROMPTS_DIR_OVERRIDE` is automatically set to `/app/prompts`.
+
+## MCP Demographics Integration
+
+The agent uses the **MCP Demographics** service via `MCPStreamableHTTPTool` to retrieve real-time demographic data. Available tools:
+
+| Tool | Description |
+|------|-------------|
+| `mcp_demographics_get_population_stats` | Population count, density, growth rate |
+| `mcp_demographics_get_income_distribution` | Income levels, purchasing power, unemployment |
+| `mcp_demographics_get_age_distribution` | Age group percentages, dependency ratio |
+| `mcp_demographics_get_consumer_spending` | Spending by category |
+| `mcp_demographics_get_lifestyle_segments` | Consumer segmentation analysis |
+| `mcp_demographics_get_commuter_patterns` | Foot traffic and commute patterns |
 
 ## References
 
