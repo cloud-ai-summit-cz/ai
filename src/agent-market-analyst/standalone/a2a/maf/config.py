@@ -43,6 +43,28 @@ class Settings(BaseSettings):
     )
     a2a_agent_version: str = "1.0.0"
 
+    @property
+    def a2a_public_url(self) -> str:
+        """Get the public URL for the A2A agent.
+        
+        Intelligently determines the URL based on the public host:
+        - If host already has a scheme (http:// or https://), use it as-is
+        - localhost/127.0.0.1: defaults to http:// with port
+        - Everything else: defaults to https:// without port
+        """
+        host = self.a2a_public_host
+        
+        # If already has scheme, use as-is (just ensure trailing slash)
+        if host.startswith("http://") or host.startswith("https://"):
+            return host.rstrip("/") + "/"
+        
+        # Local development - use HTTP with port
+        if host in ("localhost", "127.0.0.1"):
+            return f"http://{host}:{self.a2a_server_port}/"
+        
+        # Everything else (cloud, production) - use HTTPS without port
+        return f"https://{host}/"
+
     # Prompts directory - can be overridden for container deployment
     prompts_dir_override: str | None = None
 

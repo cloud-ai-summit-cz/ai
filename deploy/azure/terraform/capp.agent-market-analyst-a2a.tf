@@ -102,7 +102,7 @@ resource "azapi_resource" "capp_agent_market_analyst_a2a" {
               {
                 type = "Liveness"
                 httpGet = {
-                  path   = "/.well-known/agent.json"
+                  path   = "/.well-known/agent-card.json"
                   port   = 8020
                   scheme = "HTTP"
                 }
@@ -114,7 +114,7 @@ resource "azapi_resource" "capp_agent_market_analyst_a2a" {
               {
                 type = "Readiness"
                 httpGet = {
-                  path   = "/.well-known/agent.json"
+                  path   = "/.well-known/agent-card.json"
                   port   = 8020
                   scheme = "HTTP"
                 }
@@ -127,8 +127,8 @@ resource "azapi_resource" "capp_agent_market_analyst_a2a" {
           }
         ]
         scale = {
-          minReplicas = var.agent_min_replicas
-          maxReplicas = var.agent_max_replicas
+          minReplicas = var.min_replicas
+          maxReplicas = var.max_replicas
           rules = [
             {
               name = "http-scaling"
@@ -153,5 +153,5 @@ output "agent_market_analyst_a2a_url" {
 
 output "agent_market_analyst_a2a_agent_card" {
   description = "The A2A Agent Card URL for discovery"
-  value       = "https://ca-agent-market-analyst-a2a.${azapi_resource.container_app_environment.output.properties.defaultDomain}/.well-known/agent.json"
+  value       = "https://ca-agent-market-analyst-a2a.${azapi_resource.container_app_environment.output.properties.defaultDomain}/.well-known/agent-card.json"
 }

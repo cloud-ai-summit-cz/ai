@@ -61,7 +61,7 @@ EXPOSE 8020
 
 # Health check - A2A agent card endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8020/.well-known/agent.json')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8020/.well-known/agent-card.json')" || exit 1
 
 # Run the A2A server
 CMD ["python", "main.py"]

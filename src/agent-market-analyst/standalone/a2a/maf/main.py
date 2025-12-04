@@ -27,15 +27,18 @@ def main() -> None:
     settings = get_settings()
     host = settings.a2a_server_host
     port = settings.a2a_server_port
+    public_url = settings.a2a_public_url
 
     logger.info("Starting Market Analyst A2A Agent")
     logger.info(f"  Name: {settings.a2a_agent_name}")
     logger.info(f"  Bind: {host}:{port}")
-    logger.info(f"  Public URL: http://{settings.a2a_public_host}:{port}/")
+    logger.info(f"  Public URL: {public_url}")
     logger.info(f"  Model: {settings.model_deployment_name}")
-    logger.info(
-        f"  Agent Card: http://{settings.a2a_public_host}:{port}/.well-known/agent-card.json"
-    )
+    logger.info(f"  Agent Card: {public_url}.well-known/agent-card.json")
+    if settings.a2a_api_key:
+        logger.info("  Authentication: API Key required")
+    else:
+        logger.warning("  Authentication: DISABLED (open access)")
 
     # Build the app with the configured port
     app = build_app(port)

@@ -50,11 +50,10 @@ class APIKeyAuthMiddleware:
     """
 
     # Endpoints that don't require authentication
-    # Agent Card endpoints MUST be public per A2A spec - clients need to read
-    # the card to discover authentication requirements (securitySchemes)
+    # Agent Card endpoint MUST be public per A2A spec Section 8.2 - clients
+    # need to read the card to discover authentication requirements (securitySchemes)
     PUBLIC_PATHS = {
-        "/.well-known/agent.json",      # A2A SDK default path
-        "/.well-known/agent-card.json",  # A2A spec standard path
+        "/.well-known/agent-card.json",  # A2A spec standard path (Section 14.3)
         "/health",
         "/ready",
     }
@@ -235,7 +234,7 @@ def create_agent_card(port: int) -> AgentCard:
     how to authenticate before making operational requests.
 
     Args:
-        port: The server port.
+        port: The server port (used for local development URL).
 
     Returns:
         The configured AgentCard.
@@ -265,7 +264,7 @@ def create_agent_card(port: int) -> AgentCard:
         name=settings.a2a_agent_name,
         description=settings.a2a_agent_description,
         version=settings.a2a_agent_version,
-        url=f"http://{settings.a2a_public_host}:{port}/",
+        url=settings.a2a_public_url,
         capabilities=AgentCapabilities(
             streaming=False,
             pushNotifications=False,
