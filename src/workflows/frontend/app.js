@@ -121,6 +121,9 @@ const followupInput = document.getElementById('followup-input');
 const followupBtn = document.getElementById('followup-btn');
 const conversationBadge = document.getElementById('conversation-badge');
 const workflowDiagram = document.getElementById('workflow-diagram');
+const consoleOutput = document.getElementById('console-output');
+const consoleClearBtn = document.getElementById('console-clear');
+const consoleStatus = document.getElementById('console-status');
 
 // State
 let selectedFile = null;
@@ -474,6 +477,11 @@ function init() {
             sendFollowup();
         }
     });
+    
+    // Console clear button
+    if (consoleClearBtn) {
+        consoleClearBtn.addEventListener('click', clearConsole);
+    }
 }
 
 // Handle file selection
@@ -523,6 +531,10 @@ async function startWorkflow() {
     totalAgentCount = 0;
     workflowStatus.textContent = 'Running';
     workflowStatus.className = 'status-badge running';
+    
+    // Update console status
+    updateConsoleStatus('Running');
+    clearConsole();
     
     // Render the workflow diagram
     try {
@@ -601,6 +613,9 @@ function handleEvent(event) {
     
     console.log('Event:', type, 'action_id:', actionId, 'data:', data);
     
+    // Log ALL events to console (no filtering)
+    logToConsole(event);
+    
     // Capture conversation_id from response_created event
     if (type === 'response_created' && data.conversation_id) {
         currentConversationId = data.conversation_id;
@@ -623,11 +638,13 @@ function handleEvent(event) {
     if (type === 'workflow_completed') {
         workflowStatus.textContent = 'Completed';
         workflowStatus.className = 'status-badge completed';
+        updateConsoleStatus('Completed');
         // Mark any remaining running actors as completed
         markAllActorsCompleted();
     } else if (type === 'workflow_failed' || type === 'error') {
         workflowStatus.textContent = 'Failed';
         workflowStatus.className = 'status-badge failed';
+        updateConsoleStatus('Failed');
         // Mark any remaining running actors as failed
         markAllActorsFailed();
     }
@@ -985,6 +1002,10 @@ function restart() {
     
     // Hide conversation badge
     conversationBadge.classList.add('hidden');
+    
+    // Reset console
+    updateConsoleStatus('Ready');
+    clearConsole();
 }
 
 // Utility: Escape HTML
@@ -994,5 +1015,147 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// Console logging functions
+function getConsoleEventClass(type) {
+    if (type.startsWith('workflow')) return 'console-workflow';
+    if (type.startsWith('actor')) return 'console-actor';
+    if (type.startsWith('response')) return 'console-response';
+    if (type.startsWith('text')) return 'console-text-event';
+    if (type.startsWith('mcp')) return 'console-mcp';
+    if (type.startsWith('reasoning')) return 'console-reasoning';
+    if (type === 'error') return 'console-error';
+    if (type.startsWith('message')) return 'console-response';
+    return 'console-info';
+}
+
+function getConsolePrefix(type) {
+    const prefixes = {
+        workflow_started: '[WF:START]',
+        workflow_completed: '[WF:DONE]',
+        workflow_failed: '[WF:FAIL]',
+        response_created: '[RSP:NEW]',
+        response_in_progress: '[RSP:RUN]',
+        response_completed: '[RSP:DONE]',
+        response_failed: '[RSP:FAIL]',
+        actor_started: '[AGENT:▶]',
+        actor_completed: '[AGENT:✓]',
+        text_delta: '[TXT:Δ]',
+        text_done: '[TXT:DONE]',
+        message_completed: '[MSG:DONE]',
+        mcp_tools_listed: '[MCP:LIST]',
+        mcp_call_in_progress: '[MCP:CALL]',
+        mcp_call_completed: '[MCP:DONE]',
+        mcp_call_failed: '[MCP:FAIL]',
+        reasoning_completed: '[THINK]',
+        error: '[ERROR]',
+    };
+    return prefixes[type] || `[${type.toUpperCase()}]`;
+}
+
+function getConsoleMessage(type, data) {
+    switch (type) {
+        case 'workflow_started':
+            return `Workflow "${data.workflow_name}" v${data.workflow_version} started`;
+        case 'workflow_completed':
+            return 'Workflow completed successfully';
+        case 'workflow_failed':
+            return `Workflow failed: ${data.error || 'Unknown error'}`;
+        case 'response_created':
+            return `New response created${data.conversation_id ? ` (conv: ${data.conversation_id.slice(0, 8)}...)` : ''}`;
+        case 'response_in_progress':
+            return `Response processing: ${data.status || 'in progress'}`;
+        case 'response_completed':
+            return data.total_tokens ? `Response done (${data.total_tokens} tokens)` : 'Response completed';
+        case 'actor_started':
+            return `Agent started: ${data.action_id}`;
+        case 'actor_completed':
+            return `Agent finished: ${data.action_id} (${data.status})`;
+        case 'text_delta':
+            const delta = data.text || '';
+            return delta.length > 60 ? delta.slice(0, 60) + '...' : delta;
+        case 'text_done':
+            const text = data.text || '';
+            return text.length > 80 ? text.slice(0, 80) + '...' : text;
+        case 'message_completed':
+            return `Message ${data.status || 'completed'}`;
+        case 'mcp_tools_listed':
+            return `${data.server_label || 'Server'}: ${(data.tools || []).length} tools available`;
+        case 'mcp_call_in_progress':
+            return `Calling tool: ${data.tool_name || 'unknown'}`;
+        case 'mcp_call_completed':
+            return `Tool call completed: ${data.tool_name || ''}`;
+        case 'mcp_call_failed':
+            return `Tool call failed: ${data.error || 'unknown error'}`;
+        case 'reasoning_completed':
+            return 'Reasoning/thinking completed';
+        case 'error':
+            return data.error || 'An error occurred';
+        default:
+            return JSON.stringify(data).slice(0, 100);
+    }
+}
+
+function logToConsole(event) {
+    if (!consoleOutput) return;
+    
+    const { type, data, timestamp } = event;
+    
+    // Filter out text_delta events (too noisy even for console)
+    if (type === 'text_delta') return;
+    const actionId = data?.action_id;
+    
+    const line = document.createElement('div');
+    line.className = `console-line console-new ${getConsoleEventClass(type)}`;
+    
+    // Format timestamp
+    const time = timestamp ? new Date(timestamp).toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    }) : '';
+    
+    const message = getConsoleMessage(type, data);
+    const actionIdHtml = actionId ? `<span class="console-action-id">[${actionId}]</span>` : '';
+    
+    line.innerHTML = `
+        <span class="console-timestamp">${time}</span>
+        <span class="console-prefix">${getConsolePrefix(type)}</span>
+        <span class="console-text">${escapeHtml(message)}${actionIdHtml}</span>
+    `;
+    
+    consoleOutput.appendChild(line);
+    
+    // Auto-scroll to bottom
+    consoleOutput.scrollTop = consoleOutput.scrollHeight;
+    
+    // Remove animation class after animation completes
+    setTimeout(() => {
+        line.classList.remove('console-new');
+    }, 300);
+}
+
+function clearConsole() {
+    if (!consoleOutput) return;
+    consoleOutput.innerHTML = `
+        <div class="console-line console-info">
+            <span class="console-prefix">[INFO]</span>
+            <span class="console-text">Console cleared. Waiting for events...</span>
+        </div>
+    `;
+}
+
+function updateConsoleStatus(status) {
+    if (!consoleStatus) return;
+    consoleStatus.textContent = status;
+    consoleStatus.className = 'console-status' + (status === 'Running' ? ' running' : '');
+}
+
 // Initialize on DOM load
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => {
+    init();
+    // Initialize Lucide icons
+    if (typeof lucide !== 'undefined') {
+        lucide.createIcons();
+    }
+});
