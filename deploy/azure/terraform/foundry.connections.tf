@@ -24,7 +24,7 @@ resource "azapi_resource" "mcp_connection_business_registry" {
       authType      = "CustomKeys"
       category      = "RemoteTool"
       target        = "https://${azapi_resource.capp_mcp_business_registry.output.properties.configuration.ingress.fqdn}/mcp"
-      isSharedToAll = true
+      isSharedToAll = false
       credentials = {
         keys = {
           Authorization = "Bearer ${var.mcp_auth_token}"
@@ -60,7 +60,7 @@ resource "azapi_resource" "mcp_connection_government_data" {
       authType      = "CustomKeys"
       category      = "RemoteTool"
       target        = "https://${azapi_resource.capp_mcp_government_data.output.properties.configuration.ingress.fqdn}/mcp"
-      isSharedToAll = true
+      isSharedToAll = false
       credentials = {
         keys = {
           Authorization = "Bearer ${var.mcp_auth_token}"
@@ -95,7 +95,7 @@ resource "azapi_resource" "mcp_connection_demographics" {
       authType      = "CustomKeys"
       category      = "RemoteTool"
       target        = "https://${azapi_resource.capp_mcp_demographics.output.properties.configuration.ingress.fqdn}/mcp"
-      isSharedToAll = true
+      isSharedToAll = false
       credentials = {
         keys = {
           Authorization = "Bearer ${var.mcp_auth_token}"
@@ -131,7 +131,7 @@ resource "azapi_resource" "mcp_connection_real_estate" {
       authType      = "CustomKeys"
       category      = "RemoteTool"
       target        = "https://${azapi_resource.capp_mcp_real_estate.output.properties.configuration.ingress.fqdn}/mcp"
-      isSharedToAll = true
+      isSharedToAll = false
       credentials = {
         keys = {
           Authorization = "Bearer ${var.mcp_auth_token}"
@@ -167,7 +167,7 @@ resource "azapi_resource" "mcp_connection_calculator" {
       authType      = "CustomKeys"
       category      = "RemoteTool"
       target        = "https://${azapi_resource.capp_mcp_calculator.output.properties.configuration.ingress.fqdn}/mcp"
-      isSharedToAll = true
+      isSharedToAll = false
       credentials = {
         keys = {
           Authorization = "Bearer ${var.mcp_auth_token}"
@@ -207,7 +207,7 @@ resource "azapi_resource" "mcp_connection_scratchpad" {
       authType      = "CustomKeys"
       category      = "RemoteTool"
       target        = "https://${azapi_resource.capp_mcp_scratchpad.output.properties.configuration.ingress.fqdn}/mcp"
-      isSharedToAll = true
+      isSharedToAll = false
       credentials = {
         keys = {
           Authorization = "Bearer ${var.mcp_auth_token}"

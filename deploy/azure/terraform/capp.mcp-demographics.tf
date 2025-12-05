@@ -117,4 +117,11 @@ resource "azapi_resource" "capp_mcp_demographics" {
       }
     }
   }
+
+  # Ignore case sensitivity differences in transport (Azure returns "Http" but we specify "http")
+  lifecycle {
+    ignore_changes = [
+      body.properties.configuration.ingress.transport
+    ]
+  }
 }

@@ -38,6 +38,13 @@ resource "azapi_resource" "apim_subscription_agents" {
       primaryKey   = random_password.apim_subscription_key.result
     }
   }
+
+  # Ignore scope path normalization (Azure returns full path, we specify relative)
+  lifecycle {
+    ignore_changes = [
+      body.properties.scope
+    ]
+  }
 }
 
 # ============================================================================
@@ -214,6 +221,13 @@ resource "azapi_resource" "apim_api_policy" {
     azapi_resource.apim_operation_list_deployments,
     azapi_resource.apim_operation_get_deployment
   ]
+
+  # Ignore XML whitespace normalization differences
+  lifecycle {
+    ignore_changes = [
+      body.properties.value
+    ]
+  }
 }
 
 # ============================================================================
@@ -249,6 +263,13 @@ resource "azapi_resource" "apim_operation_list_deployments_policy" {
         </policies>
       XML
     }
+  }
+
+  # Ignore XML whitespace normalization differences
+  lifecycle {
+    ignore_changes = [
+      body.properties.value
+    ]
   }
 }
 
@@ -286,5 +307,13 @@ resource "azapi_resource" "apim_operation_get_deployment_policy" {
 </policies>
       XML
     }
+  }
+
+  # Ignore XML whitespace and format normalization differences
+  lifecycle {
+    ignore_changes = [
+      body.properties.value,
+      body.properties.format
+    ]
   }
 }

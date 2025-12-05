@@ -78,7 +78,7 @@ resource "azapi_resource" "foundry_apim_connection" {
       target        = "${azapi_resource.apim.output.properties.gatewayUrl}/openai"
       authType      = "ApiKey"
       isDefault     = true
-      isSharedToAll = false
+      isSharedToAll = true
       credentials = {
         key = random_password.apim_subscription_key.result
       }

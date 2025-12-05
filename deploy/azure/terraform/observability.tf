@@ -52,4 +52,11 @@ resource "azapi_resource" "foundry_diagnostic_settings" {
       ]
     }
   }
+
+  # Ignore Azure-added attributes (category, retentionPolicy) in logs array
+  lifecycle {
+    ignore_changes = [
+      body.properties.logs
+    ]
+  }
 }

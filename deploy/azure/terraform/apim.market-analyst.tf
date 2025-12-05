@@ -277,4 +277,11 @@ resource "azapi_resource" "apim_api_a2a_market_analyst_policy" {
     azapi_resource.apim_operation_a2a_market_analyst_head,
     azapi_resource.apim_operation_a2a_market_analyst_options
   ]
+
+  # Ignore XML whitespace normalization differences
+  lifecycle {
+    ignore_changes = [
+      body.properties.value
+    ]
+  }
 }

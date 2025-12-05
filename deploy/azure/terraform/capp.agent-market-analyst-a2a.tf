@@ -143,6 +143,15 @@ resource "azapi_resource" "capp_agent_market_analyst_a2a" {
       }
     }
   }
+
+  # Ignore case sensitivity differences in transport (Azure returns "Http" but we specify "http")
+  # and memory format differences (Azure returns "1.0Gi" but we specify "1Gi")
+  lifecycle {
+    ignore_changes = [
+      body.properties.configuration.ingress.transport,
+      body.properties.template.containers[0].resources.memory
+    ]
+  }
 }
 
 # Output the agent's public URL
