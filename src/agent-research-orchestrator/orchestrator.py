@@ -1404,6 +1404,84 @@ class AgentOrchestrator:
         
         return agent, http_client
 
+    async def _create_a2a_finance_analyst(
+        self,
+        session_id: str,
+    ) -> tuple[A2AAgent, httpx.AsyncClient]:
+        """Create an A2A agent client for finance-analyst with session headers.
+        
+        The finance-analyst agent runs as a separate A2A service with its own
+        MCP tools (calculator, real-estate, government-data, business-registry, scratchpad)
+        and Grounded Web Search (Bing) for real-time financial data.
+        The session_id is passed via X-Session-ID header to enable session-scoped
+        MCP Scratchpad access.
+        
+        NOTE: Tool calls made BY the finance-analyst (to MCP servers) are NOT
+        visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
+        options on propagating tool events for SSE streaming.
+        
+        Args:
+            session_id: Session ID for MCP Scratchpad isolation.
+            
+        Returns:
+            Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
+        """
+        if not self.settings.a2a_finance_analyst_enabled:
+            raise RuntimeError(
+                "A2A Finance Analyst not configured. Set A2A_FINANCE_ANALYST_URL and A2A_FINANCE_ANALYST_API_KEY."
+            )
+        
+        # Create HTTP client with session-scoped headers
+        # Extended timeout for LLM + MCP operations (can take several minutes)
+        headers = {
+            "X-Session-ID": session_id,
+            "X-Caller-Agent": "research-orchestrator",
+        }
+        if self.settings.a2a_finance_analyst_api_key:
+            headers["Authorization"] = f"Bearer {self.settings.a2a_finance_analyst_api_key}"
+        
+        http_client = httpx.AsyncClient(
+            timeout=300.0,  # 5 minutes for complex analysis
+            headers=headers,
+        )
+        
+        # Fetch the Agent Card to discover capabilities
+        agent_card_url = f"{self.settings.a2a_finance_analyst_url}/agent-card.json"
+        logger.info(f"Fetching A2A Agent Card from {agent_card_url}")
+        
+        try:
+            response = await http_client.get(agent_card_url)
+            response.raise_for_status()
+            agent_card = AgentCard.model_validate(response.json())
+            
+            logger.info(f"A2A Agent Card: {agent_card.name} v{agent_card.version}")
+            logger.info(f"A2A Agent URL: {agent_card.url}")
+            if agent_card.skills:
+                logger.info(f"A2A Agent Skills: {[s.name for s in agent_card.skills]}")
+        except httpx.HTTPStatusError as e:
+            await http_client.aclose()
+            raise RuntimeError(
+                f"Failed to fetch A2A Agent Card: HTTP {e.response.status_code} - {e.response.text[:200]}"
+            )
+        except Exception as e:
+            await http_client.aclose()
+            raise RuntimeError(f"Failed to fetch A2A Agent Card: {e}")
+        
+        # Create A2A agent using the URL from the agent card
+        agent_url = agent_card.url.rstrip("/") if agent_card.url else self.settings.a2a_finance_analyst_url
+        
+        agent = A2AAgent(
+            name=agent_card.name,
+            description=agent_card.description,
+            agent_card=agent_card,
+            url=agent_url,
+            http_client=http_client,
+        )
+        
+        logger.info(f"Created A2A finance-analyst agent (session={session_id[:8]}...)")
+        
+        return agent, http_client
+
     # === Session Management ===
 
     def create_session(
@@ -1522,6 +1600,12 @@ class AgentOrchestrator:
             competitor_a2a_agent, competitor_http_client = await self._create_a2a_competitor_analyst(session_id)
             a2a_clients_to_cleanup.append(competitor_http_client)
 
+            # === A2A Agent: Finance Analyst ===
+            # Finance-analyst runs as A2A service with MCP tools (calculator, real-estate, government-data,
+            # business-registry, scratchpad) and Grounded Web Search (Bing) for financial analysis
+            finance_a2a_agent, finance_http_client = await self._create_a2a_finance_analyst(session_id)
+            a2a_clients_to_cleanup.append(finance_http_client)
+
             # Create event queue early so we can pass it to subagent stream callbacks
             event_queue = ToolCallEventQueue()
             agent_call_count: dict[str, int] = {}
@@ -1552,6 +1636,17 @@ class AgentOrchestrator:
                 # NOTE: stream_callback doesn't work for A2A - tool events happen on remote agent
                 # stream_callback=create_subagent_stream_callback(event_queue, "competitor-analyst", session_id),
             )
+
+            # Convert A2A finance analyst agent to tool
+            # NOTE: A2A agents run MCP tools internally - tool calls NOT visible here
+            finance_tool = finance_a2a_agent.as_tool(
+                name="finance_analysis",
+                description="Call this tool to analyze financial viability: startup costs, operating costs, revenue projections, break-even analysis, ROI, NPV, cash flow projections, and investment returns. The agent will use calculator, real-estate, government-data, business-registry, web search, and shared scratchpad for collaboration.",
+                arg_name="query",
+                arg_description="The specific financial analysis question or scenario to evaluate",
+                # NOTE: stream_callback doesn't work for A2A - tool events happen on remote agent
+                # stream_callback=create_subagent_stream_callback(event_queue, "finance-analyst", session_id),
+            )
             
             # Other agent tools are commented out until migrated to A2A
             # location_tool = location_agent.as_tool(
@@ -1560,13 +1655,6 @@ class AgentOrchestrator:
             #     arg_name="query",
             #     arg_description="The specific location analysis question or district/property to investigate",
             #     stream_callback=create_subagent_stream_callback(event_queue, "location-scout", session_id),
-            # )
-            # finance_tool = finance_agent.as_tool(
-            #     name="finance_analysis",
-            #     description="Call this tool to analyze financial viability: startup costs, operating costs, revenue projections, break-even analysis, ROI, and investment returns.",
-            #     arg_name="query",
-            #     arg_description="The specific financial analysis question or scenario to evaluate",
-            #     stream_callback=create_subagent_stream_callback(event_queue, "finance-analyst", session_id),
             # )
             # synthesizer_tool = synthesizer_agent.as_tool(
             #     name="synthesize_findings",
@@ -1581,9 +1669,9 @@ class AgentOrchestrator:
                 session_id=session_id,
                 data={
                     "phase": "orchestration",
-                    "description": "Orchestrator starting dynamic research workflow (market-analyst, competitor-analyst via A2A)",
-                    "available_tools": ["market_analysis", "competitor_analysis"],
-                    "a2a_agents": ["market-analyst", "competitor-analyst"],
+                    "description": "Orchestrator starting dynamic research workflow (market-analyst, competitor-analyst, finance-analyst via A2A)",
+                    "available_tools": ["market_analysis", "competitor_analysis", "finance_analysis"],
+                    "a2a_agents": ["market-analyst", "competitor-analyst", "finance-analyst"],
                     "scratchpad_enabled": session_mcp_scratchpad is not None,
                     "scratchpad_tools": [f.name for f in session_mcp_scratchpad.functions] if session_mcp_scratchpad else [],
                     "session_isolation": True,
@@ -1591,7 +1679,7 @@ class AgentOrchestrator:
             )
 
             # Build the tools list
-            tools_list: list[Any] = [market_tool, competitor_tool]
+            tools_list: list[Any] = [market_tool, competitor_tool, finance_tool]
             
             # Add session-scoped MCP Scratchpad to orchestrator
             # SECURITY: Uses X-Session-ID header for isolation

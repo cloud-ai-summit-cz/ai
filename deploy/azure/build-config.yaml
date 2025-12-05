@@ -66,4 +66,12 @@ containers:
     image: agent-competitor-analyst-a2a
     tag: latest
 
+  - name: agent-finance-analyst-a2a
+    # Build context is agent-finance-analyst (to include prompts/)
+    path: ../../src/agent-finance-analyst
+    # Dockerfile is in standalone/a2a/maf/ subdirectory
+    dockerfile: standalone/a2a/maf/Dockerfile
+    image: agent-finance-analyst-a2a
+    tag: latest
+
 build_all_by_default: true

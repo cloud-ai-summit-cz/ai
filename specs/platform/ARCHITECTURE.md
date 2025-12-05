@@ -210,11 +210,11 @@ flowchart TB
 | Agent | Framework | Hosting | System Prompt Summary | MCP Servers |
 |-------|-----------|---------|----------------------|-------------|
 | **research-orchestrator** | MAF | Container Apps | Coordinates research workflow via REST API. Decides which agent to invoke, manages user questions. | `mcp-scratchpad` |
-| **market-analyst** | Foundry Native | AI Foundry Managed | Researches market size, growth trends, customer segments. Writes findings to scratchpad. | `mcp-scratchpad`, `mcp-web-search`, `mcp-demographics` |
-| **competitor-analyst** | Foundry Native | AI Foundry Managed | Identifies and profiles competitors. Reads market context from scratchpad first. | `mcp-scratchpad`, `mcp-web-search`, `mcp-business-registry` |
-| **location-scout** | LangGraph | Foundry Hosted Agent | Evaluates neighborhoods, regulations, rent. Can search regulatory database. | `mcp-scratchpad`, `mcp-government-data`, `mcp-demographics`, `mcp-real-estate` |
-| **finance-analyst** | MAF | Container Apps (A2A) | Creates financial projections based on gathered data. Reads all sections from scratchpad. | `mcp-scratchpad`, `mcp-business-registry`, `mcp-government-data`, `mcp-real-estate`, `mcp-calculator` |
-| **synthesizer** | Foundry Native | AI Foundry Managed | Compiles final report with recommendation. Reviews all scratchpad sections. | `mcp-scratchpad`, `mcp-calculator` |
+| **market-analyst** | MAF with A2A | Container Apps (A2A) | Researches market size, growth trends, customer segments. Writes findings to scratchpad. | `mcp-scratchpad`, `mcp-web-search`, `mcp-demographics` |
+| **competitor-analyst** | MAF with A2A | Container Apps (A2A)| Identifies and profiles competitors. Reads market context from scratchpad first. | `mcp-scratchpad`, `mcp-web-search`, `mcp-business-registry` |
+| **location-scout** | MAF with A2A | Container Apps (A2A) | Evaluates neighborhoods, regulations, rent. Can search regulatory database. | `mcp-scratchpad`, `mcp-government-data`, `mcp-demographics`, `mcp-real-estate` |
+| **finance-analyst** | MAF with A2A | Container Apps (A2A) | Creates financial projections based on gathered data. Reads all sections from scratchpad. | `mcp-scratchpad`, `mcp-business-registry`, `mcp-government-data`, `mcp-real-estate`, `mcp-calculator` |
+| **synthesizer** | MAF with A2A | Container Apps (A2A) | Compiles final report with recommendation. Reviews all scratchpad sections. | `mcp-scratchpad`, `mcp-calculator` |
 
 ### Research Flow
 
