@@ -352,34 +352,34 @@ def check_po(po_number: str, ctx: Context) -> dict:
 #         return None
 
 
-# @mcp.tool
-# def get_po(po_number: str, ctx: Context) -> Optional[dict]:
-#     """Get purchase order details by PO number.
+@mcp.tool
+def get_po(po_number: str, ctx: Context) -> Optional[dict]:
+    """Get purchase order details by PO number.
 
-#     Args:
-#         po_number: The purchase order number (e.g., 'PO-2024-001').
+    Args:
+        po_number: The purchase order number (e.g., 'PO-2024-001').
 
-#     Returns:
-#         Purchase order details including vendor, amounts, line items, and status.
-#         Returns None if purchase order not found.
-#     """
-#     # Enhanced logging with context information
-#     request_id = ctx.get_state("request_id") or "unknown"
-#     headers = ctx.get_state("request_headers") or {}
+    Returns:
+        Purchase order details including vendor, amounts, line items, and status.
+        Returns None if purchase order not found.
+    """
+    # Enhanced logging with context information
+    request_id = ctx.get_state("request_id") or "unknown"
+    headers = ctx.get_state("request_headers") or {}
     
-#     logger.info(f"[TOOL:get_po] Request ID: {request_id}")
-#     logger.info(f"[TOOL:get_po] Input: po_number={po_number}")
-#     logger.info(f"[TOOL:get_po] Caller Agent: {headers.get('x-caller-agent', 'unknown')}")
-#     logger.info(f"[TOOL:get_po] Session ID: {headers.get('x-session-id', 'unknown')}")
+    logger.info(f"[TOOL:get_po] Request ID: {request_id}")
+    logger.info(f"[TOOL:get_po] Input: po_number={po_number}")
+    logger.info(f"[TOOL:get_po] Caller Agent: {headers.get('x-caller-agent', 'unknown')}")
+    logger.info(f"[TOOL:get_po] Session ID: {headers.get('x-session-id', 'unknown')}")
     
-#     result = _get_po(po_number)
+    result = _get_po(po_number)
     
-#     if result:
-#         logger.info(f"[TOOL:get_po] Found PO: {result.po_number}, vendor={result.vendor_name}, status={result.status}")
-#         return result.model_dump()
-#     else:
-#         logger.info(f"[TOOL:get_po] PO not found for po_number={po_number}")
-#         return None
+    if result:
+        logger.info(f"[TOOL:get_po] Found PO: {result.po_number}, vendor={result.vendor_name}, status={result.status}")
+        return result.model_dump()
+    else:
+        logger.info(f"[TOOL:get_po] PO not found for po_number={po_number}")
+        return None
 
 
 # =============================================================================

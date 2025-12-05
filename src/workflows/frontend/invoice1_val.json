@@ -1,5 +1,6 @@
 {
   "is_ready_for_posting": true,
+  "invoice_validation_status": "<INV_OK>",
   "issues": [],
   "normalized_invoice": {
     "po_number": "534",
@@ -44,7 +45,7 @@
     {
       "rule": "PO must be present and valid",
       "passed": true,
-      "details": "PO 534 is present and validated successfully."
+      "details": "PO 534 is present, exists, and is valid."
     }
   ]
 }

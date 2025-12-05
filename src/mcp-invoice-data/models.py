@@ -37,13 +37,11 @@ class BillTo(BaseModel):
 
 
 class PurchaseOrder(BaseModel):
-    """A purchase order record matching INVOICE_EXTRACTION_SCHEMA."""
+    """A purchase order record derived from the PURCHASE_ORDERS mock catalog."""
 
     po_number: str
-    invoice_number: str
-    invoice_date: str  # ISO 8601 date
-    due_date: Optional[str] = None  # ISO 8601 date
-    currency: str = "EUR"  # Three letter ISO currency code
+    due_date: Optional[str] = None
+    currency: str = "EUR"
     supplier: Supplier
     bill_to: Optional[BillTo] = None
     line_items: List[LineItem] = Field(default_factory=list)
@@ -51,9 +49,16 @@ class PurchaseOrder(BaseModel):
     tax: Optional[float] = None
     shipping: Optional[float] = None
     total: float
-    confidence: Optional[float] = None  # 0-1 confidence score
+    confidence: Optional[float] = None
     notes: Optional[str] = None
-    status: str = "submitted"  # draft, submitted, approved, fulfilled, cancelled
+    status: str = "submitted"
+    invoice_number: Optional[str] = None
+    invoice_date: Optional[str] = None
+
+    @property
+    def vendor_name(self) -> str:
+        """Helper that exposes the supplier name for logging helpers."""
+        return self.supplier.name
 
 
 class Invoice(BaseModel):
