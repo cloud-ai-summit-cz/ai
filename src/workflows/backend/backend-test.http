@@ -1,0 +1,10 @@
+@url=http://localhost:8000/workflow/run/json
+
+POST {{url}}
+Content-Type: application/json
+
+{
+  "message": "Process this request",
+  "workflow_name": "wf1",
+  "workflow_version": "1"
+}

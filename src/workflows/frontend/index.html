@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invoice Processing Workflow</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app">
+        <header class="header">
+            <h1>Invoice Processing</h1>
+            <span class="subtitle">Agentic Workflow Demo</span>
+        </header>
+
+        <main class="main">
+            <!-- Input Section -->
+            <section id="input-section" class="section input-section">
+                <div class="input-container">
+                    <div class="image-upload">
+                        <input type="file" id="invoice-input" accept="image/*" hidden>
+                        <label for="invoice-input" class="upload-label" id="upload-label">
+                            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                <polyline points="21 15 16 10 5 21"></polyline>
+                            </svg>
+                            <span>Upload Invoice Image</span>
+                        </label>
+                        <div id="image-preview" class="image-preview hidden">
+                            <img id="preview-img" src="" alt="Invoice preview">
+                            <button id="remove-image" class="remove-btn" title="Remove image">×</button>
+                        </div>
+                    </div>
+                    
+                    <div class="prompt-container">
+                        <textarea 
+                            id="prompt-input" 
+                            placeholder="Enter your prompt... (e.g., Please extract the data from this invoice.)"
+                            rows="3"
+                        ></textarea>
+                    </div>
+                    
+                    <button id="start-btn" class="start-btn">
+                        <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                        Start Workflow
+                    </button>
+                </div>
+            </section>
+
+            <!-- Workflow Progress Section -->
+            <section id="workflow-section" class="section workflow-section hidden">
+                <div class="workflow-header">
+                    <h2>Workflow Progress</h2>
+                    <div id="workflow-status" class="status-badge">Running</div>
+                </div>
+                
+                <div id="events-container" class="events-container">
+                    <!-- Events will be added here dynamically -->
+                </div>
+            </section>
+
+            <!-- Result Section -->
+            <section id="result-section" class="section result-section hidden">
+                <div class="result-header">
+                    <h2>Result</h2>
+                    <span id="conversation-badge" class="conversation-badge hidden"></span>
+                </div>
+                <div id="result-content" class="result-content">
+                    <!-- Final result will be displayed here -->
+                </div>
+                
+                <!-- Follow-up Section -->
+                <div class="followup-container">
+                    <textarea 
+                        id="followup-input" 
+                        placeholder="Ask a follow-up question..."
+                        rows="2"
+                    ></textarea>
+                    <button id="followup-btn" class="followup-btn">
+                        <svg class="send-icon" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                        </svg>
+                        Send
+                    </button>
+                </div>
+                
+                <button id="restart-btn" class="restart-btn">
+                    <svg class="restart-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="1 4 1 10 7 10"></polyline>
+                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                    </svg>
+                    Start Over
+                </button>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
