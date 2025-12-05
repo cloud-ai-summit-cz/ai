@@ -39,6 +39,9 @@ locals {
   # Agent Market Analyst A2A image
   agent_market_analyst_a2a_image = "${azurerm_container_registry.main.login_server}/agent-market-analyst-a2a:latest"
 
+  # Agent Competitor Analyst A2A image
+  agent_competitor_analyst_a2a_image = "${azurerm_container_registry.main.login_server}/agent-competitor-analyst-a2a:latest"
+
   # ============================================================================
   # AI Foundry Endpoints (computed from Terraform-managed resources)
   # ============================================================================

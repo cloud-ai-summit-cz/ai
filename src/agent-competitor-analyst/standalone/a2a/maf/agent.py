@@ -1,7 +1,8 @@
-"""Market Analyst Agent using Microsoft Agent Framework.
+"""Competitor Analyst Agent using Microsoft Agent Framework.
 
-This module implements the Market Analyst agent using AzureOpenAIResponsesClient
-from the Microsoft Agent Framework with MCP tool integration for demographics data.
+This module implements the Competitor Analyst agent using AzureOpenAIResponsesClient
+from the Microsoft Agent Framework with MCP tool integration for business registry data
+and grounded web search for real-time competitor information.
 """
 
 import asyncio
@@ -23,13 +24,14 @@ MCP_SSE_READ_TIMEOUT = 120.0  # 120 seconds for SSE stream reads (tool execution
 MCP_REQUEST_TIMEOUT = 90  # 90 seconds for individual MCP requests
 
 
-class MarketAnalystAgent:
-    """Market Analyst Agent powered by Microsoft Agent Framework.
+class CompetitorAnalystAgent:
+    """Competitor Analyst Agent powered by Microsoft Agent Framework.
 
-    This agent specializes in market analysis for the specialty coffee
+    This agent specializes in competitive landscape analysis for the specialty coffee
     and hospitality industry, helping Cofilot evaluate expansion opportunities.
-    Uses MCP Demographics tool for real demographic data and MCP Scratchpad
+    Uses MCP Business Registry tool for company data and MCP Scratchpad
     for session-scoped collaboration with other agents.
+    Uses Grounded Web Search (Bing) for real-time competitor research.
     """
 
     def __init__(
@@ -37,7 +39,7 @@ class MarketAnalystAgent:
         settings: Optional[Settings] = None,
         session_id: Optional[str] = None,
     ) -> None:
-        """Initialize the Market Analyst Agent.
+        """Initialize the Competitor Analyst Agent.
 
         Args:
             settings: Configuration settings. If None, loads from environment.
@@ -47,7 +49,7 @@ class MarketAnalystAgent:
         self._settings = settings or Settings()
         self._session_id = session_id
         self._agent: ChatAgent | None = None
-        self._mcp_demographics: MCPStreamableHTTPTool | None = None
+        self._mcp_business_registry: MCPStreamableHTTPTool | None = None
         self._mcp_scratchpad: MCPStreamableHTTPTool | None = None
 
     @property
@@ -61,7 +63,7 @@ class MarketAnalystAgent:
             return
 
         logger.info("=" * 60)
-        logger.info("[INIT] Initializing Market Analyst Agent")
+        logger.info("[INIT] Initializing Competitor Analyst Agent")
         logger.info(f"[INIT] Azure OpenAI Endpoint: {self._settings.azure_openai_endpoint}")
         logger.info(f"[INIT] Model: {self._settings.model_deployment_name}")
         if self._session_id:
@@ -70,31 +72,31 @@ class MarketAnalystAgent:
         # List to collect MCP tools
         mcp_tools = []
         
-        # Create MCP Demographics tool with authentication
-        logger.info(f"[MCP INIT] Connecting to MCP Demographics server...")
-        logger.info(f"[MCP INIT] URL: {self._settings.mcp_demographics_url}")
-        self._mcp_demographics = MCPStreamableHTTPTool(
-            name="demographics",
-            url=self._settings.mcp_demographics_url,
-            description="Demographic and consumer behavior data for market analysis",
-            headers={"Authorization": f"Bearer {self._settings.mcp_demographics_api_key}"},
+        # Create MCP Business Registry tool with authentication
+        logger.info(f"[MCP INIT] Connecting to MCP Business Registry server...")
+        logger.info(f"[MCP INIT] URL: {self._settings.mcp_business_registry_url}")
+        self._mcp_business_registry = MCPStreamableHTTPTool(
+            name="business_registry",
+            url=self._settings.mcp_business_registry_url,
+            description="Business registry data for company profiles, financials, locations, and industry players",
+            headers={"Authorization": f"Bearer {self._settings.mcp_business_registry_api_key}"},
             timeout=MCP_CONNECTION_TIMEOUT,
             sse_read_timeout=MCP_SSE_READ_TIMEOUT,
             request_timeout=MCP_REQUEST_TIMEOUT,
         )
 
         # Connect to the MCP server
-        await self._mcp_demographics.__aenter__()
+        await self._mcp_business_registry.__aenter__()
         
         # Log available MCP tools
-        if self._mcp_demographics.functions:
-            tool_names = [f.name for f in self._mcp_demographics.functions]
-            logger.info(f"[MCP INIT] Demographics connection successful! {len(tool_names)} tools available:")
+        if self._mcp_business_registry.functions:
+            tool_names = [f.name for f in self._mcp_business_registry.functions]
+            logger.info(f"[MCP INIT] Business Registry connection successful! {len(tool_names)} tools available:")
             for name in tool_names:
                 logger.info(f"[MCP INIT]   - {name}")
         else:
-            logger.warning("[MCP INIT] Demographics connected but no tools were loaded!")
-        mcp_tools.append(self._mcp_demographics)
+            logger.warning("[MCP INIT] Business Registry connected but no tools were loaded!")
+        mcp_tools.append(self._mcp_business_registry)
         
         # Create MCP Scratchpad tool with session scope (if session_id provided)
         if self._session_id:
@@ -106,7 +108,7 @@ class MarketAnalystAgent:
             scratchpad_headers = {
                 "Authorization": f"Bearer {self._settings.mcp_scratchpad_api_key}",
                 "X-Session-ID": self._session_id,
-                "X-Caller-Agent": "market-analyst",
+                "X-Caller-Agent": "competitor-analyst",
             }
             
             self._mcp_scratchpad = MCPStreamableHTTPTool(
@@ -134,10 +136,10 @@ class MarketAnalystAgent:
         else:
             logger.info("[MCP INIT] No session ID - scratchpad tool not enabled")
 
-        # Add web search tool for real-time market information
-        logger.info("[TOOL INIT] Adding web search capability...")
+        # Add web search tool (Grounded with Bing) for real-time competitor information
+        logger.info("[TOOL INIT] Adding web search capability (Grounding with Bing)...")
         web_search_tool = HostedWebSearchTool(
-            description="Search the web for current market trends, news, and real-time information",
+            description="Search the web for current competitor information, news, reviews, and real-time market intelligence",
         )
         mcp_tools.append(web_search_tool)
         logger.info("[TOOL INIT] Web search tool added")
@@ -231,11 +233,11 @@ class MarketAnalystAgent:
             await self._mcp_scratchpad.__aexit__(None, None, None)
             self._mcp_scratchpad = None
             logger.info("[SHUTDOWN] MCP Scratchpad connection closed")
-        if self._mcp_demographics is not None:
-            logger.info("[SHUTDOWN] Disconnecting from MCP Demographics server...")
-            await self._mcp_demographics.__aexit__(None, None, None)
-            self._mcp_demographics = None
-            logger.info("[SHUTDOWN] MCP Demographics connection closed")
+        if self._mcp_business_registry is not None:
+            logger.info("[SHUTDOWN] Disconnecting from MCP Business Registry server...")
+            await self._mcp_business_registry.__aexit__(None, None, None)
+            self._mcp_business_registry = None
+            logger.info("[SHUTDOWN] MCP Business Registry connection closed")
         self._agent = None
         logger.info("[SHUTDOWN] Agent resources released")
 
@@ -250,10 +252,10 @@ class MarketAnalystAgent:
 
 
 async def main():
-    """Example usage of the Market Analyst Agent."""
-    async with MarketAnalystAgent() as agent:
+    """Example usage of the Competitor Analyst Agent."""
+    async with CompetitorAnalystAgent() as agent:
         response = await agent.run(
-            "What is the estimated market size for specialty coffee in Brno, Czech Republic?"
+            "Who are the main specialty coffee competitors in Vienna?"
         )
         print(f"Agent: {response}")
 

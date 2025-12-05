@@ -120,6 +120,18 @@ class Settings(BaseSettings):
         description="API key for Market Analyst A2A authentication",
     )
 
+    # A2A Competitor Analyst Agent configuration
+    a2a_competitor_analyst_url: str = Field(
+        default="",
+        alias="A2A_COMPETITOR_ANALYST_URL",
+        description="URL to the Competitor Analyst A2A agent endpoint (e.g., https://apim-xxx/competitor-analyst)",
+    )
+    a2a_competitor_analyst_api_key: str = Field(
+        default="",
+        alias="A2A_COMPETITOR_ANALYST_API_KEY",
+        description="API key for Competitor Analyst A2A authentication",
+    )
+
     # Application Insights / Log Analytics configuration (ADR-005)
     log_analytics_workspace_id: str = Field(
         default="",
@@ -191,6 +203,11 @@ class Settings(BaseSettings):
     def a2a_market_analyst_enabled(self) -> bool:
         """Check if Market Analyst A2A agent is configured."""
         return bool(self.a2a_market_analyst_url and self.a2a_market_analyst_api_key)
+
+    @property
+    def a2a_competitor_analyst_enabled(self) -> bool:
+        """Check if Competitor Analyst A2A agent is configured."""
+        return bool(self.a2a_competitor_analyst_url and self.a2a_competitor_analyst_api_key)
 
     @property
     def trace_polling_configured(self) -> bool:
