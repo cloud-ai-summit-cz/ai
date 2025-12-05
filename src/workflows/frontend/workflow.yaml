@@ -23,7 +23,7 @@ trigger:
               skipQuestionMode: SkipOnFirstExecutionIfVariableHasValue
               prompt: <QUESTION>Validation OK - Approve?
             - kind: SendActivity
-              activity: <FINAL> Success!
+              activity: <FINAL> Success! Ivoice approved for payment processing.
               id: action-1764942712798
           id: if-action-1764883723763-0
       id: action-1764883723763
@@ -31,6 +31,14 @@ trigger:
         - kind: SendActivity
           activity: The Invoice is wrong! Sending back...
           id: action-1764884001355
+        - kind: InvokeAzureAgent
+          id: invoice-mailer-agent
+          agent:
+            name: invoice-mailer-agent
+          input:
+            messages: =Local.LastMessage
+          output:
+            autoSend: true
     - kind: EndConversation
       id: action-1764936956468
 id: ""

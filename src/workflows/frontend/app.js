@@ -32,7 +32,7 @@ trigger:
               skipQuestionMode: SkipOnFirstExecutionIfVariableHasValue
               prompt: <QUESTION>Validation OK - Approve?
             - kind: SendActivity
-              activity: <FINAL> Success!
+              activity: <FINAL> Success! Ivoice approved for payment processing.
               id: action-1764942712798
           id: if-action-1764883723763-0
       id: action-1764883723763
@@ -40,12 +40,19 @@ trigger:
         - kind: SendActivity
           activity: The Invoice is wrong! Sending back...
           id: action-1764884001355
+        - kind: InvokeAzureAgent
+          id: invoice-mailer-agent
+          agent:
+            name: invoice-mailer-agent
+          input:
+            messages: =Local.LastMessage
+          output:
+            autoSend: true
     - kind: EndConversation
       id: action-1764936956468
 id: ""
 name: wf2
 description: ""
-
 `;
 const WORKFLOW_PROMPT_DEMO_USE = true
 
@@ -87,7 +94,6 @@ const WORKFLOW_INVOICES_DEMO = {
         "notes": "Handwritten PO (534) detected. Invoice # read as '100'. Invoice date read as 10/15/2025 and converted to ISO. Supplier address and purchaser/shipping address OCRed as 'Karlinska 1918, Karlin, Czechia' (minor uncertainty). Totals (subtotal 2000 + tax 300 + shipping 0 = total 2300) match the invoice."
     },
     "invoice2": {
-        "po_number": "888",
         "invoice_number": "00012",
         "invoice_date": "2205-10-01",
         "due_date": "2205-10-16",
@@ -186,88 +192,89 @@ const nodeTypes = {
     'Question': { icon: '❓', class: 'node-question', label: 'Ask a question' },
 };
 
-// Simple YAML parser for workflow structure
-// Parses the WORKFLOW_YAML string dynamically
+// Minimal YAML parser tailored for the workflow definition
+// Handles objects, arrays, and scalars using indentation only (no anchors/tags)
 function parseSimpleYaml(yamlStr) {
-    const lines = yamlStr.split('\n');
-    const result = {};
-    const stack = [{ obj: result, indent: -1 }];
-    let currentArray = null;
-    let currentArrayIndent = -1;
+    const rawLines = yamlStr.split('\n');
+    const cleanedLines = rawLines.filter(line => line.trim() && !line.trim().startsWith('#'));
 
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        
-        // Skip empty lines and comments
-        if (!line.trim() || line.trim().startsWith('#')) continue;
-        
+    const root = {};
+    const stack = [{ indent: -1, value: root }];
+
+    const parseValue = (raw) => {
+        const unquoted = raw.replace(/^['"]|['"]$/g, '');
+        if (unquoted === 'true') return true;
+        if (unquoted === 'false') return false;
+        if (unquoted === 'null') return null;
+            if (unquoted.trim() !== '' && !/^\d+$/.test(unquoted)) return unquoted; // Preserve strings with leading zeros
+        return unquoted;
+    };
+
+    const peekNextNonEmpty = (startIdx) => {
+        for (let j = startIdx + 1; j < cleanedLines.length; j++) {
+            const ln = cleanedLines[j].trim();
+            if (ln) return cleanedLines[j];
+        }
+        return null;
+    };
+
+    cleanedLines.forEach((line, idx) => {
         const indent = line.search(/\S/);
         const content = line.trim();
-        
-        // Handle array items
+
+        while (stack.length && indent <= stack[stack.length - 1].indent) {
+            stack.pop();
+        }
+
+        const parent = stack[stack.length - 1]?.value;
+        if (parent === undefined) return;
+
+        // Array item
         if (content.startsWith('- ')) {
+            if (!Array.isArray(parent)) return; // malformed YAML; ignore
+
             const itemContent = content.slice(2).trim();
-            
-            // Find or create the current array context
-            while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
-                stack.pop();
+            if (!itemContent.includes(':')) {
+                parent.push(parseValue(itemContent));
+                return;
             }
-            
-            const parent = stack[stack.length - 1].obj;
-            const lastKey = stack[stack.length - 1].lastKey;
-            
-            if (lastKey && Array.isArray(parent[lastKey])) {
-                if (itemContent.includes(':')) {
-                    // Object in array
-                    const [key, ...valueParts] = itemContent.split(':');
-                    const value = valueParts.join(':').trim();
-                    const newObj = {};
-                    newObj[key.trim()] = value || {};
-                    parent[lastKey].push(newObj);
-                    stack.push({ obj: newObj, indent: indent, lastKey: key.trim() });
-                } else {
-                    // Simple value in array
-                    parent[lastKey].push(itemContent);
-                }
-            }
-            continue;
-        }
-        
-        // Handle key-value pairs
-        if (content.includes(':')) {
-            const colonIdx = content.indexOf(':');
-            const key = content.slice(0, colonIdx).trim();
-            const value = content.slice(colonIdx + 1).trim();
-            
-            // Pop stack to correct level
-            while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
-                stack.pop();
-            }
-            
-            const current = stack[stack.length - 1].obj;
-            
-            if (value === '' || value === '|') {
-                // Check next line to determine if array or object
-                const nextLine = lines[i + 1];
-                if (nextLine && nextLine.trim().startsWith('-')) {
-                    current[key] = [];
-                    stack[stack.length - 1].lastKey = key;
-                } else {
-                    current[key] = {};
-                    stack.push({ obj: current[key], indent: indent, lastKey: key });
-                }
+
+            const [k, ...rest] = itemContent.split(':');
+            const rawVal = rest.join(':').trim();
+            const obj = {};
+            if (rawVal) {
+                obj[k.trim()] = parseValue(rawVal);
             } else {
-                // Simple value - clean up quotes and special chars
-                let cleanValue = value;
-                if (cleanValue.startsWith('"') && cleanValue.endsWith('"')) {
-                    cleanValue = cleanValue.slice(1, -1);
-                }
-                current[key] = cleanValue;
+                obj[k.trim()] = {};
             }
+
+            parent.push(obj);
+            stack.push({ indent, value: obj });
+            return;
         }
-    }
-    
-    return result;
+
+        // Key/value line
+        const colonIdx = content.indexOf(':');
+        if (colonIdx === -1) return; // skip invalid
+
+        const key = content.slice(0, colonIdx).trim();
+        const rawVal = content.slice(colonIdx + 1).trim();
+
+        if (rawVal === '') {
+            const nextLine = peekNextNonEmpty(idx);
+            const nextIndent = nextLine ? nextLine.search(/\S/) : indent + 2;
+            if (nextLine && nextLine.trim().startsWith('-') && nextIndent > indent) {
+                parent[key] = [];
+            } else {
+                parent[key] = {};
+            }
+            stack.push({ indent, value: parent[key] });
+        } else {
+            parent[key] = parseValue(rawVal);
+        }
+    });
+
+    return root;
 }
 
 // Parse workflow YAML and convert to structure for diagram rendering
@@ -291,6 +298,9 @@ function getWorkflowStructure() {
             
             return actionsArray.map(actionObj => {
                 const action = { ...actionObj };
+                if (!action.id) {
+                    action.id = `${action.kind || 'action'}-${Math.random().toString(36).slice(2, 8)}`;
+                }
                 
                 // Extract agent name for InvokeAzureAgent
                 if (action.kind === 'InvokeAzureAgent' && action.agent) {
@@ -423,74 +433,67 @@ function renderWorkflowDiagram() {
     try {
         const workflow = getWorkflowStructure();
         console.log('4. Workflow structure:', workflow);
-        
+
         const actions = workflow.trigger?.actions || [];
         console.log('5. Actions count:', actions.length);
-        
-        // Create main row for: Start -> SetVariable -> Agent -> Condition
+
+        const conditionIdx = actions.findIndex(action => action.kind === 'ConditionGroup');
+        const preActions = conditionIdx === -1 ? actions : actions.slice(0, conditionIdx);
+        const conditionAction = conditionIdx === -1 ? null : actions[conditionIdx];
+        const postActions = conditionIdx === -1 ? [] : actions.slice(conditionIdx + 1);
+
         const mainRow = document.createElement('div');
         mainRow.className = 'diagram-row';
-        
-        // Add Start node
-        const startNode = createNodeElement({ kind: 'OnConversationStart', id: 'trigger_wf' }, true);
-        console.log('6. Start node created:', startNode.outerHTML.substring(0, 100));
+
+        const startNode = createNodeElement({ kind: 'OnConversationStart', id: workflow.trigger?.id || 'trigger_wf' }, true);
         mainRow.appendChild(startNode);
-        mainRow.appendChild(createConnector());
-        
-        // Add SetVariable node
-        if (actions[0]) {
-            mainRow.appendChild(createNodeElement(actions[0]));
-            mainRow.appendChild(createConnector());
-        }
-        
-        // Add Agent node  
-        if (actions[1]) {
-            mainRow.appendChild(createNodeElement(actions[1]));
-            mainRow.appendChild(createConnector());
-        }
-        
-        // Add Condition node
-        const conditionAction = actions[2];
+
+        const appendActionsToRow = (row, actionList) => {
+            actionList.forEach((action, idx) => {
+                row.appendChild(createConnector());
+                row.appendChild(createNodeElement(action));
+            });
+        };
+
+        appendActionsToRow(mainRow, preActions);
+
         if (conditionAction) {
+            mainRow.appendChild(createConnector());
             mainRow.appendChild(createNodeElement(conditionAction));
         }
-        
-        console.log('7. Main row children:', mainRow.children.length);
+
         container.appendChild(mainRow);
-        
-        // Create IF branch row
-        if (conditionAction && conditionAction.conditions && conditionAction.conditions[0]) {
-            const ifRow = document.createElement('div');
-            ifRow.className = 'diagram-branch-row';
-            ifRow.appendChild(createConditionLabel('if'));
-            
+
+        const appendBranchRow = (label, branchActions) => {
+            const row = document.createElement('div');
+            row.className = 'diagram-branch-row';
+            row.appendChild(createConditionLabel(label));
+
+            const renderActions = [...(branchActions || []), ...postActions];
+            renderActions.forEach((action, idx) => {
+                row.appendChild(createConnector());
+                row.appendChild(createNodeElement(action));
+            });
+
+            container.appendChild(row);
+        };
+
+        if (conditionAction && Array.isArray(conditionAction.conditions) && conditionAction.conditions.length) {
             const ifActions = conditionAction.conditions[0].actions || [];
-            ifActions.forEach((action, idx) => {
-                if (idx > 0) ifRow.appendChild(createConnector());
-                ifRow.appendChild(createNodeElement(action));
-            });
-            container.appendChild(ifRow);
-            console.log('8. IF row added, children:', ifRow.children.length);
+            appendBranchRow('if', ifActions);
         }
-        
-        // Create ELSE branch row
-        if (conditionAction && conditionAction.elseActions) {
-            const elseRow = document.createElement('div');
-            elseRow.className = 'diagram-branch-row';
-            elseRow.appendChild(createConditionLabel('else'));
-            
-            const elseActions = conditionAction.elseActions;
-            elseActions.forEach((action, idx) => {
-                if (idx > 0) elseRow.appendChild(createConnector());
-                elseRow.appendChild(createNodeElement(action));
-            });
-            container.appendChild(elseRow);
-            console.log('9. ELSE row added, children:', elseRow.children.length);
+
+        if (conditionAction && Array.isArray(conditionAction.elseActions)) {
+            appendBranchRow('else', conditionAction.elseActions);
         }
-        
+
+        if (!conditionAction) {
+            appendActionsToRow(mainRow, postActions);
+        }
+
         console.log('10. Final container innerHTML length:', container.innerHTML.length);
         console.log('=== renderWorkflowDiagram END ===');
-        
+
     } catch (error) {
         console.error('Failed to render workflow diagram:', error);
         console.error('Error stack:', error.stack);
