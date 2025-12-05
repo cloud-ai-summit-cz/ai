@@ -23,7 +23,7 @@ resource "azapi_resource" "mcp_connection_business_registry" {
     properties = {
       authType      = "CustomKeys"
       category      = "RemoteTool"
-      target        = "https://${azapi_resource.capp_mcp_business_registry.output.properties.configuration.ingress.fqdn}/mcp"
+      target        = "${azapi_resource.apim.output.properties.gatewayUrl}/business-registry/mcp"
       isSharedToAll = false
       credentials = {
         keys = {
@@ -39,7 +39,7 @@ resource "azapi_resource" "mcp_connection_business_registry" {
 
   depends_on = [
     azapi_resource.ai_foundry_project_capability_host,
-    azapi_resource.capp_mcp_business_registry
+    azapi_resource.apim_mcp_business_registry_api
   ]
 }
 
@@ -59,7 +59,7 @@ resource "azapi_resource" "mcp_connection_government_data" {
     properties = {
       authType      = "CustomKeys"
       category      = "RemoteTool"
-      target        = "https://${azapi_resource.capp_mcp_government_data.output.properties.configuration.ingress.fqdn}/mcp"
+      target        = "${azapi_resource.apim.output.properties.gatewayUrl}/government-data/mcp"
       isSharedToAll = false
       credentials = {
         keys = {
@@ -75,7 +75,7 @@ resource "azapi_resource" "mcp_connection_government_data" {
 
   depends_on = [
     azapi_resource.ai_foundry_project_capability_host,
-    azapi_resource.capp_mcp_government_data
+    azapi_resource.apim_mcp_government_data_api
   ]
 }
 
@@ -108,7 +108,7 @@ resource "azapi_resource" "mcp_connection_demographics" {
         }
       }
       metadata = {
-        type        = "catalog_MCP"
+        ApiType     = "MCP"
         ServiceName = "demographics"
       }
     }
@@ -136,7 +136,7 @@ resource "azapi_resource" "mcp_connection_real_estate" {
     properties = {
       authType      = "CustomKeys"
       category      = "RemoteTool"
-      target        = "https://${azapi_resource.capp_mcp_real_estate.output.properties.configuration.ingress.fqdn}/mcp"
+      target        = "${azapi_resource.apim.output.properties.gatewayUrl}/real-estate/mcp"
       isSharedToAll = false
       credentials = {
         keys = {
@@ -152,7 +152,7 @@ resource "azapi_resource" "mcp_connection_real_estate" {
 
   depends_on = [
     azapi_resource.ai_foundry_project_capability_host,
-    azapi_resource.capp_mcp_real_estate
+    azapi_resource.apim_mcp_real_estate_api
   ]
 }
 
@@ -172,7 +172,7 @@ resource "azapi_resource" "mcp_connection_calculator" {
     properties = {
       authType      = "CustomKeys"
       category      = "RemoteTool"
-      target        = "https://${azapi_resource.capp_mcp_calculator.output.properties.configuration.ingress.fqdn}/mcp"
+      target        = "${azapi_resource.apim.output.properties.gatewayUrl}/calculator/mcp"
       isSharedToAll = false
       credentials = {
         keys = {
@@ -188,7 +188,7 @@ resource "azapi_resource" "mcp_connection_calculator" {
 
   depends_on = [
     azapi_resource.ai_foundry_project_capability_host,
-    azapi_resource.capp_mcp_calculator
+    azapi_resource.apim_mcp_calculator_api
   ]
 }
 
@@ -212,7 +212,7 @@ resource "azapi_resource" "mcp_connection_scratchpad" {
     properties = {
       authType      = "CustomKeys"
       category      = "RemoteTool"
-      target        = "https://${azapi_resource.capp_mcp_scratchpad.output.properties.configuration.ingress.fqdn}/mcp"
+      target        = "${azapi_resource.apim.output.properties.gatewayUrl}/scratchpad/mcp"
       isSharedToAll = false
       credentials = {
         keys = {
@@ -228,6 +228,6 @@ resource "azapi_resource" "mcp_connection_scratchpad" {
 
   depends_on = [
     azapi_resource.ai_foundry_project_capability_host,
-    azapi_resource.capp_mcp_scratchpad
+    azapi_resource.apim_mcp_scratchpad_api
   ]
 }
