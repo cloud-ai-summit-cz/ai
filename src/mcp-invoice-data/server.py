@@ -353,6 +353,91 @@ def check_po(po_number: str, ctx: Context) -> dict:
 
 
 @mcp.tool
+def send_report(subject: str, text: str, ctx: Context) -> dict:
+    """Send a PO validation report notification.
+
+    Args:
+        subject: The report subject line.
+        text: The report body text.
+    Returns:
+        Result with success status and message ID.
+    """
+    import uuid
+    import httpx
+    
+    # Enhanced logging with context information
+    request_id = ctx.get_state("request_id") or "unknown"
+    headers = ctx.get_state("request_headers") or {}
+    
+    logger.info(f"[TOOL:send_report] Request ID: {request_id}")
+    logger.info(f"[TOOL:send_report] Caller Agent: {headers.get('x-caller-agent', 'unknown')}")
+    logger.info(f"[TOOL:send_report] Session ID: {headers.get('x-session-id', 'unknown')}")
+    
+    # Logic App HTTP trigger URL
+    logic_app_url = (
+        "https://prod-70.eastus.logic.azure.com:443/workflows/de4fbd31b1e54dc7a3abbfc9dda4dd37/"
+        "triggers/When_an_HTTP_request_is_received/paths/invoke"
+        "?api-version=2016-10-01"
+        "&sp=%2Ftriggers%2FWhen_an_HTTP_request_is_received%2Frun"
+        "&sv=1.0"
+        "&sig=sWLLyRKSpPgqMr729fnQ6UFD5-uEPa3D-gaEwEH1h1E"
+    )
+    
+    # Prepare payload for Logic App
+    payload = {
+        "email_subject": subject,
+        "email_body": text,
+    }
+    
+    # Generate a message ID for tracking
+    message_id = f"MSG-{uuid.uuid4().hex[:12].upper()}"
+    
+    logger.info(f"[TOOL:send_report] Sending report via Logic App: message_id={message_id}")
+    logger.info(f"[TOOL:send_report] Subject: {subject}")
+    logger.info(f"[TOOL:send_report] Body length: {len(text)} chars")
+    
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                logic_app_url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+        
+        logger.info(f"[TOOL:send_report] Logic App responded with status: {response.status_code}")
+        
+        return {
+            "success": True,
+            "message_id": message_id,
+            "subject": subject,
+            "status": "sent",
+            "logic_app_status_code": response.status_code,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[TOOL:send_email] Logic App HTTP error: {e.response.status_code} - {e.response.text}")
+        return {
+            "success": False,
+            "message_id": message_id,
+            "subject": subject,
+            "status": "failed",
+            "error": f"HTTP {e.response.status_code}: {e.response.text}",
+            "timestamp": datetime.now().isoformat(),
+        }
+    except httpx.RequestError as e:
+        logger.error(f"[TOOL:send_email] Logic App request error: {e}")
+        return {
+            "success": False,
+            "message_id": message_id,
+            "subject": subject,
+            "status": "failed",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+
+@mcp.tool
 def get_po(po_number: str, ctx: Context) -> Optional[dict]:
     """Get purchase order details by PO number.
 

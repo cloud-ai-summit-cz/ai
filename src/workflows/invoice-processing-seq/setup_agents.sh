@@ -14,6 +14,7 @@ AGENTS=(
     "agent-invoice-intake"
     "agent-invoice-validation"
     "agent-invoice-summary"
+    "agent-invoice-mailer"
 )
 
 echo "=== Invoice Processing Workflow Setup ==="

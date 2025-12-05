@@ -99,6 +99,18 @@ async def main():
         #     )
         #     print(f"get_po result: {result.content}")
 
+        # Test send_email tool
+        if "send_email" in tool_names:
+            print("\n--- Testing send_email tool ---")
+            result = await session.call_tool(
+                name="send_email",
+                arguments={
+                    "subject": "Test Email from MCP Client",
+                    "text": "This is a test email sent via the MCP invoice-data server to Logic App.",
+                },
+            )
+            print(f"send_email result: {result.content}")
+
         logger.info("MCP client test completed successfully")
 
 
