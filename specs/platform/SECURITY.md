@@ -37,15 +37,15 @@ For demo scope, a simplified threat assessment is sufficient:
 ┌─────────────────────────────────────────────────────────────────┐
 │                        INTERNET                                  │
 │                                                                  │
-│    ┌──────────────┐      ┌──────────────┐                       │
-│    │ Research UI  │      │ Invoice UI   │                       │
-│    └──────────────┘      └──────────────┘                       │
-│            │                     │                               │
-└────────────┼─────────────────────┼───────────────────────────────┘
-             │                     │
-    ─────────┼─────────────────────┼─────────── Trust Boundary 1
-             │                     │             (Public → Private)
-             ▼                     ▼
+│    ┌──────────────┐                                             │
+│    │ Research UI  │                                             │
+│    └──────────────┘                                             │
+│            │                                                     │
+└────────────┼─────────────────────────────────────────────────────┘
+             │
+    ─────────┼─────────────────────────────── Trust Boundary 1
+             │                                (Public → Private)
+             ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                   CONTAINER APPS ENVIRONMENT                     │
 │                                                                  │
@@ -130,8 +130,6 @@ resource "azurerm_role_assignment" "cosmos_contributor" {
 |-----------|---------------|----------|
 | Mock market data | Public | No restrictions |
 | Mock competitor data | Public | No restrictions |
-| Mock invoice data | Public | No restrictions |
-| Mock PO data | Public | No restrictions |
 | Agent prompts | Internal | Version controlled |
 | API keys | Secret | Environment variables / Key Vault |
 
@@ -150,10 +148,9 @@ This demo explicitly avoids PII:
 
 ```python
 # Example: Mock data generation ensures no real PII
-MOCK_PO_OWNER = {
-    "name": "Jan Novak",           # Fictional name
-    "email": "jan.novak@cofilot.cz",  # Fictional company domain
-    "teams_id": "jan.novak@cofilot.cz"
+MOCK_COMPETITOR = {
+    "name": "Cafe Central",           # Fictional business name
+    "city": "Vienna",                 # Real city, fictional business details
 }
 
 # DO NOT: Use real names, emails, or identifiable information
@@ -373,7 +370,7 @@ logger = structlog.get_logger()
 logger.info(
     "event",
     request_id="req_abc123",      # Correlation ID
-    session_id="sess_xyz789",     # Research/Workflow session
+    session_id="sess_xyz789",     # Research session
     agent="market-analyst",        # Which agent/service
     action="tool_call",            # What happened
     # Never log secrets or PII
@@ -426,10 +423,6 @@ class ResearchQueryInput(BaseModel):
         if '<script>' in v.lower():
             raise ValueError('Invalid characters in query')
         return v.strip()
-
-class InvoiceUploadInput(BaseModel):
-    filename: str = Field(..., pattern=r'^[\w\-\.]+\.pdf$')
-    content_type: str = Field(..., pattern=r'^application/pdf$')
 ```
 
 ### Agent Prompt Safety

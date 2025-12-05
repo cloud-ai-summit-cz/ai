@@ -55,20 +55,15 @@ tests/
 ├── unit/
 │   ├── test_models.py              # Pydantic model validation
 │   ├── test_scratchpad_logic.py    # Scratchpad operations
-│   ├── test_workflow_logic.py      # Workflow state machine
-│   ├── test_invoice_extraction.py  # Extraction parsing
 │   └── mcp_servers/
 │       ├── test_market_data.py
 │       ├── test_competitor.py
 │       ├── test_location.py
-│       ├── test_finance.py
-│       ├── test_po.py
-│       └── test_policy.py
+│       └── test_finance.py
 │
 ├── integration/
 │   ├── test_cosmos_operations.py   # Cosmos DB CRUD
 │   ├── test_ai_search.py           # Search index queries
-│   ├── test_doc_intelligence.py    # OCR integration
 │   ├── test_mcp_endpoints.py       # MCP server HTTP
 │   └── test_sse_streaming.py       # SSE event delivery
 │
@@ -79,7 +74,6 @@ tests/
 │
 ├── e2e/
 │   ├── test_research_scenarios.py  # Research demo scenarios
-│   ├── test_invoice_scenarios.py   # Invoice demo scenarios
 │   └── conftest.py                 # Shared fixtures
 │
 └── conftest.py                     # Global fixtures
@@ -95,97 +89,58 @@ tests/
 # tests/unit/test_models.py
 import pytest
 from pydantic import ValidationError
-from app.models.invoice import InvoiceData, LineItem
+from app.models.research import ResearchSession, ChecklistItem
 
-class TestInvoiceData:
-    def test_valid_invoice(self):
-        """Valid invoice data should parse correctly."""
-        data = InvoiceData(
-            vendor_name="Coffee Beans Co.",
-            vendor_id="VND001",
-            invoice_number="INV-2025-0042",
-            invoice_date="2025-11-25",
-            po_number="PO-12345",
-            subtotal=850.00,
-            tax_amount=170.00,
-            tax_rate=0.20,
-            total_amount=1020.00,
-            currency="EUR",
-            line_items=[
-                LineItem(
-                    description="Premium Arabica Beans",
-                    quantity=5,
-                    unit_price=150.00,
-                    total=750.00
+class TestResearchSession:
+    def test_valid_research_session(self):
+        """Valid research session should parse correctly."""
+        session = ResearchSession(
+            id="sess_abc123",
+            session_id="sess_abc123",
+            query="Should Cofilot expand to Vienna?",
+            status="in_progress",
+            created_at="2025-12-01T10:00:00Z",
+            updated_at="2025-12-01T10:15:00Z",
+            scratchpad_id="sp_abc123",
+            checklist=[
+                ChecklistItem(
+                    id=1,
+                    item="Market size and growth trends documented",
+                    owner_agent="market-analyst",
+                    status="completed"
                 )
             ]
         )
-        assert data.total_amount == 1020.00
+        assert session.status == "in_progress"
     
-    def test_invalid_po_number_format(self):
-        """PO number must match pattern if provided."""
+    def test_invalid_status(self):
+        """Status must be one of the allowed values."""
         with pytest.raises(ValidationError) as exc:
-            InvoiceData(
-                vendor_name="Test",
-                invoice_number="INV-001",
-                invoice_date="2025-01-01",
-                po_number="INVALID",  # Should be PO-XXXXX
-                subtotal=100,
-                tax_amount=20,
-                tax_rate=0.2,
-                total_amount=120,
-                currency="EUR",
-                line_items=[]
+            ResearchSession(
+                id="sess_abc123",
+                session_id="sess_abc123",
+                query="Test query",
+                status="invalid_status",  # Not allowed
+                created_at="2025-12-01T10:00:00Z",
+                updated_at="2025-12-01T10:15:00Z",
+                scratchpad_id="sp_abc123",
+                checklist=[]
             )
-        assert "po_number" in str(exc.value)
+        assert "status" in str(exc.value)
     
-    def test_amount_validation(self):
-        """Total must equal subtotal + tax."""
+    def test_query_length_validation(self):
+        """Query must not exceed max length."""
         with pytest.raises(ValidationError):
-            InvoiceData(
-                vendor_name="Test",
-                invoice_number="INV-001",
-                invoice_date="2025-01-01",
-                subtotal=100,
-                tax_amount=20,
-                tax_rate=0.2,
-                total_amount=999,  # Wrong!
-                currency="EUR",
-                line_items=[]
+            ResearchSession(
+                id="sess_abc123",
+                session_id="sess_abc123",
+                query="x" * 501,  # Too long
+                status="created",
+                created_at="2025-12-01T10:00:00Z",
+                updated_at="2025-12-01T10:15:00Z",
+                scratchpad_id="sp_abc123",
+                checklist=[]
             )
-```
-
-### Business Logic Tests
-
-```python
-# tests/unit/test_workflow_logic.py
-import pytest
-from app.services.workflow import WorkflowStateMachine, InvalidTransition
-
-class TestWorkflowStateMachine:
-    def test_valid_transitions(self):
-        """Workflow should follow valid state transitions."""
-        wf = WorkflowStateMachine(initial="created")
-        
-        wf.transition("extracting")
-        assert wf.current == "extracting"
-        
-        wf.transition("validating")
-        assert wf.current == "validating"
-    
-    def test_invalid_transition(self):
-        """Invalid transitions should raise error."""
-        wf = WorkflowStateMachine(initial="created")
-        
-        with pytest.raises(InvalidTransition):
-            wf.transition("notification_sent")  # Can't skip steps
-    
-    def test_terminal_state(self):
-        """Cannot transition from terminal state."""
-        wf = WorkflowStateMachine(initial="failed")
-        
-        with pytest.raises(InvalidTransition):
-            wf.transition("validating")
 ```
 
 ### MCP Tool Tests
@@ -426,8 +381,7 @@ class TestMarketDataSchemas:
 import pytest
 from app.models.api import (
     StartResearchRequest,
-    StartResearchResponse,
-    UploadInvoiceResponse
+    StartResearchResponse
 )
 
 class TestAPISchemas:
@@ -454,7 +408,7 @@ class TestAPISchemas:
 
 ## E2E Scenario Tests
 
-### Research Scenarios (PRD Part A)
+### Research Scenarios
 
 ```python
 # tests/e2e/test_research_scenarios.py
@@ -579,129 +533,6 @@ async def test_user_interaction_mid_research(client):
         await asyncio.sleep(2)
         status = await client.get(f"/api/research/{session_id}/status")
         assert status.json()["status"] in ["in_progress", "completed"]
-```
-
-### Invoice Scenarios (PRD Part B)
-
-```python
-# tests/e2e/test_invoice_scenarios.py
-import pytest
-from httpx import AsyncClient
-from app.main import app
-from pathlib import Path
-
-@pytest.fixture
-async def client():
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        yield client
-
-@pytest.fixture
-def sample_invoices():
-    """Load sample invoice PDFs for testing."""
-    return {
-        "valid_matching": Path("tests/fixtures/invoice_valid_po12345.pdf"),
-        "amount_mismatch": Path("tests/fixtures/invoice_mismatch_po12345.pdf"),
-        "missing_po": Path("tests/fixtures/invoice_no_po.pdf"),
-        "policy_violation": Path("tests/fixtures/invoice_over_threshold.pdf"),
-        "tax_issue": Path("tests/fixtures/invoice_missing_tax.pdf"),
-    }
-
-@pytest.mark.asyncio
-@pytest.mark.e2e
-async def test_valid_invoice_with_matching_po(client, sample_invoices):
-    """
-    PRD Scenario: Valid invoice with matching PO
-    Given: Invoice with PO#12345, amount $1,000
-    When: Invoice is submitted
-    Then: System extracts data, validates PO, recommends approval
-    """
-    with open(sample_invoices["valid_matching"], "rb") as f:
-        response = await client.post(
-            "/api/invoice/upload",
-            files={"file": ("invoice.pdf", f, "application/pdf")}
-        )
-    
-    assert response.status_code == 200
-    workflow_id = response.json()["workflow_id"]
-    
-    # Wait for completion
-    import asyncio
-    for _ in range(20):  # Max 20 seconds (target: <10s)
-        status = await client.get(f"/api/invoice/{workflow_id}/status")
-        data = status.json()
-        
-        if data["status"] == "notification_sent":
-            break
-        await asyncio.sleep(0.5)
-    else:
-        pytest.fail("Invoice processing did not complete within 10 seconds")
-    
-    # Verify recommendation
-    assert data["recommendation"]["decision"] == "approve"
-    assert data["reconciliation_result"]["matches"] is True
-    assert data["notification_sent"] is True
-
-@pytest.mark.asyncio
-@pytest.mark.e2e
-async def test_invoice_with_amount_mismatch(client, sample_invoices):
-    """
-    PRD Scenario: Invoice with amount mismatch
-    Given: Invoice with PO#12345, amount $1,500 (PO shows $1,000)
-    When: Invoice is submitted
-    Then: System flags discrepancy, recommends rejection with reason
-    """
-    with open(sample_invoices["amount_mismatch"], "rb") as f:
-        response = await client.post(
-            "/api/invoice/upload",
-            files={"file": ("invoice.pdf", f, "application/pdf")}
-        )
-    
-    workflow_id = response.json()["workflow_id"]
-    
-    # Wait for completion
-    import asyncio
-    for _ in range(20):
-        status = await client.get(f"/api/invoice/{workflow_id}/status")
-        data = status.json()
-        if data["status"] in ["notification_sent", "failed"]:
-            break
-        await asyncio.sleep(0.5)
-    
-    # Verify discrepancy detected
-    assert data["reconciliation_result"]["matches"] is False
-    assert len(data["reconciliation_result"]["discrepancies"]) > 0
-    assert data["recommendation"]["decision"] == "reject"
-    assert "mismatch" in data["recommendation"]["reasoning"].lower()
-
-@pytest.mark.asyncio
-@pytest.mark.e2e
-async def test_invoice_with_missing_po(client, sample_invoices):
-    """
-    PRD Scenario: Invoice with missing PO
-    Given: Invoice without PO number
-    When: Invoice is submitted
-    Then: System flags missing PO, recommends rejection
-    """
-    with open(sample_invoices["missing_po"], "rb") as f:
-        response = await client.post(
-            "/api/invoice/upload",
-            files={"file": ("invoice.pdf", f, "application/pdf")}
-        )
-    
-    workflow_id = response.json()["workflow_id"]
-    
-    import asyncio
-    for _ in range(20):
-        status = await client.get(f"/api/invoice/{workflow_id}/status")
-        data = status.json()
-        if data["status"] in ["notification_sent", "failed"]:
-            break
-        await asyncio.sleep(0.5)
-    
-    assert data["validation_result"]["po_exists"] is False
-    assert data["recommendation"]["decision"] == "reject"
-    assert "missing" in data["recommendation"]["reasoning"].lower() or \
-           "no po" in data["recommendation"]["reasoning"].lower()
 ```
 
 ---

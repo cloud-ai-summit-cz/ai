@@ -103,7 +103,11 @@ paths:
 
   /research/sessions/{session_id}/answers:
     post:
-      summary: Submit answers to pending questions
+      summary: Submit answers to questions and unblock workflow
+      description: |
+        Submits answers to one or more questions. If the workflow is currently 
+        waiting for user input (blocked), this automatically unblocks it.
+        This is the combined Save & Unblock action from the UI.
       operationId: submitAnswers
       tags:
         - Research
@@ -123,20 +127,24 @@ paths:
               $ref: '#/components/schemas/AnswersRequest'
       responses:
         '200':
-          description: Answers submitted and workflow resumed
+          description: Answers saved and workflow unblocked (if waiting)
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AnswersResponse'
         '404':
           description: Session not found
-        '409':
-          description: No pending questions or workflow not paused
+        '400':
+          description: Invalid question ID or missing required fields
 
   /research/sessions/{session_id}/questions:
     get:
-      summary: Get pending questions for the session
-      operationId: getPendingQuestions
+      summary: Get all questions for the session
+      description: |
+        Returns all questions (pending and answered) for the session.
+        UI should poll this endpoint to display questions to the user.
+        The response includes workflow status to indicate if waiting for input.
+      operationId: getQuestions
       tags:
         - Research
         - Human-in-the-Loop
@@ -147,63 +155,21 @@ paths:
           schema:
             type: string
             format: uuid
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, answered, all]
+            default: all
+          description: Filter questions by status
       responses:
         '200':
-          description: List of pending questions
+          description: List of questions with workflow status
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/QuestionsResponse'
-        '404':
-          description: Session not found
-
-  /research/sessions/{session_id}/resume:
-    post:
-      summary: Resume a paused workflow (after answers submitted)
-      operationId: resumeWorkflow
-      tags:
-        - Research
-        - Human-in-the-Loop
-      parameters:
-        - name: session_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        '202':
-          description: Workflow resumed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WorkflowResumed'
-        '404':
-          description: Session not found
-        '409':
-          description: Workflow not paused or blocking questions unanswered
-
-  /research/sessions/{session_id}/checkpoint:
-    get:
-      summary: Get current checkpoint status
-      operationId: getCheckpoint
-      tags:
-        - Research
-        - Human-in-the-Loop
-      parameters:
-        - name: session_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        '200':
-          description: Checkpoint status
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CheckpointStatus'
         '404':
           description: Session not found
 
@@ -447,48 +413,56 @@ components:
         - context
         - asked_by
         - priority
-        - blocking
-        - created_at
+        - asked_at
+        - answered
       properties:
         id:
           type: string
+          description: Unique question ID
+          example: "q_abc12345"
         question:
           type: string
+          description: The question text
         context:
           type: string
           description: Why this information is needed
         asked_by:
           type: string
           description: Agent that asked this question
+          example: "finance-analyst"
         priority:
           type: string
-          enum: [high, medium, low]
-        blocking:
+          enum: [low, medium, high, blocking]
+          description: |
+            Question priority:
+            - low: Nice to have, won't block research
+            - medium: Would improve research quality  
+            - high: Important for accurate recommendations
+            - blocking: Research cannot proceed without answer
+        asked_at:
+          type: string
+          format: date-time
+          description: When the question was asked
+        answered:
           type: boolean
-          description: If true, workflow is paused waiting for this answer
-        options:
-          type: array
-          items:
-            type: string
-          nullable: true
-          description: Optional multiple choice options
+          description: Whether user has answered this question
         answer:
           type: string
           nullable: true
-        created_at:
-          type: string
-          format: date-time
+          description: User's answer (null if not answered)
         answered_at:
           type: string
           format: date-time
           nullable: true
+          description: When the question was answered
 
     QuestionsResponse:
       type: object
       required:
         - session_id
         - questions
-        - has_blocking
+        - pending_count
+        - answered_count
       properties:
         session_id:
           type: string
@@ -497,75 +471,60 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Question'
-        has_blocking:
+          description: All questions (pending and answered)
+        pending_count:
+          type: integer
+          description: Number of unanswered questions
+        answered_count:
+          type: integer
+          description: Number of answered questions
+        has_blocking_pending:
           type: boolean
           description: True if any blocking questions are unanswered
-        workflow_paused:
+        workflow_waiting:
           type: boolean
-          description: True if workflow is currently paused
+          description: True if workflow is currently waiting for user input
+
+    AnswersRequest:
+      type: object
+      required:
+        - answers
+      properties:
+        answers:
+          type: array
+          items:
+            type: object
+            required:
+              - question_id
+              - answer
+            properties:
+              question_id:
+                type: string
+                description: ID of the question being answered
+              answer:
+                type: string
+                description: User's answer
+          description: List of question answers to submit
 
     AnswersResponse:
       type: object
       required:
         - session_id
-        - answers_received
-        - workflow_status
+        - answers_saved
+        - workflow_unblocked
       properties:
         session_id:
           type: string
           format: uuid
-        answers_received:
+        answers_saved:
           type: integer
-        workflow_status:
-          type: string
-          enum: [resumed, still_waiting, completed]
-        remaining_questions:
+          description: Number of answers successfully saved
+        workflow_unblocked:
+          type: boolean
+          description: True if submitting these answers unblocked the workflow
+        remaining_pending:
           type: integer
-          description: Number of unanswered questions remaining
-
-    WorkflowResumed:
-      type: object
-      required:
-        - session_id
-        - status
-        - checkpoint_id
-      properties:
-        session_id:
-          type: string
-          format: uuid
-        status:
-          type: string
-          enum: [resumed]
-        checkpoint_id:
-          type: string
-        message:
-          type: string
-
-    CheckpointStatus:
-      type: object
-      required:
-        - session_id
-        - has_checkpoint
-      properties:
-        session_id:
-          type: string
-          format: uuid
-        has_checkpoint:
-          type: boolean
-        checkpoint_id:
-          type: string
-          nullable: true
-        created_at:
-          type: string
-          format: date-time
-          nullable: true
-        reason:
-          type: string
-          nullable: true
-          description: Why the checkpoint was created (e.g., "blocking_questions")
-        can_resume:
-          type: boolean
-          description: True if all blocking questions are answered
+          description: Number of questions still awaiting answers
 
     WorkflowStarted:
       type: object
@@ -581,17 +540,6 @@ components:
           enum: [started]
         message:
           type: string
-
-    AnswersRequest:
-      type: object
-      required:
-        - answers
-      properties:
-        answers:
-          type: object
-          additionalProperties:
-            type: string
-          description: Map of question_id to answer
 
     AgentActivityEvent:
       type: object
@@ -610,9 +558,8 @@ components:
             - sub_agent_tool_call
             - scratchpad_updated
             - question_added
-            - questions_pending
-            - workflow_paused
-            - workflow_resumed
+            - awaiting_user_input
+            - questions_answered
             - thinking
             - workflow_completed
             - error

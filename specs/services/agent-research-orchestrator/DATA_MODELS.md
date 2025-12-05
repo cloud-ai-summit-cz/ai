@@ -42,12 +42,23 @@ class ChecklistItem(BaseModel):
     status: Literal["pending", "in_progress", "completed", "skipped"]
     notes: str | None = None
 
+class QuestionPriority(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    BLOCKING = "blocking"
+
 class Question(BaseModel):
-    id: str
-    question: str
-    context: str
-    priority: Literal["high", "medium", "low"]
-    answer: str | None = None
+    """Question for human-in-the-loop interaction."""
+    id: str = Field(description="Unique question ID (e.g., 'q_abc123')")
+    question: str = Field(description="The question text")
+    context: str = Field(description="Why this information is needed")
+    priority: QuestionPriority = Field(description="Question priority level")
+    asked_by: str = Field(description="Agent that asked the question")
+    asked_at: datetime = Field(description="When the question was asked")
+    answered: bool = Field(default=False, description="Whether user has answered")
+    answer: str | None = Field(default=None, description="User's answer")
+    answered_at: datetime | None = Field(default=None, description="When answered")
 ```
 
 **Example Payload**:
