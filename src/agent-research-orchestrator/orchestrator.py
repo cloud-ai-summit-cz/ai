@@ -6,7 +6,7 @@ Microsoft Agent Framework (MAF).
 
 Architecture: Dynamic Agent-as-Tool Pattern
 - Main orchestrator agent has full autonomy to decide which agents to call
-- Specialist agents (market-analyst, competitor-analyst, synthesizer) are
+- Specialist agents (market-analyst via A2A, others via Foundry) are
   exposed as tools that the orchestrator can invoke dynamically
 - The orchestrator can call agents multiple times, in any order, based on
   its reasoning about the research query
@@ -18,6 +18,11 @@ Session Isolation (SECURITY):
 - AI agents CANNOT set or modify session_id - it's injected by the orchestrator
 - This prevents cross-session data access
 
+A2A Integration:
+- Market-analyst is called via A2A protocol (agent runs MCP tools internally)
+- Session ID is passed via X-Session-ID header to enable session-scoped MCP access
+- Tool call events from A2A agents are NOT visible to orchestrator (see SSE options)
+
 Uses middleware to intercept tool calls for real-time SSE streaming.
 """
 
@@ -28,8 +33,11 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
 
+import httpx
+from a2a.types import AgentCard
 from jinja2 import Template
 from agent_framework import ChatAgent, FunctionInvocationContext, MCPStreamableHTTPTool
+from agent_framework.a2a import A2AAgent
 from agent_framework_azure_ai import AzureAIAgentClient
 from azure.identity.aio import DefaultAzureCredential
 
@@ -592,9 +600,11 @@ class AgentOrchestrator:
     - This prevents cross-session data access
 
     Specialist agents:
-    1. market-analyst: Analyzes market opportunities and trends
-    2. competitor-analyst: Analyzes competitive landscape
-    3. synthesizer: Combines insights into actionable recommendations
+    1. market-analyst: Analyzes market opportunities and trends (via A2A)
+    2. competitor-analyst: Analyzes competitive landscape (DISABLED - future A2A)
+    3. location-scout: Evaluates locations and properties (DISABLED - future A2A)
+    4. finance-analyst: Analyzes financial viability (DISABLED - future A2A)
+    5. synthesizer: Combines insights into recommendations (DISABLED - future A2A)
 
     MCP Scratchpad tools:
     - write_section, read_section, list_sections: Document collaboration
@@ -613,6 +623,8 @@ class AgentOrchestrator:
         self._tool_call_log: list[dict[str, Any]] = []
         self._mcp_scratchpad: MCPStreamableHTTPTool | None = None
         self._session_mcp_tools: dict[str, MCPStreamableHTTPTool] = {}  # Session-scoped MCP tools
+        # A2A HTTP clients (session-scoped for header injection)
+        self._a2a_http_clients: dict[str, httpx.AsyncClient] = {}
 
     async def __aenter__(self) -> "AgentOrchestrator":
         """Async context manager entry."""
@@ -1375,6 +1387,82 @@ class AgentOrchestrator:
             async_credential=credential,
         )
 
+    async def _create_a2a_market_analyst(
+        self,
+        session_id: str,
+    ) -> tuple[A2AAgent, httpx.AsyncClient]:
+        """Create an A2A agent client for market-analyst with session headers.
+        
+        The market-analyst agent runs as a separate A2A service with its own
+        MCP tools (demographics, scratchpad). The session_id is passed via
+        X-Session-ID header to enable session-scoped MCP Scratchpad access.
+        
+        NOTE: Tool calls made BY the market-analyst (to MCP servers) are NOT
+        visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
+        options on propagating tool events for SSE streaming.
+        
+        Args:
+            session_id: Session ID for MCP Scratchpad isolation.
+            
+        Returns:
+            Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
+        """
+        if not self.settings.a2a_market_analyst_enabled:
+            raise RuntimeError(
+                "A2A Market Analyst not configured. Set A2A_MARKET_ANALYST_URL and A2A_MARKET_ANALYST_API_KEY."
+            )
+        
+        # Create HTTP client with session-scoped headers
+        # Extended timeout for LLM + MCP operations (can take several minutes)
+        headers = {
+            "X-Session-ID": session_id,
+            "X-Caller-Agent": "research-orchestrator",
+        }
+        if self.settings.a2a_market_analyst_api_key:
+            headers["Authorization"] = f"Bearer {self.settings.a2a_market_analyst_api_key}"
+        
+        http_client = httpx.AsyncClient(
+            timeout=300.0,  # 5 minutes for complex analysis
+            headers=headers,
+        )
+        
+        # Fetch the Agent Card to discover capabilities
+        agent_card_url = f"{self.settings.a2a_market_analyst_url}/agent-card.json"
+        logger.info(f"Fetching A2A Agent Card from {agent_card_url}")
+        
+        try:
+            response = await http_client.get(agent_card_url)
+            response.raise_for_status()
+            agent_card = AgentCard.model_validate(response.json())
+            
+            logger.info(f"A2A Agent Card: {agent_card.name} v{agent_card.version}")
+            logger.info(f"A2A Agent URL: {agent_card.url}")
+            if agent_card.skills:
+                logger.info(f"A2A Agent Skills: {[s.name for s in agent_card.skills]}")
+        except httpx.HTTPStatusError as e:
+            await http_client.aclose()
+            raise RuntimeError(
+                f"Failed to fetch A2A Agent Card: HTTP {e.response.status_code} - {e.response.text[:200]}"
+            )
+        except Exception as e:
+            await http_client.aclose()
+            raise RuntimeError(f"Failed to fetch A2A Agent Card: {e}")
+        
+        # Create A2A agent using the URL from the agent card
+        agent_url = agent_card.url.rstrip("/") if agent_card.url else self.settings.a2a_market_analyst_url
+        
+        agent = A2AAgent(
+            name=agent_card.name,
+            description=agent_card.description,
+            agent_card=agent_card,
+            url=agent_url,
+            http_client=http_client,
+        )
+        
+        logger.info(f"Created A2A market-analyst agent (session={session_id[:8]}...)")
+        
+        return agent, http_client
+
     # === Session Management ===
 
     def create_session(
@@ -1471,6 +1559,8 @@ class AgentOrchestrator:
         # Track clients for cleanup - initialized before try block
         agents_to_cleanup: list[ChatAgent] = []
         clients_to_cleanup: list[AzureAIAgentClient] = []
+        # Track A2A HTTP clients for cleanup
+        a2a_clients_to_cleanup: list[httpx.AsyncClient] = []
         # Track MCP tools created for agents (for cleanup)
         agent_mcp_tools: list[MCPStreamableHTTPTool] = []
 
@@ -1481,64 +1571,74 @@ class AgentOrchestrator:
                 session_id, caller_agent="research-orchestrator"
             )
             
-            # Create MCP tools for each specialist agent
-            # ADR-006: Each agent gets scratchpad + their role-specific MCP tools
-            market_tools = await self._create_mcp_tools_for_agent("market-analyst", session_id)
-            agent_mcp_tools.extend([t for t in market_tools if t.name != f"scratchpad-{session_id[:8]}"])
+            # === A2A Agent: Market Analyst ===
+            # Market-analyst runs as A2A service with its own MCP tools (demographics, scratchpad)
+            # Session ID passed via X-Session-ID header for session-scoped MCP access
+            market_a2a_agent, market_http_client = await self._create_a2a_market_analyst(session_id)
+            a2a_clients_to_cleanup.append(market_http_client)
             
-            competitor_tools = await self._create_mcp_tools_for_agent("competitor-analyst", session_id)
-            agent_mcp_tools.extend([t for t in competitor_tools if t.name != f"scratchpad-{session_id[:8]}"])
+            # NOTE: Other agents are commented out for now - will be migrated to A2A
+            # Create MCP tools for each specialist agent (DISABLED - agents now run MCP internally)
+            # market_tools = await self._create_mcp_tools_for_agent("market-analyst", session_id)
+            # agent_mcp_tools.extend([t for t in market_tools if t.name != f"scratchpad-{session_id[:8]}"])
             
-            location_tools = await self._create_mcp_tools_for_agent("location-scout", session_id)
-            agent_mcp_tools.extend([t for t in location_tools if t.name != f"scratchpad-{session_id[:8]}"])
+            # competitor_tools = await self._create_mcp_tools_for_agent("competitor-analyst", session_id)
+            # agent_mcp_tools.extend([t for t in competitor_tools if t.name != f"scratchpad-{session_id[:8]}"])
             
-            finance_tools = await self._create_mcp_tools_for_agent("finance-analyst", session_id)
-            agent_mcp_tools.extend([t for t in finance_tools if t.name != f"scratchpad-{session_id[:8]}"])
+            # location_tools = await self._create_mcp_tools_for_agent("location-scout", session_id)
+            # agent_mcp_tools.extend([t for t in location_tools if t.name != f"scratchpad-{session_id[:8]}"])
             
-            synthesizer_tools = await self._create_mcp_tools_for_agent("synthesizer", session_id)
+            # finance_tools = await self._create_mcp_tools_for_agent("finance-analyst", session_id)
+            # agent_mcp_tools.extend([t for t in finance_tools if t.name != f"scratchpad-{session_id[:8]}"])
+            
+            # synthesizer_tools = await self._create_mcp_tools_for_agent("synthesizer", session_id)
             # synthesizer only has scratchpad, no additional tools to track
             
-            # Create specialist agents with their MCP tools
-            # ADR-006: Tools injected here instead of at Foundry provisioning time
-            market_agent, market_client = self._create_foundry_agent(
-                agent_name=MARKET_ANALYST_AGENT_NAME,
-                description="Analyzes market opportunities, trends, customer segments, TAM/SAM/SOM, and market dynamics.",
-                tools=market_tools,
-            )
-            agents_to_cleanup.append(market_agent)
-            clients_to_cleanup.append(market_client)
+            # Create specialist agents with their MCP tools (DISABLED - using A2A)
+            # market_agent, market_client = self._create_foundry_agent(
+            #     agent_name=MARKET_ANALYST_AGENT_NAME,
+            #     description="Analyzes market opportunities, trends, customer segments, TAM/SAM/SOM, and market dynamics.",
+            #     tools=market_tools,
+            # )
+            # agents_to_cleanup.append(market_agent)
+            # clients_to_cleanup.append(market_client)
             
-            competitor_agent, competitor_client = self._create_foundry_agent(
-                agent_name=COMPETITOR_ANALYST_AGENT_NAME,
-                description="Analyzes competitive landscape, competitor strengths and weaknesses, market positioning, and competitive threats.",
-                tools=competitor_tools,
-            )
-            agents_to_cleanup.append(competitor_agent)
-            clients_to_cleanup.append(competitor_client)
+            # competitor_agent, competitor_client = self._create_foundry_agent(
+            #     agent_name=COMPETITOR_ANALYST_AGENT_NAME,
+            #     description="Analyzes competitive landscape, competitor strengths and weaknesses, market positioning, and competitive threats.",
+            #     tools=competitor_tools,
+            # )
+            # agents_to_cleanup.append(competitor_agent)
+            # clients_to_cleanup.append(competitor_client)
             
-            location_agent, location_client = self._create_foundry_agent(
-                agent_name=LOCATION_SCOUT_AGENT_NAME,
-                description="Evaluates specific locations, districts, commercial properties, regulations, permits, and site viability.",
-                tools=location_tools,
-            )
-            agents_to_cleanup.append(location_agent)
-            clients_to_cleanup.append(location_client)
+            # location_agent, location_client = self._create_foundry_agent(
+            #     agent_name=LOCATION_SCOUT_AGENT_NAME,
+            #     description="Evaluates specific locations, districts, commercial properties, regulations, permits, and site viability.",
+            #     tools=location_tools,
+            # )
+            # agents_to_cleanup.append(location_agent)
+            # clients_to_cleanup.append(location_client)
             
-            finance_agent, finance_client = self._create_foundry_agent(
-                agent_name=FINANCE_ANALYST_AGENT_NAME,
-                description="Analyzes financial viability: startup costs, operating costs, revenue projections, break-even, ROI, and investment returns.",
-                tools=finance_tools,
-            )
-            agents_to_cleanup.append(finance_agent)
-            clients_to_cleanup.append(finance_client)
+            # finance_agent, finance_client = self._create_foundry_agent(
+            #     agent_name=FINANCE_ANALYST_AGENT_NAME,
+            #     description="Analyzes financial viability: startup costs, operating costs, revenue projections, break-even, ROI, and investment returns.",
+            #     tools=finance_tools,
+            # )
+            # finance_agent, finance_client = self._create_foundry_agent(
+            #     agent_name=FINANCE_ANALYST_AGENT_NAME,
+            #     description="Analyzes financial viability: startup costs, operating costs, revenue projections, break-even, ROI, and investment returns.",
+            #     tools=finance_tools,
+            # )
+            # agents_to_cleanup.append(finance_agent)
+            # clients_to_cleanup.append(finance_client)
             
-            synthesizer_agent, synthesizer_client = self._create_foundry_agent(
-                agent_name=SYNTHESIZER_AGENT_NAME,
-                description="Synthesizes research findings into cohesive reports with actionable recommendations.",
-                tools=synthesizer_tools,
-            )
-            agents_to_cleanup.append(synthesizer_agent)
-            clients_to_cleanup.append(synthesizer_client)
+            # synthesizer_agent, synthesizer_client = self._create_foundry_agent(
+            #     agent_name=SYNTHESIZER_AGENT_NAME,
+            #     description="Synthesizes research findings into cohesive reports with actionable recommendations.",
+            #     tools=synthesizer_tools,
+            # )
+            # agents_to_cleanup.append(synthesizer_agent)
+            # clients_to_cleanup.append(synthesizer_client)
 
             # Create event queue early so we can pass it to subagent stream callbacks
             event_queue = ToolCallEventQueue()
@@ -1548,59 +1648,65 @@ class AgentOrchestrator:
                 event_queue, agent_call_count, session_id=session_id
             )
 
-            # Convert specialist agents to tools with stream callbacks for visibility
-            # The stream_callback captures tool calls made BY the subagent (e.g., MCP scratchpad)
-            market_tool = market_agent.as_tool(
+            # Convert A2A agent to tool
+            # NOTE: A2A agents run MCP tools internally - tool calls NOT visible here
+            # See SSE options documentation for approaches to propagate tool events
+            market_tool = market_a2a_agent.as_tool(
                 name="market_analysis",
-                description="Call this tool to analyze market opportunities, trends, customer segments, and market sizing for the research query.",
+                description="Call this tool to analyze market opportunities, trends, customer segments, and market sizing for the research query. The agent will use demographics data and shared scratchpad for collaboration.",
                 arg_name="query",
                 arg_description="The specific market analysis question or aspect to investigate",
-                stream_callback=create_subagent_stream_callback(event_queue, "market-analyst", session_id),
+                # NOTE: stream_callback doesn't work for A2A - tool events happen on remote agent
+                # stream_callback=create_subagent_stream_callback(event_queue, "market-analyst", session_id),
             )
-            competitor_tool = competitor_agent.as_tool(
-                name="competitor_analysis",
-                description="Call this tool to analyze competitive landscape, competitor strengths/weaknesses, and market positioning.",
-                arg_name="query",
-                arg_description="The specific competitor analysis question or aspect to investigate",
-                stream_callback=create_subagent_stream_callback(event_queue, "competitor-analyst", session_id),
-            )
-            location_tool = location_agent.as_tool(
-                name="location_scouting",
-                description="Call this tool to evaluate specific locations, districts, commercial properties, regulations, permits, and site viability for expansion.",
-                arg_name="query",
-                arg_description="The specific location analysis question or district/property to investigate",
-                stream_callback=create_subagent_stream_callback(event_queue, "location-scout", session_id),
-            )
-            finance_tool = finance_agent.as_tool(
-                name="finance_analysis",
-                description="Call this tool to analyze financial viability: startup costs, operating costs, revenue projections, break-even analysis, ROI, and investment returns.",
-                arg_name="query",
-                arg_description="The specific financial analysis question or scenario to evaluate",
-                stream_callback=create_subagent_stream_callback(event_queue, "finance-analyst", session_id),
-            )
-            synthesizer_tool = synthesizer_agent.as_tool(
-                name="synthesize_findings",
-                description="Call this tool AFTER gathering market, competitor, location, and finance insights to create a final synthesized report with recommendations.",
-                arg_name="context",
-                arg_description="All the gathered research findings and insights to synthesize into a final report",
-                stream_callback=create_subagent_stream_callback(event_queue, "synthesizer", session_id),
-            )
+            
+            # Other agent tools are commented out until migrated to A2A
+            # competitor_tool = competitor_agent.as_tool(
+            #     name="competitor_analysis",
+            #     description="Call this tool to analyze competitive landscape, competitor strengths/weaknesses, and market positioning.",
+            #     arg_name="query",
+            #     arg_description="The specific competitor analysis question or aspect to investigate",
+            #     stream_callback=create_subagent_stream_callback(event_queue, "competitor-analyst", session_id),
+            # )
+            # location_tool = location_agent.as_tool(
+            #     name="location_scouting",
+            #     description="Call this tool to evaluate specific locations, districts, commercial properties, regulations, permits, and site viability for expansion.",
+            #     arg_name="query",
+            #     arg_description="The specific location analysis question or district/property to investigate",
+            #     stream_callback=create_subagent_stream_callback(event_queue, "location-scout", session_id),
+            # )
+            # finance_tool = finance_agent.as_tool(
+            #     name="finance_analysis",
+            #     description="Call this tool to analyze financial viability: startup costs, operating costs, revenue projections, break-even analysis, ROI, and investment returns.",
+            #     arg_name="query",
+            #     arg_description="The specific financial analysis question or scenario to evaluate",
+            #     stream_callback=create_subagent_stream_callback(event_queue, "finance-analyst", session_id),
+            # )
+            # synthesizer_tool = synthesizer_agent.as_tool(
+            #     name="synthesize_findings",
+            #     description="Call this tool AFTER gathering market, competitor, location, and finance insights to create a final synthesized report with recommendations.",
+            #     arg_name="context",
+            #     arg_description="All the gathered research findings and insights to synthesize into a final report",
+            #     stream_callback=create_subagent_stream_callback(event_queue, "synthesizer", session_id),
+            # )
 
             yield SSEEvent(
                 event_type=SSEEventType.AGENT_STARTED,
                 session_id=session_id,
                 data={
                     "phase": "orchestration",
-                    "description": "Orchestrator starting dynamic research workflow",
-                    "available_tools": ["market_analysis", "competitor_analysis", "location_scouting", "finance_analysis", "synthesize_findings"],
+                    "description": "Orchestrator starting dynamic research workflow (market-analyst via A2A)",
+                    "available_tools": ["market_analysis"],  # Only market_analysis for now
+                    "a2a_agents": ["market-analyst"],  # Indicate which agents use A2A
                     "scratchpad_enabled": session_mcp_orchestrator is not None,
                     "scratchpad_tools": [f.name for f in session_mcp_orchestrator.functions] if session_mcp_orchestrator else [],
                     "session_isolation": True,  # Indicate session isolation is active
                 },
             )
 
-            # Build the tools list - agent tools + session-scoped MCP scratchpad
-            tools_list: list[Any] = [market_tool, competitor_tool, location_tool, finance_tool, synthesizer_tool]
+            # Build the tools list - only market_analysis for now (others disabled)
+            tools_list: list[Any] = [market_tool]
+            # tools_list: list[Any] = [market_tool, competitor_tool, location_tool, finance_tool, synthesizer_tool]
             
             # Add session-scoped MCP Scratchpad to orchestrator
             # SECURITY: Uses X-Session-ID header for isolation
@@ -2019,6 +2125,14 @@ class AgentOrchestrator:
             )
         
         finally:
+            # Clean up A2A HTTP clients first (before MCP tools they might depend on)
+            for http_client in a2a_clients_to_cleanup:
+                try:
+                    await http_client.aclose()
+                    logger.debug("Cleaned up A2A HTTP client")
+                except Exception as e:
+                    logger.debug(f"Error closing A2A HTTP client: {e}")
+            
             # Clean up agent-specific MCP tools (demographics, business-registry, etc.)
             # ADR-006: These are created per-workflow and must be cleaned up
             for mcp_tool in agent_mcp_tools:
@@ -2065,6 +2179,12 @@ class AgentOrchestrator:
             "foundry_endpoint": self.settings.azure_ai_foundry_endpoint,
             "model_deployment": self.settings.model_deployment_name,
             "orchestration_mode": "dynamic_agent_as_tool",
+            "a2a_agents": {
+                "market_analyst": {
+                    "enabled": self.settings.a2a_market_analyst_enabled,
+                    "url": self.settings.a2a_market_analyst_url if self.settings.a2a_market_analyst_enabled else None,
+                },
+            },
             "mcp_scratchpad": {
                 "enabled": self.settings.mcp_scratchpad_enabled,
                 "connected": self._mcp_scratchpad is not None,

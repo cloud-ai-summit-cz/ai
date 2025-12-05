@@ -108,6 +108,18 @@ class Settings(BaseSettings):
         description="API key for MCP Calculator authentication",
     )
 
+    # A2A Market Analyst Agent configuration
+    a2a_market_analyst_url: str = Field(
+        default="",
+        alias="A2A_MARKET_ANALYST_URL",
+        description="URL to the Market Analyst A2A agent endpoint (e.g., https://apim-xxx/market-analyst)",
+    )
+    a2a_market_analyst_api_key: str = Field(
+        default="",
+        alias="A2A_MARKET_ANALYST_API_KEY",
+        description="API key for Market Analyst A2A authentication",
+    )
+
     # Application Insights / Log Analytics configuration (ADR-005)
     log_analytics_workspace_id: str = Field(
         default="",
@@ -174,6 +186,11 @@ class Settings(BaseSettings):
     def mcp_calculator_enabled(self) -> bool:
         """Check if MCP Calculator is configured (ADR-006)."""
         return bool(self.mcp_calculator_url and self.mcp_calculator_api_key)
+
+    @property
+    def a2a_market_analyst_enabled(self) -> bool:
+        """Check if Market Analyst A2A agent is configured."""
+        return bool(self.a2a_market_analyst_url and self.a2a_market_analyst_api_key)
 
     @property
     def trace_polling_configured(self) -> bool:
