@@ -469,7 +469,7 @@ function renderWorkflowDiagram() {
             row.className = 'diagram-branch-row';
             row.appendChild(createConditionLabel(label));
 
-            const renderActions = [...(branchActions || []), ...postActions];
+            const renderActions = [...(branchActions || [])];
             renderActions.forEach((action, idx) => {
                 row.appendChild(createConnector());
                 row.appendChild(createNodeElement(action));
@@ -485,6 +485,23 @@ function renderWorkflowDiagram() {
 
         if (conditionAction && Array.isArray(conditionAction.elseActions)) {
             appendBranchRow('else', conditionAction.elseActions);
+        }
+
+        if (conditionAction && postActions.length) {
+            const postRow = document.createElement('div');
+            postRow.className = 'diagram-branch-row';
+
+            const postLabel = document.createElement('div');
+            postLabel.className = 'wf-condition-label then-label';
+            postLabel.innerHTML = '<span>Then</span>';
+            postRow.appendChild(postLabel);
+
+            postActions.forEach(action => {
+                postRow.appendChild(createConnector());
+                postRow.appendChild(createNodeElement(action));
+            });
+
+            container.appendChild(postRow);
         }
 
         if (!conditionAction) {
@@ -764,12 +781,14 @@ function handleEvent(event) {
         updateConsoleStatus('Completed');
         // Mark any remaining running actors as completed
         markAllActorsCompleted();
+        markDiagramNodes('completed');
     } else if (type === 'workflow_failed' || type === 'error') {
         workflowStatus.textContent = 'Failed';
         workflowStatus.className = 'status-badge failed';
         updateConsoleStatus('Failed');
         // Mark any remaining running actors as failed
         markAllActorsFailed();
+        markDiagramNodes('failed');
     }
     
     // Skip text_delta events (too noisy)
@@ -801,8 +820,8 @@ function handleEvent(event) {
         console.log('Adding to actor container:', actionId);
         addActorEvent(actionId, event);
     } else {
-        // Global event (workflow lifecycle, response events without action_id)
-        addGlobalEvent(event);
+        // Skip rendering events that are not scoped to an actor container
+        return;
     }
 }
 
@@ -826,6 +845,20 @@ function markAllActorsFailed() {
     });
 }
 
+// Mark any pending diagram nodes with a final status
+function markDiagramNodes(status) {
+    Object.values(diagramNodes).forEach(node => {
+        if (!node) return;
+        const isActive = node.classList.contains('active');
+        const isFinished = node.classList.contains('completed') || node.classList.contains('failed');
+        if (!isActive || isFinished) return;
+        const actionId = node.dataset.actionId;
+        if (actionId) {
+            updateDiagramNodeStatus(actionId, status);
+        }
+    });
+}
+
 // Create a new actor container
 function createActorContainer(actionId) {
     console.log('Creating actor container for:', actionId);
@@ -833,6 +866,19 @@ function createActorContainer(actionId) {
     // Filter out actors that start with "action-"
     if (actionId && actionId.startsWith('action-')) {
         console.log('Skipping actor display (filtered):', actionId);
+        return;
+    }
+
+    // Reuse existing container to preserve history across turns
+    if (actorContainers[actionId]) {
+        const container = actorContainers[actionId];
+        const statusEl = container.querySelector('.actor-status');
+        if (statusEl) {
+            statusEl.className = 'actor-status running';
+            statusEl.innerHTML = '<span class="spinner"></span>\n                Running';
+        }
+        container.classList.remove('completed');
+        setActorCollapsed(actionId, false);
         return;
     }
     
@@ -855,12 +901,23 @@ function createActorContainer(actionId) {
                 <span class="spinner"></span>
                 Running
             </div>
+            <button class="actor-toggle" type="button" aria-label="Toggle actor details" aria-expanded="true">
+                <span class="actor-toggle-icon">▾</span>
+            </button>
         </div>
         <div class="actor-events"></div>
     `;
     
     eventsContainer.appendChild(container);
     actorContainers[actionId] = container;
+
+    const toggleBtn = container.querySelector('.actor-toggle');
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleActorCollapse(actionId);
+        });
+    }
     
     console.log('Actor container created, total containers:', Object.keys(actorContainers).length);
     
@@ -868,10 +925,39 @@ function createActorContainer(actionId) {
     eventsContainer.scrollTop = eventsContainer.scrollHeight;
 }
 
+function toggleActorCollapse(actionId) {
+    const container = actorContainers[actionId];
+    if (!container) return;
+    const collapsed = container.classList.contains('collapsed');
+    setActorCollapsed(actionId, !collapsed);
+}
+
+function setActorCollapsed(actionId, collapsed) {
+    const container = actorContainers[actionId];
+    if (!container) return;
+    container.classList.toggle('collapsed', collapsed);
+    const eventsDiv = container.querySelector('.actor-events');
+    if (eventsDiv) {
+        eventsDiv.style.display = collapsed ? 'none' : 'flex';
+    }
+    const icon = container.querySelector('.actor-toggle-icon');
+    const toggleBtn = container.querySelector('.actor-toggle');
+    if (toggleBtn) {
+        toggleBtn.setAttribute('aria-expanded', (!collapsed).toString());
+    }
+    if (icon) {
+        icon.textContent = collapsed ? '▸' : '▾';
+    }
+}
+
 // Add event to actor container
 function addActorEvent(actionId, event) {
     const container = actorContainers[actionId];
     if (!container) return;
+
+    if (container.classList.contains('collapsed') && !container.classList.contains('completed')) {
+        setActorCollapsed(actionId, false);
+    }
     
     const eventsDiv = container.querySelector('.actor-events');
     const { type, data, timestamp } = event;
@@ -907,6 +993,7 @@ function completeActorContainer(actionId, status) {
     statusEl.className = `actor-status ${status === 'completed' ? 'completed' : 'failed'}`;
     statusEl.innerHTML = status === 'completed' ? '✓ Done' : '✗ Failed';
     
+    setActorCollapsed(actionId, true);
     container.classList.add('completed');
 }
 
@@ -1098,14 +1185,10 @@ async function handleQuestionResponse(value) {
     // Add separator for the response
     addFollowupSeparator(`Response: ${value}`);
     
-    // Reset only text accumulator and actorContainers (keep totalAgentCount)
+    // Reset text accumulator for this turn; keep previous actor state visible
     finalText = '';
-    actorContainers = {};
     workflowStatus.textContent = 'Running';
     workflowStatus.className = 'status-badge running';
-    
-    // Re-render diagram and reset node states
-    renderWorkflowDiagram();
     
     // Prepare form data with conversation_id
     const formData = new FormData();
@@ -1186,14 +1269,10 @@ async function sendFollowup() {
     // Add separator for follow-up (keep previous events)
     addFollowupSeparator(message);
     
-    // Reset only text accumulator and actorContainers (keep totalAgentCount)
+    // Reset text accumulator for this turn; keep previous actor state visible
     finalText = '';
-    actorContainers = {};
     workflowStatus.textContent = 'Running';
     workflowStatus.className = 'status-badge running';
-    
-    // Re-render diagram and reset node states
-    renderWorkflowDiagram();
     
     // Prepare form data with conversation_id
     const formData = new FormData();
