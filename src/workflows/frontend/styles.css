@@ -1247,6 +1247,122 @@ body {
     height: 16px;
 }
 
+/* Question Buttons Container */
+.question-buttons-container {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-bottom: 1rem;
+}
+
+.question-buttons-container.hidden {
+    display: none;
+}
+
+.question-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.875rem 2rem;
+    border: 2px solid transparent;
+    border-radius: 12px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-width: 120px;
+}
+
+.question-btn.yes-btn {
+    background-color: var(--success);
+    color: white;
+    border-color: var(--success);
+}
+
+.question-btn.yes-btn:hover:not(:disabled) {
+    background-color: #0d9668;
+    border-color: #0d9668;
+    transform: translateY(-1px);
+}
+
+.question-btn.no-btn {
+    background-color: transparent;
+    color: var(--error);
+    border-color: var(--error);
+}
+
+.question-btn.no-btn:hover:not(:disabled) {
+    background-color: var(--error);
+    color: white;
+    transform: translateY(-1px);
+}
+
+.question-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* Final Result Container */
+.final-result-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 2rem;
+    margin-bottom: 1rem;
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(16, 163, 127, 0.05) 100%);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 16px;
+    text-align: center;
+}
+
+.final-result-container.hidden {
+    display: none;
+}
+
+.final-result-icon {
+    font-size: 3rem;
+    animation: bounceIn 0.5s ease-out;
+}
+
+@keyframes bounceIn {
+    0% {
+        transform: scale(0);
+        opacity: 0;
+    }
+    50% {
+        transform: scale(1.2);
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.final-result-text {
+    font-size: 1.125rem;
+    color: var(--text-primary);
+    max-width: 500px;
+    line-height: 1.6;
+}
+
+.final-result-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background-color: var(--success);
+    color: white;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-radius: 20px;
+}
+
 /* Conversation Badge */
 .conversation-badge {
     font-size: 0.6875rem;

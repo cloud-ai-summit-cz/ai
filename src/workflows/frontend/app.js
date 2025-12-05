@@ -12,10 +12,6 @@ trigger:
   kind: OnConversationStart
   id: trigger_wf
   actions:
-    - kind: SetVariable
-      id: action-1764883765010
-      variable: Local.InvoiceOK
-      value: =false
     - kind: InvokeAzureAgent
       id: invoice-validation-agent
       agent:
@@ -29,78 +25,102 @@ trigger:
       conditions:
         - condition: =!IsBlank(Find("<INV_OK>", Last(Local.LastMessage).Text))
           actions:
-            - kind: SetVariable
-              id: action-1764883750258
-              variable: Local.InvoiceOK
-              value: =true
-            - kind: InvokeAzureAgent
-              id: invoice-process-summary-agent
-              agent:
-                name: invoice-process-summary-agent
-              input:
-                messages: =System.LastMessage
-              output:
-                autoSend: true
+            - kind: Question
+              variable: Local.UserApproval
+              id: action-1764937921178
+              entity: StringPrebuiltEntity
+              skipQuestionMode: SkipOnFirstExecutionIfVariableHasValue
+              prompt: <QUESTION>Validation OK - Approve?
+            - kind: SendActivity
+              activity: <FINAL> Success!
+              id: action-1764942712798
           id: if-action-1764883723763-0
       id: action-1764883723763
       elseActions:
         - kind: SendActivity
-          activity: Vypada to spatne...
-          id: action-1764884732691
-        - kind: Question
-          variable: Local.InvoiceKOUser
-          id: action-1764885497445
-          entity: StringPrebuiltEntity
-          skipQuestionMode: SkipOnFirstExecutionIfVariableHasValue
-          prompt: OK?
-        - kind: SetVariable
-          id: action-1764883918865
-          variable: Local.InvoiceOK
-          value: =false
-        - kind: SendActivity
-          activity: The Invoice is wrong! {Local.InvoiceKOUser}
+          activity: The Invoice is wrong! Sending back...
           id: action-1764884001355
+    - kind: EndConversation
+      id: action-1764936956468
 id: ""
 name: wf2
 description: ""
 
 `;
 const WORKFLOW_PROMPT_DEMO_USE = true
-const WORKFLOW_PROMPT_DEMO = `
-    {
-  "po_number": "534",
-  "invoice_number": "100",
-  "invoice_date": "2025-10-15",
-  "due_date": "",
-  "currency": "EUR",
-  "supplier": {
-    "name": "Zava Specialty Coffee",
-    "address": "333 3rd Ave, Seattle, WA 12345",
-    "email": "",
-    "phone": "123-456-7890"
-  },
-  "bill_to": {
-    "name": "Tomas Kubica",
-    "address": "Karlinska 1918, Karlin, Czechia",
-    "department": "CoPilot Inc"
-  },
-  "line_items": [
-    {
-      "description": "Zava Ethiopia for Espresso",
-      "quantity": 80,
-      "unit_price": 20,
-      "uom": "Kg",
-      "total": 2000
+
+// Demo invoice data - keyed by filename (without extension)
+// Two sample invoices: "invoice1.json" and "invoice2.json"
+// Used for demo/testing purposes
+const WORKFLOW_INVOICES_DEMO = {
+    "invoice1": {
+        "po_number": "534",
+        "invoice_number": "100",
+        "invoice_date": "2025-10-15",
+        "due_date": "",
+        "currency": "EUR",
+        "supplier": {
+            "name": "Zava Specialty Coffee",
+            "address": "333 3rd Ave, Seattle, WA 12345",
+            "email": "",
+            "phone": "123-456-7890"
+        },
+        "bill_to": {
+            "name": "Tomas Kubica",
+            "address": "Karlinska 1918, Karlin, Czechia",
+            "department": "CoPilot Inc"
+        },
+        "line_items": [
+            {
+                "description": "Zava Ethiopia for Espresso",
+                "quantity": 80,
+                "unit_price": 20,
+                "uom": "Kg",
+                "total": 2000
+            }
+        ],
+        "subtotal": 2000,
+        "tax": 300,
+        "shipping": 0,
+        "total": 2300,
+        "confidence": 0.88,
+        "notes": "Handwritten PO (534) detected. Invoice # read as '100'. Invoice date read as 10/15/2025 and converted to ISO. Supplier address and purchaser/shipping address OCRed as 'Karlinska 1918, Karlin, Czechia' (minor uncertainty). Totals (subtotal 2000 + tax 300 + shipping 0 = total 2300) match the invoice."
+    },
+    "invoice2": {
+        "po_number": "888",
+        "invoice_number": "00012",
+        "invoice_date": "2205-10-01",
+        "due_date": "2205-10-16",
+        "currency": "USD",
+        "supplier": {
+            "name": "Contoso Fin Consulting",
+            "address": "450 East 78th Ave, Denver, CO 12345",
+            "email": "",
+            "phone": "(123) 456-7890"
+        },
+        "bill_to": {
+            "name": "Tomas Kubica",
+            "address": "Karlinska 1918, Karlin, Czechia",
+            "department": ""
+        },
+        "line_items": [
+            {
+                "description": "Consultation services implementation of AI powered grinder",
+                "quantity": 3,
+                "unit_price": 375,
+                "uom": "hours",
+                "total": 1125
+            }
+        ],
+        "subtotal": 1125,
+        "tax": 0,
+        "shipping": 0,
+        "total": 1125,
+        "confidence": 0.95,
+        "notes": "Total matches the sum of line items.",
+        "status": "pending"
     }
-  ],
-  "subtotal": 2000,
-  "tax": 300,
-  "shipping": 0,
-  "total": 2300,
-  "confidence": 0.88,
-  "notes": "Handwritten PO (534) detected. Invoice # read as '100'. Invoice date read as 10/15/2025 and converted to ISO. Supplier address and purchaser/shipping address OCRed as 'Karlinska 1918, Karlin, Czechia' (minor uncertainty). Totals (subtotal 2000 + tax 300 + shipping 0 = total 2300) match the invoice."
-}
-    `;
+};
 
 // DOM Elements
 const inputSection = document.getElementById('input-section');
@@ -127,6 +147,7 @@ const consoleStatus = document.getElementById('console-status');
 
 // State
 let selectedFile = null;
+let selectedInvoiceData = null; // Invoice data selected based on filename
 let finalText = '';
 let actorContainers = {}; // Map action_id -> container element
 let currentConversationId = null; // Track conversation ID for follow-ups
@@ -165,76 +186,152 @@ const nodeTypes = {
     'Question': { icon: '❓', class: 'node-question', label: 'Ask a question' },
 };
 
-// Simple YAML parser for the workflow structure
-// For reliability, we'll use a pre-parsed structure that matches WORKFLOW_YAML
-function getWorkflowStructure() {
-    return {
-        name: 'wf2',
-        trigger: {
-            kind: 'OnConversationStart',
-            id: 'trigger_wf',
-            actions: [
-                {
-                    kind: 'SetVariable',
-                    id: 'action-1764883765010',
-                    variable: 'Local.InvoiceOK',
-                    value: '=false'
-                },
-                {
-                    kind: 'InvokeAzureAgent',
-                    id: 'invoice-validation-agent',
-                    agentName: 'invoice-validation-agent'
-                },
-                {
-                    kind: 'ConditionGroup',
-                    id: 'action-1764883723763',
-                    condition: '=!IsBlank(Find("<INV_OK>", Last(Local.LastMessage).Text))',
-                    conditions: [
-                        {
-                            id: 'if-action-1764883723763-0',
-                            condition: '=!IsBlank(Find("<INV_OK>", Last(Local.LastMessage).Text))',
-                            actions: [
-                                {
-                                    kind: 'SetVariable',
-                                    id: 'action-1764883750258',
-                                    variable: 'Local.InvoiceOK',
-                                    value: '=true'
-                                },
-                                {
-                                    kind: 'InvokeAzureAgent',
-                                    id: 'invoice-process-summary-agent',
-                                    agentName: 'invoice-process-summary-agent'
-                                }
-                            ]
-                        }
-                    ],
-                    elseActions: [
-                        {
-                            kind: 'SendActivity',
-                            id: 'action-1764884732691',
-                            activity: 'Vypada to spatne...'
-                        },
-                        {
-                            kind: 'Question',
-                            id: 'action-1764885497445',
-                            prompt: 'OK?'
-                        },
-                        {
-                            kind: 'SetVariable',
-                            id: 'action-1764883918865',
-                            variable: 'Local.InvoiceOK',
-                            value: '=false'
-                        },
-                        {
-                            kind: 'SendActivity',
-                            id: 'action-1764884001355',
-                            activity: 'The Invoice is wrong!'
-                        }
-                    ]
+// Simple YAML parser for workflow structure
+// Parses the WORKFLOW_YAML string dynamically
+function parseSimpleYaml(yamlStr) {
+    const lines = yamlStr.split('\n');
+    const result = {};
+    const stack = [{ obj: result, indent: -1 }];
+    let currentArray = null;
+    let currentArrayIndent = -1;
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        
+        // Skip empty lines and comments
+        if (!line.trim() || line.trim().startsWith('#')) continue;
+        
+        const indent = line.search(/\S/);
+        const content = line.trim();
+        
+        // Handle array items
+        if (content.startsWith('- ')) {
+            const itemContent = content.slice(2).trim();
+            
+            // Find or create the current array context
+            while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
+                stack.pop();
+            }
+            
+            const parent = stack[stack.length - 1].obj;
+            const lastKey = stack[stack.length - 1].lastKey;
+            
+            if (lastKey && Array.isArray(parent[lastKey])) {
+                if (itemContent.includes(':')) {
+                    // Object in array
+                    const [key, ...valueParts] = itemContent.split(':');
+                    const value = valueParts.join(':').trim();
+                    const newObj = {};
+                    newObj[key.trim()] = value || {};
+                    parent[lastKey].push(newObj);
+                    stack.push({ obj: newObj, indent: indent, lastKey: key.trim() });
+                } else {
+                    // Simple value in array
+                    parent[lastKey].push(itemContent);
                 }
-            ]
+            }
+            continue;
         }
-    };
+        
+        // Handle key-value pairs
+        if (content.includes(':')) {
+            const colonIdx = content.indexOf(':');
+            const key = content.slice(0, colonIdx).trim();
+            const value = content.slice(colonIdx + 1).trim();
+            
+            // Pop stack to correct level
+            while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
+                stack.pop();
+            }
+            
+            const current = stack[stack.length - 1].obj;
+            
+            if (value === '' || value === '|') {
+                // Check next line to determine if array or object
+                const nextLine = lines[i + 1];
+                if (nextLine && nextLine.trim().startsWith('-')) {
+                    current[key] = [];
+                    stack[stack.length - 1].lastKey = key;
+                } else {
+                    current[key] = {};
+                    stack.push({ obj: current[key], indent: indent, lastKey: key });
+                }
+            } else {
+                // Simple value - clean up quotes and special chars
+                let cleanValue = value;
+                if (cleanValue.startsWith('"') && cleanValue.endsWith('"')) {
+                    cleanValue = cleanValue.slice(1, -1);
+                }
+                current[key] = cleanValue;
+            }
+        }
+    }
+    
+    return result;
+}
+
+// Parse workflow YAML and convert to structure for diagram rendering
+function getWorkflowStructure() {
+    try {
+        const parsed = parseSimpleYaml(WORKFLOW_YAML);
+        
+        // Transform parsed YAML to expected structure
+        const workflow = {
+            name: parsed.name || 'workflow',
+            trigger: {
+                kind: parsed.trigger?.kind || 'OnConversationStart',
+                id: parsed.trigger?.id || 'trigger',
+                actions: []
+            }
+        };
+        
+        // Helper to process actions recursively
+        function processActions(actionsArray) {
+            if (!Array.isArray(actionsArray)) return [];
+            
+            return actionsArray.map(actionObj => {
+                const action = { ...actionObj };
+                
+                // Extract agent name for InvokeAzureAgent
+                if (action.kind === 'InvokeAzureAgent' && action.agent) {
+                    action.agentName = action.agent.name || action.id;
+                }
+                
+                // Process nested conditions
+                if (action.kind === 'ConditionGroup' && action.conditions) {
+                    action.conditions = action.conditions.map(cond => ({
+                        ...cond,
+                        actions: processActions(cond.actions || [])
+                    }));
+                    if (action.elseActions) {
+                        action.elseActions = processActions(action.elseActions);
+                    }
+                }
+                
+                return action;
+            });
+        }
+        
+        // Process trigger actions
+        if (parsed.trigger?.actions) {
+            workflow.trigger.actions = processActions(parsed.trigger.actions);
+        }
+        
+        console.log('Parsed workflow structure:', workflow);
+        return workflow;
+        
+    } catch (error) {
+        console.error('Failed to parse WORKFLOW_YAML:', error);
+        // Return minimal fallback structure
+        return {
+            name: 'wf2',
+            trigger: {
+                kind: 'OnConversationStart',
+                id: 'trigger_wf',
+                actions: []
+            }
+        };
+    }
 }
 
 // Create a workflow node element
@@ -252,6 +349,8 @@ function createNodeElement(action, isStart = false) {
         label = 'Send message';
     } else if (action.kind === 'Question') {
         label = 'Ask a question';
+    } else if (action.kind === 'ConditionGroup') {
+        label = 'If/Else condition';
     }
     
     const node = document.createElement('div');
@@ -489,6 +588,17 @@ function handleFileSelect(event) {
     const file = event.target.files[0];
     if (file) {
         selectedFile = file;
+        
+        // Extract invoice key from filename (without extension)
+        const filenameWithoutExt = file.name.replace(/\.[^/.]+$/, "");
+        selectedInvoiceData = WORKFLOW_INVOICES_DEMO[filenameWithoutExt] || null;
+        
+        if (selectedInvoiceData) {
+            console.log(`Selected invoice data for: ${filenameWithoutExt}`, selectedInvoiceData);
+        } else {
+            console.warn(`No demo invoice data found for filename: ${filenameWithoutExt}`);
+        }
+        
         const reader = new FileReader();
         reader.onload = (e) => {
             previewImg.src = e.target.result;
@@ -502,6 +612,7 @@ function handleFileSelect(event) {
 // Remove selected image
 function removeImage() {
     selectedFile = null;
+    selectedInvoiceData = null;
     invoiceInput.value = '';
     previewImg.src = '';
     imagePreview.classList.add('hidden');
@@ -548,7 +659,16 @@ async function startWorkflow() {
     
     // Prepare form data
     const formData = new FormData();
-    formData.append('message', WORKFLOW_PROMPT_DEMO_USE ? WORKFLOW_PROMPT_DEMO : prompt);
+    
+    // Determine message: use selected invoice data if available, otherwise fall back to demo or prompt
+    let message;
+    if (selectedInvoiceData && WORKFLOW_PROMPT_DEMO_USE) {
+        message = JSON.stringify(selectedInvoiceData, null, 2);
+    } else {
+        message = prompt;
+    }
+    
+    formData.append('message', message);
     formData.append('workflow_name', WORKFLOW_NAME);
     formData.append('workflow_version', '1');
     if (selectedFile) {
@@ -875,17 +995,171 @@ function addFollowupSeparator(message) {
 // Show final result
 function showResult() {
     resultSection.classList.remove('hidden');
-    resultContent.textContent = finalText.trim() || 'No text output received.';
+    const text = finalText.trim() || 'No text output received.';
+    
+    // Get or create question buttons container
+    let questionBtnsContainer = document.getElementById('question-buttons');
+    const followupContainer = document.querySelector('.followup-container');
+    
+    // Get or create final result container
+    let finalResultContainer = document.getElementById('final-result-container');
+    if (!finalResultContainer) {
+        finalResultContainer = document.createElement('div');
+        finalResultContainer.id = 'final-result-container';
+        finalResultContainer.className = 'final-result-container hidden';
+        finalResultContainer.innerHTML = `
+            <div class="final-result-icon">✅</div>
+            <div class="final-result-text"></div>
+            <div class="final-result-badge">Workflow Complete</div>
+        `;
+        // Insert before the followup container
+        followupContainer.parentNode.insertBefore(finalResultContainer, followupContainer);
+    }
+    
+    if (!questionBtnsContainer) {
+        // Create the question buttons container (initially hidden)
+        questionBtnsContainer = document.createElement('div');
+        questionBtnsContainer.id = 'question-buttons';
+        questionBtnsContainer.className = 'question-buttons-container hidden';
+        questionBtnsContainer.innerHTML = `
+            <button class="question-btn yes-btn" data-value="yes">✓ Yes</button>
+            <button class="question-btn no-btn" data-value="no">✗ No</button>
+        `;
+        // Insert before the followup container
+        followupContainer.parentNode.insertBefore(questionBtnsContainer, followupContainer);
+        
+        // Add event listeners for the buttons
+        questionBtnsContainer.querySelectorAll('.question-btn').forEach(btn => {
+            btn.addEventListener('click', () => handleQuestionResponse(btn.dataset.value));
+        });
+    }
+    
+    // Check if the text starts with <FINAL> - end of workflow
+    if (text.startsWith('<FINAL>')) {
+        // Extract the final text (remove the tag)
+        const finalText = text.replace('<FINAL>', '').trim();
+        resultContent.textContent = '';
+        
+        // Update and show the final result container
+        finalResultContainer.querySelector('.final-result-text').textContent = finalText || 'Workflow completed successfully!';
+        finalResultContainer.classList.remove('hidden');
+        
+        // Hide question buttons and follow-up textarea
+        questionBtnsContainer.classList.add('hidden');
+        followupContainer.classList.add('hidden');
+    }
+    // Check if the text starts with <QUESTION>
+    else if (text.startsWith('<QUESTION>')) {
+        // Extract the question text (remove the tag)
+        const questionText = text.replace('<QUESTION>', '').trim();
+        resultContent.textContent = questionText || 'Please respond:';
+        
+        // Show question buttons, hide follow-up textarea and final container
+        questionBtnsContainer.classList.remove('hidden');
+        followupContainer.classList.add('hidden');
+        finalResultContainer.classList.add('hidden');
+    } else {
+        // Normal text - show textarea, hide question buttons and final container
+        resultContent.textContent = text;
+        questionBtnsContainer.classList.add('hidden');
+        followupContainer.classList.remove('hidden');
+        finalResultContainer.classList.add('hidden');
+        
+        // Clear and focus follow-up input
+        followupInput.value = '';
+        followupInput.focus();
+    }
     
     // Show conversation badge if we have a conversation ID
     if (currentConversationId) {
         conversationBadge.textContent = `Conversation: ${currentConversationId.slice(0, 12)}...`;
         conversationBadge.classList.remove('hidden');
     }
+}
+
+// Handle yes/no question response
+async function handleQuestionResponse(value) {
+    if (!currentConversationId) {
+        alert('No active conversation. Please start a new workflow.');
+        return;
+    }
     
-    // Clear and focus follow-up input
-    followupInput.value = '';
-    followupInput.focus();
+    // Disable buttons while processing
+    const questionBtnsContainer = document.getElementById('question-buttons');
+    const buttons = questionBtnsContainer.querySelectorAll('.question-btn');
+    buttons.forEach(btn => btn.disabled = true);
+    
+    // Switch to workflow view, keep result visible
+    workflowSection.classList.remove('hidden');
+    
+    // Add separator for the response
+    addFollowupSeparator(`Response: ${value}`);
+    
+    // Reset only text accumulator and actorContainers (keep totalAgentCount)
+    finalText = '';
+    actorContainers = {};
+    workflowStatus.textContent = 'Running';
+    workflowStatus.className = 'status-badge running';
+    
+    // Re-render diagram and reset node states
+    renderWorkflowDiagram();
+    
+    // Prepare form data with conversation_id
+    const formData = new FormData();
+    formData.append('message', value);
+    formData.append('workflow_name', WORKFLOW_NAME);
+    formData.append('workflow_version', '1');
+    formData.append('conversation_id', currentConversationId);
+    
+    try {
+        const response = await fetch(`${API_BASE_URL}/workflow/run`, {
+            method: 'POST',
+            body: formData,
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop() || '';
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const jsonStr = line.slice(6);
+                    try {
+                        const event = JSON.parse(jsonStr);
+                        handleEvent(event);
+                    } catch (e) {
+                        console.error('Failed to parse event:', e);
+                    }
+                }
+            }
+        }
+        
+        // Show updated result
+        showResult();
+    } catch (error) {
+        console.error('Question response error:', error);
+        addGlobalEvent({
+            type: 'error',
+            data: { error: error.message },
+        });
+        workflowStatus.textContent = 'Failed';
+        workflowStatus.className = 'status-badge failed';
+    } finally {
+        buttons.forEach(btn => btn.disabled = false);
+    }
 }
 
 // Send follow-up message

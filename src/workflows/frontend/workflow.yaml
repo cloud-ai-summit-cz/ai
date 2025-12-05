@@ -1,0 +1,42 @@
+kind: workflow
+trigger:
+  kind: OnConversationStart
+  id: trigger_wf
+  actions:
+    - kind: InvokeAzureAgent
+      id: invoice-validation-agent
+      agent:
+        name: invoice-validation-agent
+      input:
+        messages: =System.LastMessage
+      output:
+        autoSend: true
+        messages: Local.LastMessage
+    - kind: ConditionGroup
+      conditions:
+        - condition: =!IsBlank(Find("<INV_OK>", Last(Local.LastMessage).Text))
+          actions:
+            - kind: Question
+              variable: Local.UserApproval
+              id: action-1764937921178
+              entity: StringPrebuiltEntity
+              skipQuestionMode: SkipOnFirstExecutionIfVariableHasValue
+              prompt: <QUESTION>Validation OK - Approve?
+            - kind: SendActivity
+              activity: <FINAL> Success!
+              id: action-1764942712798
+          id: if-action-1764883723763-0
+      id: action-1764883723763
+      elseActions:
+        - kind: SendActivity
+          activity: The Invoice is wrong! Sending back...
+          id: action-1764884001355
+    - kind: EndConversation
+      id: action-1764936956468
+id: ""
+name: wf2
+description: ""
+
+# Sticky Notes
+# STICKY_NOTE: {"id":"sticky_1764936747649_i7h1rzwjp","text":"TRUE -> Validation succeeded\nFALSE -> Validation failed","width":254,"height":87,"x":825,"y":-122}
+# STICKY_NOTE: {"id":"sticky_1764936793862_h8o24uyyc","text":"Validation Agent\n- check PO exists\n- check PO against Invoice","width":256,"height":119,"x":214,"y":-50}
