@@ -37,9 +37,12 @@ trigger:
           id: if-action-1764883723763-0
       id: action-1764883723763
       elseActions:
-        - kind: SendActivity
-          activity: The Invoice is wrong! Sending back...
-          id: action-1764884001355
+        - kind: Question
+          variable: Local.UserApproval
+          id: action-1764937921111
+          entity: StringPrebuiltEntity
+          skipQuestionMode: SkipOnFirstExecutionIfVariableHasValue
+          prompt: <QUESTION>Validation Fail - send back?
         - kind: InvokeAzureAgent
           id: invoice-mailer-agent
           agent:
@@ -48,11 +51,15 @@ trigger:
             messages: =Local.LastMessage
           output:
             autoSend: true
+        - kind: SendActivity
+          activity: <FINAL> Invoice sent back to supplier.
+          id: action-1764963963215
     - kind: EndConversation
       id: action-1764936956468
 id: ""
 name: wf2
 description: ""
+
 `;
 const WORKFLOW_PROMPT_DEMO_USE = true
 
