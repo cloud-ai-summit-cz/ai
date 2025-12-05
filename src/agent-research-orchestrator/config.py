@@ -156,6 +156,18 @@ class Settings(BaseSettings):
         description="API key for Location Scout A2A authentication",
     )
 
+    # A2A Synthesizer Agent configuration
+    a2a_synthesizer_url: str = Field(
+        default="",
+        alias="A2A_SYNTHESIZER_URL",
+        description="URL to the Synthesizer A2A agent endpoint (e.g., https://apim-xxx/synthesizer)",
+    )
+    a2a_synthesizer_api_key: str = Field(
+        default="",
+        alias="A2A_SYNTHESIZER_API_KEY",
+        description="API key for Synthesizer A2A authentication",
+    )
+
     # Application Insights / Log Analytics configuration (ADR-005)
     log_analytics_workspace_id: str = Field(
         default="",
@@ -242,6 +254,12 @@ class Settings(BaseSettings):
     def a2a_location_scout_enabled(self) -> bool:
         """Check if Location Scout A2A agent is configured."""
         return bool(self.a2a_location_scout_url and self.a2a_location_scout_api_key)
+
+    @property
+    def a2a_synthesizer_enabled(self) -> bool:
+        """Check if Synthesizer A2A agent is configured."""
+        return bool(self.a2a_synthesizer_url and self.a2a_synthesizer_api_key)
+
     @property
     def trace_polling_configured(self) -> bool:
         """Check if App Insights trace polling is configured and enabled."""

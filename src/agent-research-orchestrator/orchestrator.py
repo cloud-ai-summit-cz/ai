@@ -1559,6 +1559,84 @@ class AgentOrchestrator:
         
         return agent, http_client
 
+    async def _create_a2a_synthesizer(
+        self,
+        session_id: str,
+    ) -> tuple[A2AAgent, httpx.AsyncClient]:
+        """Create an A2A agent client for synthesizer with session headers.
+        
+        The synthesizer agent runs as a separate A2A service with its own
+        MCP tools (scratchpad, calculator) for reading research findings from
+        the scratchpad and performing any final calculations needed for the
+        synthesized report. The session_id is passed via X-Session-ID header
+        to enable session-scoped MCP Scratchpad access.
+        
+        NOTE: Tool calls made BY the synthesizer (to MCP servers) are NOT
+        visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
+        options on propagating tool events for SSE streaming.
+        
+        Args:
+            session_id: Session ID for MCP Scratchpad isolation.
+            
+        Returns:
+            Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
+        """
+        if not self.settings.a2a_synthesizer_enabled:
+            raise RuntimeError(
+                "A2A Synthesizer not configured. Set A2A_SYNTHESIZER_URL and A2A_SYNTHESIZER_API_KEY."
+            )
+        
+        # Create HTTP client with session-scoped headers
+        # Extended timeout for LLM + MCP operations (can take several minutes)
+        headers = {
+            "X-Session-ID": session_id,
+            "X-Caller-Agent": "research-orchestrator",
+        }
+        if self.settings.a2a_synthesizer_api_key:
+            headers["Authorization"] = f"Bearer {self.settings.a2a_synthesizer_api_key}"
+        
+        http_client = httpx.AsyncClient(
+            timeout=300.0,  # 5 minutes for complex synthesis
+            headers=headers,
+        )
+        
+        # Fetch the Agent Card to discover capabilities
+        agent_card_url = f"{self.settings.a2a_synthesizer_url}/agent-card.json"
+        logger.info(f"Fetching A2A Agent Card from {agent_card_url}")
+        
+        try:
+            response = await http_client.get(agent_card_url)
+            response.raise_for_status()
+            agent_card = AgentCard.model_validate(response.json())
+            
+            logger.info(f"A2A Agent Card: {agent_card.name} v{agent_card.version}")
+            logger.info(f"A2A Agent URL: {agent_card.url}")
+            if agent_card.skills:
+                logger.info(f"A2A Agent Skills: {[s.name for s in agent_card.skills]}")
+        except httpx.HTTPStatusError as e:
+            await http_client.aclose()
+            raise RuntimeError(
+                f"Failed to fetch A2A Agent Card: HTTP {e.response.status_code} - {e.response.text[:200]}"
+            )
+        except Exception as e:
+            await http_client.aclose()
+            raise RuntimeError(f"Failed to fetch A2A Agent Card: {e}")
+        
+        # Create A2A agent using the URL from the agent card
+        agent_url = agent_card.url.rstrip("/") if agent_card.url else self.settings.a2a_synthesizer_url
+        
+        agent = A2AAgent(
+            name=agent_card.name,
+            description=agent_card.description,
+            agent_card=agent_card,
+            url=agent_url,
+            http_client=http_client,
+        )
+        
+        logger.info(f"Created A2A synthesizer agent (session={session_id[:8]}...)")
+        
+        return agent, http_client
+
     # === Session Management ===
 
     def create_session(
@@ -1689,6 +1767,17 @@ class AgentOrchestrator:
             location_a2a_agent, location_http_client = await self._create_a2a_location_scout(session_id)
             a2a_clients_to_cleanup.append(location_http_client)
 
+            # === A2A Agent: Synthesizer ===
+            # Synthesizer runs as A2A service with MCP tools (scratchpad, calculator)
+            # for reading research findings and creating final synthesized reports
+            synthesizer_a2a_agent: A2AAgent | None = None
+            synthesizer_http_client: httpx.AsyncClient | None = None
+            if self.settings.a2a_synthesizer_enabled:
+                synthesizer_a2a_agent, synthesizer_http_client = await self._create_a2a_synthesizer(session_id)
+                a2a_clients_to_cleanup.append(synthesizer_http_client)
+            else:
+                logger.warning("Synthesizer A2A agent not configured - synthesize_findings tool will not be available")
+
             # Create event queue early so we can pass it to subagent stream callbacks
             event_queue = ToolCallEventQueue()
             agent_call_count: dict[str, int] = {}
@@ -1742,23 +1831,34 @@ class AgentOrchestrator:
                 # stream_callback=create_subagent_stream_callback(event_queue, "location-scout", session_id),
             )
             
-            # Synthesizer agent is commented out until migrated to A2A
-            # synthesizer_tool = synthesizer_agent.as_tool(
-            #     name="synthesize_findings",
-            #     description="Call this tool AFTER gathering market, competitor, location, and finance insights to create a final synthesized report with recommendations.",
-            #     arg_name="context",
-            #     arg_description="All the gathered research findings and insights to synthesize into a final report",
-            #     stream_callback=create_subagent_stream_callback(event_queue, "synthesizer", session_id),
-            # )
+            # Convert A2A synthesizer agent to tool (if configured)
+            # NOTE: A2A agents run MCP tools internally - tool calls NOT visible here
+            synthesizer_tool = None
+            if synthesizer_a2a_agent is not None:
+                synthesizer_tool = synthesizer_a2a_agent.as_tool(
+                    name="synthesize_findings",
+                    description="Call this tool AFTER gathering market, competitor, location, and finance insights to create a final synthesized report with executive summary, key findings, risk assessment, strategic recommendations, and decision framework. The agent will read from the shared scratchpad and use calculator for any final calculations.",
+                    arg_name="context",
+                    arg_description="Summary of all gathered research findings and insights to synthesize into a comprehensive final report",
+                    # NOTE: stream_callback doesn't work for A2A - tool events happen on remote agent
+                    # stream_callback=create_subagent_stream_callback(event_queue, "synthesizer", session_id),
+                )
+
+            # Build the list of available tools and A2A agents
+            available_tools = ["market_analysis", "competitor_analysis", "finance_analysis", "location_scouting"]
+            a2a_agents = ["market-analyst", "competitor-analyst", "finance-analyst", "location-scout"]
+            if synthesizer_tool is not None:
+                available_tools.append("synthesize_findings")
+                a2a_agents.append("synthesizer")
 
             yield SSEEvent(
                 event_type=SSEEventType.AGENT_STARTED,
                 session_id=session_id,
                 data={
                     "phase": "orchestration",
-                    "description": "Orchestrator starting dynamic research workflow (market-analyst, competitor-analyst, finance-analyst, location-scout via A2A)",
-                    "available_tools": ["market_analysis", "competitor_analysis", "finance_analysis", "location_scouting"],
-                    "a2a_agents": ["market-analyst", "competitor-analyst", "finance-analyst", "location-scout"],
+                    "description": f"Orchestrator starting dynamic research workflow ({', '.join(a2a_agents)} via A2A)",
+                    "available_tools": available_tools,
+                    "a2a_agents": a2a_agents,
                     "scratchpad_enabled": session_mcp_scratchpad is not None,
                     "scratchpad_tools": [f.name for f in session_mcp_scratchpad.functions] if session_mcp_scratchpad else [],
                     "session_isolation": True,
@@ -1767,6 +1867,8 @@ class AgentOrchestrator:
 
             # Build the tools list
             tools_list: list[Any] = [market_tool, competitor_tool, finance_tool, location_tool]
+            if synthesizer_tool is not None:
+                tools_list.append(synthesizer_tool)
             
             # Add session-scoped MCP Scratchpad to orchestrator
             # SECURITY: Uses X-Session-ID header for isolation

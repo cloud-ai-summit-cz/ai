@@ -48,6 +48,9 @@ locals {
   # Agent Location Scout A2A image
   agent_location_scout_a2a_image = "${azurerm_container_registry.main.login_server}/agent-location-scout-a2a:latest"
 
+  # Agent Synthesizer A2A image
+  agent_synthesizer_a2a_image = "${azurerm_container_registry.main.login_server}/agent-synthesizer-a2a:latest"
+
   # ============================================================================
   # AI Foundry Endpoints (computed from Terraform-managed resources)
   # ============================================================================
