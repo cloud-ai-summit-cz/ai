@@ -3,14 +3,13 @@
   "invoice_validation_status": "<INV_FAIL>",
   "issues": [
     {
-      "code": "PO_NOT_FOUND",
+      "code": "PO_MISSING",
       "severity": "error",
-      "message": "PO 888 exists but is not yet approved (status: pending)",
+      "message": "No PO number provided in the invoice.",
       "field": "po_number"
     }
   ],
   "normalized_invoice": {
-    "po_number": "888",
     "invoice_number": "00012",
     "invoice_date": "2205-10-01",
     "due_date": "2205-10-16",
@@ -44,16 +43,16 @@
     "status": "pending"
   },
   "po_validation_result": {
-    "po_number": "888",
+    "po_number": "",
     "is_valid": false,
-    "tool_name": "MCP",
-    "notes": "PO 888 exists but is not yet approved (status: pending)"
+    "tool_name": "MCP PO Check",
+    "notes": "PO does not exist in the system."
   },
   "business_rules": [
     {
       "rule": "PO must be present and valid",
       "passed": false,
-      "details": "PO 888 exists but is not yet approved."
+      "details": "No PO number provided."
     }
   ]
 }
