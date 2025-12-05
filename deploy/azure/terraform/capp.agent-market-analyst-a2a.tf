@@ -8,7 +8,10 @@ resource "azapi_resource" "capp_agent_market_analyst_a2a" {
   parent_id = azurerm_resource_group.main.id
   tags      = local.common_tags
 
-  depends_on = [azurerm_role_assignment.acr_pull_container_apps]
+  depends_on = [
+    azurerm_role_assignment.acr_pull_container_apps,
+    azapi_resource.apim_mcp_demographics_api
+  ]
 
   identity {
     type         = "UserAssigned"
@@ -38,6 +41,10 @@ resource "azapi_resource" "capp_agent_market_analyst_a2a" {
           {
             name  = "appinsights-connection-string"
             value = azurerm_application_insights.main.connection_string
+          },
+          {
+            name  = "mcp-auth-token"
+            value = var.mcp_auth_token
           }
         ]
         registries = [
@@ -91,6 +98,15 @@ resource "azapi_resource" "capp_agent_market_analyst_a2a" {
               {
                 name  = "AZURE_CLIENT_ID"
                 value = azurerm_user_assigned_identity.container_apps.client_id
+              },
+              # MCP Demographics Configuration (via APIM)
+              {
+                name  = "MCP_DEMOGRAPHICS_URL"
+                value = "${azapi_resource.apim.output.properties.gatewayUrl}/demographics/mcp"
+              },
+              {
+                name      = "MCP_DEMOGRAPHICS_API_KEY"
+                secretRef = "mcp-auth-token"
               },
               # Application Insights
               {

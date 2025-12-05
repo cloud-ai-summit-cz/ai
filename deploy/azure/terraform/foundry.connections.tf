@@ -80,10 +80,16 @@ resource "azapi_resource" "mcp_connection_government_data" {
 }
 
 # ============================================================================
-# MCP Demographics Connection
+# MCP Demographics Connection (AI Gateway Managed via APIM)
 # ============================================================================
 # Tools: get_population_stats, get_income_distribution, get_age_distribution,
 #        get_consumer_spending, get_lifestyle_segments, get_commuter_patterns
+#
+# This connection routes through Azure API Management for AI Gateway governance.
+# Key differences from direct Container App connections:
+# - target: Points to APIM gateway URL instead of direct Container App
+# - ApiType: "Azure" indicates AI Gateway managed (shows in Foundry UI)
+# - Authentication flows through APIM subscription key
 
 resource "azapi_resource" "mcp_connection_demographics" {
   type      = "Microsoft.CognitiveServices/accounts/projects/connections@2025-04-01-preview"
@@ -94,7 +100,7 @@ resource "azapi_resource" "mcp_connection_demographics" {
     properties = {
       authType      = "CustomKeys"
       category      = "RemoteTool"
-      target        = "https://${azapi_resource.capp_mcp_demographics.output.properties.configuration.ingress.fqdn}/mcp"
+      target        = "${azapi_resource.apim.output.properties.gatewayUrl}/demographics/mcp"
       isSharedToAll = false
       credentials = {
         keys = {
@@ -102,7 +108,7 @@ resource "azapi_resource" "mcp_connection_demographics" {
         }
       }
       metadata = {
-        ApiType     = "MCP"
+        type        = "catalog_MCP"
         ServiceName = "demographics"
       }
     }
@@ -110,7 +116,7 @@ resource "azapi_resource" "mcp_connection_demographics" {
 
   depends_on = [
     azapi_resource.ai_foundry_project_capability_host,
-    azapi_resource.capp_mcp_demographics
+    azapi_resource.apim_mcp_demographics_api
   ]
 }
 
