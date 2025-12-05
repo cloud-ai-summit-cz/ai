@@ -89,23 +89,37 @@ INVOICE_EXTRACTION_SCHEMA: dict[str, object] = {
 VALIDATION_SCHEMA: dict[str, object] = {
     "type": "object",
     "properties": {
-        "is_ready_for_posting": {"type": "boolean"},
+        "is_ready_for_posting": {
+            "type": "boolean",
+            "description": "True only if PO is present AND validated successfully",
+        },
+        "invoice_validation_status": {
+            "type": "string",
+            "enum": ["<INV_OK>", "<INV_FAIL>"],
+            "description": "<INV_OK> if is_ready_for_posting is true, <INV_FAIL> otherwise",
+        },
         "issues": {
             "type": "array",
+            "description": "Validation issues found (PO_MISSING or PO_NOT_FOUND)",
             "items": {
                 "type": "object",
                 "properties": {
-                    "code": {"type": "string"},
-                    "severity": {"type": "string", "enum": ["info", "warning", "error"]},
+                    "code": {
+                        "type": "string",
+                        "enum": ["PO_MISSING", "PO_NOT_FOUND"],
+                        "description": "PO_MISSING if no PO provided, PO_NOT_FOUND if PO doesn't exist",
+                    },
+                    "severity": {"type": "string", "enum": ["error"]},
                     "message": {"type": "string"},
-                    "field": {"type": "string"},
+                    "field": {"type": "string", "enum": ["po_number"]},
                 },
-                "required": ["code", "severity", "message"],
+                "required": ["code", "severity", "message", "field"],
             },
         },
         "normalized_invoice": INVOICE_EXTRACTION_SCHEMA,
         "po_validation_result": {
             "type": "object",
+            "description": "Result of PO validation via MCP tool",
             "properties": {
                 "po_number": {"type": "string"},
                 "is_valid": {"type": "boolean"},
@@ -116,10 +130,14 @@ VALIDATION_SCHEMA: dict[str, object] = {
         },
         "business_rules": {
             "type": "array",
+            "description": "PO validation rule check",
             "items": {
                 "type": "object",
                 "properties": {
-                    "rule": {"type": "string"},
+                    "rule": {
+                        "type": "string",
+                        "description": "PO must be present and valid",
+                    },
                     "passed": {"type": "boolean"},
                     "details": {"type": "string"},
                 },
@@ -127,7 +145,7 @@ VALIDATION_SCHEMA: dict[str, object] = {
             },
         },
     },
-    "required": ["is_ready_for_posting", "issues", "normalized_invoice"],
+    "required": ["is_ready_for_posting", "invoice_validation_status", "issues", "normalized_invoice", "po_validation_result", "business_rules"],
 }
 
 
