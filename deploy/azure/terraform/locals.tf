@@ -45,6 +45,9 @@ locals {
   # Agent Finance Analyst A2A image
   agent_finance_analyst_a2a_image = "${azurerm_container_registry.main.login_server}/agent-finance-analyst-a2a:latest"
 
+  # Agent Location Scout A2A image
+  agent_location_scout_a2a_image = "${azurerm_container_registry.main.login_server}/agent-location-scout-a2a:latest"
+
   # ============================================================================
   # AI Foundry Endpoints (computed from Terraform-managed resources)
   # ============================================================================
