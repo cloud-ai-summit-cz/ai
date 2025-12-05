@@ -2,10 +2,13 @@
 
 This script connects to the Market Analyst agent via the A2A protocol
 and sends test queries to verify the agent is working correctly.
+
+Supports session ID for testing session-scoped MCP Scratchpad integration.
 """
 
 import asyncio
 import os
+import uuid
 
 import httpx
 from a2a.types import AgentCard
@@ -24,23 +27,30 @@ async def main():
         "http://localhost:8020/.well-known/agent-card.json"
     )
     a2a_api_key = os.getenv("A2A_API_KEY", "")
+    
+    # Generate or use provided session ID for MCP Scratchpad
+    session_id = os.getenv("SESSION_ID", str(uuid.uuid4()))
 
     print("=" * 70)
     print("Market Analyst A2A Agent Test Client")
     print("=" * 70)
     print(f"\nAgent Card URL: {agent_card_url}")
+    print(f"Session ID: {session_id}")
     if a2a_api_key:
         print("Using API key authentication")
     else:
         print("No API key configured (server may reject requests)")
 
-    # Set up headers for authentication
-    headers = {}
+    # Set up headers for authentication and session context
+    headers = {
+        "X-Session-ID": session_id,  # Enable session-scoped MCP Scratchpad
+    }
     if a2a_api_key:
         headers["Authorization"] = f"Bearer {a2a_api_key}"
 
-    # Initialize HTTP client
-    async with httpx.AsyncClient(timeout=120.0, headers=headers) as http_client:
+    # Initialize HTTP client with extended timeout for LLM operations
+    # Agent may make multiple LLM calls and MCP tool calls which can take several minutes
+    async with httpx.AsyncClient(timeout=300.0, headers=headers) as http_client:
         # Step 1: Fetch the Agent Card directly from the well-known URL
         print("\n[1] Fetching Agent Card...")
         try:

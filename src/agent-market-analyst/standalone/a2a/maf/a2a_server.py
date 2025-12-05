@@ -16,6 +16,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.apps import A2AStarletteApplication
+from a2a.server.apps.jsonrpc.jsonrpc_app import CallContextBuilder
+from a2a.server.context import ServerCallContext
 from a2a.server.events import EventQueue
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore, TaskUpdater
@@ -37,6 +39,42 @@ from agent import MarketAnalystAgent
 from config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Header name for session ID (matches MCP Scratchpad server expectation)
+SESSION_ID_HEADER = "X-Session-ID"
+
+
+class SessionContextBuilder(CallContextBuilder):
+    """Custom CallContextBuilder that extracts session context from HTTP headers.
+    
+    Extracts X-Session-ID from incoming A2A requests and stores it in
+    ServerCallContext.state for access by the executor. This enables
+    session-scoped MCP tool calls where the session ID flows from:
+    orchestrator -> A2A agent -> MCP server.
+    """
+
+    def build(self, request: Request) -> ServerCallContext:
+        """Build ServerCallContext from Starlette Request.
+        
+        Extracts X-Session-ID header if present and stores in context state.
+        
+        Args:
+            request: The incoming Starlette HTTP request.
+            
+        Returns:
+            ServerCallContext with session_id in state if header was present.
+        """
+        state = {}
+        
+        # Extract session ID from header
+        session_id = request.headers.get(SESSION_ID_HEADER)
+        if session_id:
+            state["session_id"] = session_id
+            logger.debug(f"Extracted session_id from header: {session_id}")
+        else:
+            logger.debug(f"No {SESSION_ID_HEADER} header found in request")
+        
+        return ServerCallContext(state=state)
 
 
 class APIKeyAuthMiddleware:
@@ -131,23 +169,43 @@ class MarketAnalystExecutor(AgentExecutor):
     This class bridges the A2A protocol with the underlying Microsoft Agent
     Framework agent, handling message processing, task management, and
     response generation.
+    
+    The executor creates per-request agent instances when a session_id is
+    provided in the request context (via X-Session-ID header). This enables
+    session-scoped MCP tool access for cross-agent collaboration.
     """
 
     def __init__(self) -> None:
         """Initialize the executor."""
         self._settings = get_settings()
-        self._agent: MarketAnalystAgent | None = None
+        # Shared agent for requests without session context
+        self._shared_agent: MarketAnalystAgent | None = None
 
-    async def _ensure_agent(self) -> MarketAnalystAgent:
-        """Ensure the agent is initialized.
+    async def _get_agent(self, session_id: str | None = None) -> MarketAnalystAgent:
+        """Get or create an agent instance.
+        
+        When session_id is provided, creates a new agent instance with
+        session-scoped MCP Scratchpad access. Otherwise, returns the
+        shared agent instance.
+
+        Args:
+            session_id: Optional session ID for session-scoped tools.
 
         Returns:
-            The initialized agent instance.
+            The appropriate agent instance.
         """
-        if self._agent is None:
-            self._agent = MarketAnalystAgent(self._settings)
-            await self._agent.initialize()
-        return self._agent
+        if session_id:
+            # Create per-request agent with session context
+            logger.info(f"Creating session-scoped agent for session: {session_id}")
+            agent = MarketAnalystAgent(self._settings, session_id=session_id)
+            await agent.initialize()
+            return agent
+        else:
+            # Use shared agent for non-session requests
+            if self._shared_agent is None:
+                self._shared_agent = MarketAnalystAgent(self._settings)
+                await self._shared_agent.initialize()
+            return self._shared_agent
 
     async def execute(
         self,
@@ -158,13 +216,25 @@ class MarketAnalystExecutor(AgentExecutor):
 
         This method processes incoming messages, runs them through the
         Market Analyst agent, and produces the appropriate A2A response.
+        
+        If X-Session-ID header was provided in the request, the agent
+        will have access to session-scoped MCP Scratchpad for collaboration.
 
         Args:
             context: The request context containing the message and task info.
             event_queue: Queue for sending events back to the client.
         """
+        session_scoped_agent: MarketAnalystAgent | None = None
         try:
-            agent = await self._ensure_agent()
+            # Extract session_id from context state (set by SessionContextBuilder)
+            session_id = context.call_context.state.get("session_id") if context.call_context else None
+            if session_id:
+                logger.info(f"Request has session context: {session_id}")
+            
+            agent = await self._get_agent(session_id)
+            # Track if we created a session-scoped agent that needs cleanup
+            if session_id:
+                session_scoped_agent = agent
 
             # Extract the text content from the message
             user_message = context.get_user_input()
@@ -205,6 +275,11 @@ class MarketAnalystExecutor(AgentExecutor):
         except Exception as e:
             logger.exception(f"Error executing agent: {e}")
             raise ServerError(error=UnsupportedOperationError(message=str(e)))
+        finally:
+            # Clean up session-scoped agent resources
+            if session_scoped_agent is not None:
+                await session_scoped_agent.close()
+                logger.debug("Session-scoped agent resources released")
 
     async def cancel(
         self,
@@ -339,9 +414,13 @@ def create_app(port: int) -> A2AStarletteApplication:
         task_store=InMemoryTaskStore(),
     )
 
+    # Use custom context builder to extract session ID from headers
+    context_builder = SessionContextBuilder()
+
     return A2AStarletteApplication(
         agent_card=agent_card,
         http_handler=request_handler,
+        context_builder=context_builder,
     )
 
 

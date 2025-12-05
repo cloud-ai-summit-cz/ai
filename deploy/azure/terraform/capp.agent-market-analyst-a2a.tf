@@ -10,7 +10,8 @@ resource "azapi_resource" "capp_agent_market_analyst_a2a" {
 
   depends_on = [
     azurerm_role_assignment.acr_pull_container_apps,
-    azapi_resource.apim_mcp_demographics_api
+    azapi_resource.apim_mcp_demographics_api,
+    azapi_resource.apim_mcp_scratchpad_api
   ]
 
   identity {
@@ -106,6 +107,15 @@ resource "azapi_resource" "capp_agent_market_analyst_a2a" {
               },
               {
                 name      = "MCP_DEMOGRAPHICS_API_KEY"
+                secretRef = "mcp-auth-token"
+              },
+              # MCP Scratchpad Configuration (via APIM) - for session-scoped collaboration
+              {
+                name  = "MCP_SCRATCHPAD_URL"
+                value = "${azapi_resource.apim.output.properties.gatewayUrl}/scratchpad/mcp"
+              },
+              {
+                name      = "MCP_SCRATCHPAD_API_KEY"
                 secretRef = "mcp-auth-token"
               },
               # Application Insights

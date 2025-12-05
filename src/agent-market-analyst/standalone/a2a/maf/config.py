@@ -31,8 +31,12 @@ class Settings(BaseSettings):
         return f"{endpoint}/openai/v1/"
 
     # MCP Demographics Configuration
-    mcp_demographics_url: str = "https://ca-mcp-demographics.yellowground-57e949f0.northcentralus.azurecontainerapps.io/mcp"
-    mcp_demographics_api_key: str = "Azure12345678"
+    mcp_demographics_url: str
+    mcp_demographics_api_key: str
+
+    # MCP Scratchpad Configuration (for inter-agent collaboration)
+    mcp_scratchpad_url: str
+    mcp_scratchpad_api_key: str
 
     # A2A Server Configuration
     a2a_server_host: str = "0.0.0.0"

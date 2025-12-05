@@ -22,18 +22,27 @@ class MarketAnalystAgent:
 
     This agent specializes in market analysis for the specialty coffee
     and hospitality industry, helping Cofilot evaluate expansion opportunities.
-    Uses MCP Demographics tool for real demographic data.
+    Uses MCP Demographics tool for real demographic data and MCP Scratchpad
+    for session-scoped collaboration with other agents.
     """
 
-    def __init__(self, settings: Optional[Settings] = None) -> None:
+    def __init__(
+        self,
+        settings: Optional[Settings] = None,
+        session_id: Optional[str] = None,
+    ) -> None:
         """Initialize the Market Analyst Agent.
 
         Args:
             settings: Configuration settings. If None, loads from environment.
+            session_id: Optional session ID for session-scoped MCP tools.
+                       When provided, enables collaboration via MCP Scratchpad.
         """
         self._settings = settings or Settings()
+        self._session_id = session_id
         self._agent: ChatAgent | None = None
-        self._mcp_tool: MCPStreamableHTTPTool | None = None
+        self._mcp_demographics: MCPStreamableHTTPTool | None = None
+        self._mcp_scratchpad: MCPStreamableHTTPTool | None = None
 
     @property
     def system_prompt(self) -> str:
@@ -49,11 +58,16 @@ class MarketAnalystAgent:
         logger.info("[INIT] Initializing Market Analyst Agent")
         logger.info(f"[INIT] Azure OpenAI Endpoint: {self._settings.azure_openai_endpoint}")
         logger.info(f"[INIT] Model: {self._settings.model_deployment_name}")
+        if self._session_id:
+            logger.info(f"[INIT] Session ID: {self._session_id}")
+        
+        # List to collect MCP tools
+        mcp_tools = []
         
         # Create MCP Demographics tool with authentication
         logger.info(f"[MCP INIT] Connecting to MCP Demographics server...")
         logger.info(f"[MCP INIT] URL: {self._settings.mcp_demographics_url}")
-        self._mcp_tool = MCPStreamableHTTPTool(
+        self._mcp_demographics = MCPStreamableHTTPTool(
             name="demographics",
             url=self._settings.mcp_demographics_url,
             description="Demographic and consumer behavior data for market analysis",
@@ -61,16 +75,52 @@ class MarketAnalystAgent:
         )
 
         # Connect to the MCP server
-        await self._mcp_tool.__aenter__()
+        await self._mcp_demographics.__aenter__()
         
         # Log available MCP tools
-        if self._mcp_tool.functions:
-            tool_names = [f.name for f in self._mcp_tool.functions]
-            logger.info(f"[MCP INIT] Connection successful! {len(tool_names)} tools available:")
+        if self._mcp_demographics.functions:
+            tool_names = [f.name for f in self._mcp_demographics.functions]
+            logger.info(f"[MCP INIT] Demographics connection successful! {len(tool_names)} tools available:")
             for name in tool_names:
                 logger.info(f"[MCP INIT]   - {name}")
         else:
-            logger.warning("[MCP INIT] Connected but no tools were loaded!")
+            logger.warning("[MCP INIT] Demographics connected but no tools were loaded!")
+        mcp_tools.append(self._mcp_demographics)
+        
+        # Create MCP Scratchpad tool with session scope (if session_id provided)
+        if self._session_id:
+            logger.info(f"[MCP INIT] Connecting to MCP Scratchpad server...")
+            logger.info(f"[MCP INIT] URL: {self._settings.mcp_scratchpad_url}")
+            logger.info(f"[MCP INIT] Session ID: {self._session_id}")
+            
+            # Headers for session-scoped access
+            scratchpad_headers = {
+                "Authorization": f"Bearer {self._settings.mcp_scratchpad_api_key}",
+                "X-Session-ID": self._session_id,
+                "X-Caller-Agent": "market-analyst",
+            }
+            
+            self._mcp_scratchpad = MCPStreamableHTTPTool(
+                name="scratchpad",
+                url=self._settings.mcp_scratchpad_url,
+                description="Shared scratchpad for session-scoped collaboration with other agents. Use to read findings from other agents and write your own analysis.",
+                headers=scratchpad_headers,
+            )
+            
+            # Connect to the MCP Scratchpad server
+            await self._mcp_scratchpad.__aenter__()
+            
+            # Log available tools
+            if self._mcp_scratchpad.functions:
+                tool_names = [f.name for f in self._mcp_scratchpad.functions]
+                logger.info(f"[MCP INIT] Scratchpad connection successful! {len(tool_names)} tools available:")
+                for name in tool_names:
+                    logger.info(f"[MCP INIT]   - {name}")
+            else:
+                logger.warning("[MCP INIT] Scratchpad connected but no tools were loaded!")
+            mcp_tools.append(self._mcp_scratchpad)
+        else:
+            logger.info("[MCP INIT] No session ID - scratchpad tool not enabled")
 
         # DefaultAzureCredential works with:
         # - Azure CLI locally (az login)
@@ -90,9 +140,9 @@ class MarketAnalystAgent:
 
         self._agent = responses_client.create_agent(
             instructions=self.system_prompt,
-            tools=[self._mcp_tool],
+            tools=mcp_tools,
         )
-        logger.info("[INIT] Agent initialized successfully!")
+        logger.info(f"[INIT] Agent initialized successfully with {len(mcp_tools)} MCP tool(s)!")
         logger.info("=" * 60)
 
     async def run(self, message: str) -> str:
@@ -156,11 +206,16 @@ class MarketAnalystAgent:
 
     async def close(self) -> None:
         """Clean up resources."""
-        if self._mcp_tool is not None:
+        if self._mcp_scratchpad is not None:
+            logger.info("[SHUTDOWN] Disconnecting from MCP Scratchpad server...")
+            await self._mcp_scratchpad.__aexit__(None, None, None)
+            self._mcp_scratchpad = None
+            logger.info("[SHUTDOWN] MCP Scratchpad connection closed")
+        if self._mcp_demographics is not None:
             logger.info("[SHUTDOWN] Disconnecting from MCP Demographics server...")
-            await self._mcp_tool.__aexit__(None, None, None)
-            self._mcp_tool = None
-            logger.info("[SHUTDOWN] MCP connection closed")
+            await self._mcp_demographics.__aexit__(None, None, None)
+            self._mcp_demographics = None
+            logger.info("[SHUTDOWN] MCP Demographics connection closed")
         self._agent = None
         logger.info("[SHUTDOWN] Agent resources released")
 
