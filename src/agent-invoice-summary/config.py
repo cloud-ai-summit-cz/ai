@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # Model deployment
     model_deployment_name: str = "gpt-4o-mini"
 
+    # MCP invoice data server
+    mcp_invoice_data_url: str
+
     @property
     def prompts_dir(self) -> Path:
         """Get the prompts directory path."""

@@ -8,11 +8,7 @@ import os
 import sys
 
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import (
-    PromptAgentDefinition,
-    PromptAgentDefinitionText,
-    ResponseTextFormatConfigurationJsonSchema,
-)
+from azure.ai.projects.models import MCPTool, PromptAgentDefinition
 from azure.identity import DefaultAzureCredential
 from jinja2 import Template
 from rich.console import Console
@@ -31,30 +27,6 @@ console = Console(force_terminal=True)
 
 AGENT_NAME = "invoice-process-summary-agent"
 AGENT_DISPLAY_NAME = "Invoice Process Summary Agent"
-
-HANDOFF_SCHEMA: dict[str, object] = {
-    "type": "object",
-    "properties": {
-        "summary": {"type": "string"},
-        "next_step": {"type": "string", "enum": ["auto_post", "manual_review", "vendor_follow_up"]},
-        "target_queue": {"type": "string"},
-        "approved_amount": {"type": "number"},
-        "hold_reason": {"type": "string"},
-        "attachments": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "type": {"type": "string"},
-                    "uri": {"type": "string"},
-                },
-                "required": ["name", "uri"],
-            },
-        },
-    },
-    "required": ["summary", "next_step", "approved_amount"],
-}
 
 
 def get_client() -> AIProjectClient:
@@ -104,18 +76,21 @@ def create_agent() -> None:
             try:
                 instructions = get_instructions()
 
+                # Configure MCP tool for invoice data context
+                mcp_tools = [
+                    MCPTool(
+                        server_label="MCPInvoiceData",
+                        server_url=settings.mcp_invoice_data_url,
+                        project_connection_id="MCPInvoiceData",
+                        require_approval="never",
+                    ),
+                ]
+
                 agent_def = PromptAgentDefinition(
                     model=settings.model_deployment_name,
                     instructions=instructions,
-                    temperature=0.2,
-                    text=PromptAgentDefinitionText(
-                        format=ResponseTextFormatConfigurationJsonSchema(
-                            name="InvoiceProcessSummary",
-                            description="Summary of the invoice processing pipeline output",
-                            schema=HANDOFF_SCHEMA,
-                            strict=False,
-                        )
-                    ),
+                    # temperature=0.2,
+                    tools=mcp_tools,
                 )
 
                 client.agents.create(
@@ -135,7 +110,8 @@ def create_agent() -> None:
                 )
                 console.print("  Workflow Sequence: 3")
                 console.print("  Workflow Role: summary")
-                console.print("  Output Schema: InvoiceProcessSummary")
+                console.print("  MCP Tools: MCPInvoiceData")
+                console.print("  Output: Free-form summary and recommendation")
 
             except Exception as e:
                 console.print(f"[FAIL] Failed to create [red]{AGENT_DISPLAY_NAME}[/red]: {e}")

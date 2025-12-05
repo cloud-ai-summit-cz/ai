@@ -168,7 +168,7 @@ def create_agent() -> None:
                 agent_def = PromptAgentDefinition(
                     model=settings.model_deployment_name,
                     instructions=instructions,
-                    temperature=0.3,
+                    # temperature=0.3,
                     tools=mcp_tools,
                     text=PromptAgentDefinitionText(
                         format=ResponseTextFormatConfigurationJsonSchema(

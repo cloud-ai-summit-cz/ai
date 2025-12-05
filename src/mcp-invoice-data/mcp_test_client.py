@@ -18,6 +18,7 @@ USAGE:
 import asyncio
 import logging
 import os
+from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 from mcp import ClientSession
@@ -100,16 +101,29 @@ async def main():
         #     print(f"get_po result: {result.content}")
 
         # Test send_email tool
-        if "send_email" in tool_names:
+        if "send_report" in tool_names:
             print("\n--- Testing send_email tool ---")
             result = await session.call_tool(
-                name="send_email",
+                name="send_report",
                 arguments={
                     "subject": "Test Email from MCP Client",
                     "text": "This is a test email sent via the MCP invoice-data server to Logic App.",
                 },
             )
             print(f"send_email result: {result.content}")
+
+        if "create_event" in tool_names:
+            print("\n--- Testing create_event tool ---")
+
+            result = await session.call_tool(
+                name="create_event",
+                arguments={
+                    "subject": "Invoice follow-up",
+                    "start_time": "2025-12-05T09:00:00",
+                    "end_time": "2025-12-05T09:15:00",
+                },
+            )
+            print(f"create_event result: {result.content}")
 
         logger.info("MCP client test completed successfully")
 

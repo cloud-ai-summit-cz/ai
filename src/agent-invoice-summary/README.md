@@ -6,6 +6,8 @@ Foundry Native agent for invoice processing summary and routing decisions.
 
 This agent is the final step in the invoice processing workflow. It receives validation results from the validation agent, synthesizes the information, and determines the appropriate next step for the invoice (auto-post, manual review, or vendor follow-up).
 
+It also connects to the MCP Invoice Data server for PO/vendor context when forming the summary.
+
 ## Setup
 
 ```bash
@@ -15,6 +17,7 @@ uv sync
 # Copy environment file and configure
 cp .env.example .env
 # Edit .env with your Azure AI Foundry credentials
+# Set MCP_INVOICE_DATA_URL to the invoice data MCP endpoint
 ```
 
 ## Usage
@@ -57,7 +60,7 @@ agent-invoice-summary/
 
 - **Sequence**: 3 (final agent in workflow)
 - **Role**: summary
-- **Output Schema**: InvoiceProcessSummary
+- **Tools**: MCPInvoiceData (context only)
 
 ## Routing Decisions
 
@@ -75,15 +78,9 @@ The agent determines one of three next steps:
    - Missing information
    - Invalid PO or pricing issues
 
-## Output Schema
+## Output
 
-The agent produces structured JSON conforming to the InvoiceProcessSummary schema:
-- `summary`: Human-readable summary of the outcome
-- `next_step`: Routing decision (auto_post, manual_review, vendor_follow_up)
-- `target_queue`: Optional queue/team assignment
-- `approved_amount`: Invoice amount for approved invoices
-- `hold_reason`: Explanation for non-approved invoices
-- `attachments`: Related document references
+Produces a concise narrative summary with a recommended next step (auto_post, manual_review, vendor_follow_up). The response is free-form text (no enforced JSON schema).
 
 ## Authentication
 

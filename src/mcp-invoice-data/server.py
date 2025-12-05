@@ -12,7 +12,7 @@ and all tool invocations for debugging and observability.
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from fastmcp import FastMCP, Context
@@ -375,12 +375,7 @@ def send_report(subject: str, text: str, ctx: Context) -> dict:
     
     # Logic App HTTP trigger URL
     logic_app_url = (
-        "https://prod-70.eastus.logic.azure.com:443/workflows/de4fbd31b1e54dc7a3abbfc9dda4dd37/"
-        "triggers/When_an_HTTP_request_is_received/paths/invoke"
-        "?api-version=2016-10-01"
-        "&sp=%2Ftriggers%2FWhen_an_HTTP_request_is_received%2Frun"
-        "&sv=1.0"
-        "&sig=sWLLyRKSpPgqMr729fnQ6UFD5-uEPa3D-gaEwEH1h1E"
+        "https://prod-70.eastus.logic.azure.com:443/workflows/de4fbd31b1e54dc7a3abbfc9dda4dd37/triggers/When_an_HTTP_request_is_received/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2FWhen_an_HTTP_request_is_received%2Frun&sv=1.0&sig=sWLLyRKSpPgqMr729fnQ6UFD5-uEPa3D-gaEwEH1h1E"
     )
     
     # Prepare payload for Logic App
@@ -434,6 +429,118 @@ def send_report(subject: str, text: str, ctx: Context) -> dict:
             "status": "failed",
             "error": str(e),
             "timestamp": datetime.now().isoformat(),
+        }
+
+
+@mcp.tool
+def create_event(subject: str, start_time: str, end_time: str, ctx: Context) -> dict:
+    """Create a calendar event placeholder.
+
+    Args:
+        subject: Event subject/title.
+        start_time: ISO timestamp for start (e.g., 2025-12-26T09:00:00), normally due-date at 09:00.
+        end_time: ISO timestamp for end (e.g., 2025-12-26T09:00:00), normally due-date at 09:15.
+    Returns:
+        Result with success flag, normalized times, and request metadata.
+    """
+    import uuid
+    import httpx
+
+    request_id = ctx.get_state("request_id") or "unknown"
+    headers = ctx.get_state("request_headers") or {}
+
+    logger.info(f"[TOOL:create_event] Request ID: {request_id}")
+    logger.info(f"[TOOL:create_event] Caller Agent: {headers.get('x-caller-agent', 'unknown')}")
+    logger.info(f"[TOOL:create_event] Session ID: {headers.get('x-session-id', 'unknown')}")
+    logger.info(f"[TOOL:create_event] Subject: {subject}")
+    logger.info(f"[TOOL:create_event] Start: {start_time}")
+    logger.info(f"[TOOL:create_event] End (input): {end_time or '[auto]'}")
+
+    try:
+        start_dt = datetime.fromisoformat(start_time)
+    except ValueError:
+        logger.error("[TOOL:create_event] Invalid start_time format; expected ISO 8601")
+        return {
+            "success": False,
+            "error": "Invalid start_time format; expected ISO 8601 (e.g., 2025-12-26T09:00:00)",
+            "request_id": request_id,
+        }
+
+    computed_end = start_dt + timedelta(minutes=15)
+
+    if end_time:
+        try:
+            provided_end = datetime.fromisoformat(end_time)
+            if provided_end != computed_end:
+                logger.info(
+                    "[TOOL:create_event] Adjusting end_time to 15 minutes after start_time"
+                )
+        except ValueError:
+            logger.warning("[TOOL:create_event] Invalid end_time provided; recalculating")
+        finally:
+            end_dt = computed_end
+    else:
+        end_dt = computed_end
+
+    logic_app_url = (
+        "https://prod-05.eastus.logic.azure.com:443/workflows/02ae72c000254564abc000c5bedd8a6a/triggers/When_an_HTTP_request_is_received/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2FWhen_an_HTTP_request_is_received%2Frun&sv=1.0&sig=uo0zDeQmpVuzEpBHi6vawacmy1kjRE1nXoQ2pW-A894"
+    )
+
+    payload = {
+        "event_subject": subject,
+        "event_start": start_dt.isoformat(),
+        "event_end": end_dt.isoformat(),
+        "duration_minutes": 15,
+    }
+
+    event_id = f"EVT-{uuid.uuid4().hex[:12].upper()}"
+
+    logger.info(f"[TOOL:create_event] Sending event to Logic App: event_id={event_id}")
+    logger.info(f"[TOOL:create_event] Start: {payload['event_start']} -> End: {payload['event_end']}")
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                logic_app_url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+
+        logger.info(f"[TOOL:create_event] Logic App responded with status: {response.status_code}")
+
+        return {
+            "success": True,
+            "event_id": event_id,
+            "subject": subject,
+            "start_time": payload["event_start"],
+            "end_time": payload["event_end"],
+            "duration_minutes": 15,
+            "status": "created",
+            "logic_app_status_code": response.status_code,
+            "request_id": request_id,
+        }
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"[TOOL:create_event] Logic App HTTP error: {e.response.status_code} - {e.response.text}"
+        )
+        return {
+            "success": False,
+            "event_id": event_id,
+            "subject": subject,
+            "status": "failed",
+            "error": f"HTTP {e.response.status_code}: {e.response.text}",
+            "request_id": request_id,
+        }
+    except httpx.RequestError as e:
+        logger.error(f"[TOOL:create_event] Logic App request error: {e}")
+        return {
+            "success": False,
+            "event_id": event_id,
+            "subject": subject,
+            "status": "failed",
+            "error": str(e),
+            "request_id": request_id,
         }
 
 

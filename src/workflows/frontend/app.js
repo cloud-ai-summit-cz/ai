@@ -31,8 +31,20 @@ trigger:
               entity: StringPrebuiltEntity
               skipQuestionMode: SkipOnFirstExecutionIfVariableHasValue
               prompt: <QUESTION>Validation OK - Approve?
+            - kind: InvokeAzureAgent
+              id: invoice-process-summary-agent
+              agent:
+                name: invoice-process-summary-agent
+              input:
+                messages: =Local.LastMessage
+              output:
+                autoSend: true
+                messages: Local.LastMessage
             - kind: SendActivity
-              activity: <FINAL> Success! Ivoice approved for payment processing.
+              activity: |-
+                <FINAL> Success! Ivoice approved for payment processing. 
+
+                summary: {Local.LastMessage}
               id: action-1764942712798
           id: if-action-1764883723763-0
       id: action-1764883723763
