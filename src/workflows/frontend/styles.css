@@ -36,7 +36,7 @@ body {
     display: flex;
     flex-direction: column;
     min-height: 100vh;
-    max-width: 900px;
+    max-width: 1400px;
     margin: 0 auto;
     padding: 0 1rem;
 }
@@ -63,9 +63,55 @@ body {
 .main {
     flex: 1;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     padding: 2rem 0;
     gap: 2rem;
+}
+
+/* Main Column */
+.main-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    min-width: 0;
+}
+
+/* Right Column */
+.right-column {
+    width: 320px;
+    flex-shrink: 0;
+}
+
+.right-column-placeholder {
+    background-color: var(--bg-secondary);
+    border-radius: 16px;
+    padding: 2rem;
+    text-align: center;
+    border: 2px dashed var(--border);
+    height: 100%;
+    min-height: 300px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+}
+
+.placeholder-icon {
+    font-size: 3rem;
+    opacity: 0.5;
+}
+
+.right-column-placeholder h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.right-column-placeholder p {
+    font-size: 0.875rem;
+    color: var(--text-muted);
 }
 
 .section {
@@ -225,6 +271,343 @@ body {
     background-color: var(--bg-secondary);
     border-radius: 16px;
     padding: 1.5rem;
+}
+
+/* Workflow Diagram */
+.workflow-diagram {
+    margin-bottom: 1.5rem;
+    background-color: var(--bg-primary);
+    border-radius: 12px;
+    padding: 1.5rem;
+    overflow-x: auto;
+    min-height: 200px;
+}
+
+.diagram-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: max-content;
+    min-height: 40px;
+}
+
+.diagram-loading {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    padding: 1rem;
+    text-align: center;
+}
+
+/* Diagram Row - horizontal sequence of nodes */
+.diagram-row {
+    display: flex;
+    align-items: center;
+    gap: 0;
+}
+
+/* Branch container for if/else */
+.diagram-branch {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    position: relative;
+}
+
+.diagram-branch-row {
+    display: flex;
+    align-items: center;
+    gap: 0;
+}
+
+/* Workflow Node */
+.wf-node {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.5rem 0.875rem;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    min-width: 100px;
+    max-width: 200px;
+    position: relative;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+
+.wf-node:hover {
+    border-color: var(--text-muted);
+    transform: translateY(-1px);
+}
+
+.wf-node.active {
+    border-color: var(--info);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+.wf-node.completed {
+    border-color: var(--success);
+    background-color: rgba(16, 185, 129, 0.15);
+}
+
+.wf-node.failed {
+    border-color: var(--error);
+    background-color: rgba(239, 68, 68, 0.15);
+}
+
+/* Node status indicators */
+.wf-node-status {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: bold;
+    z-index: 10;
+}
+
+.wf-node-status.completed {
+    background-color: var(--success);
+    color: white;
+    box-shadow: 0 2px 4px rgba(16, 185, 129, 0.4);
+}
+
+.wf-node-status.failed {
+    background-color: var(--error);
+    color: white;
+    box-shadow: 0 2px 4px rgba(239, 68, 68, 0.4);
+}
+
+.wf-node-status.running {
+    background-color: var(--info);
+    color: white;
+    box-shadow: 0 2px 4px rgba(59, 130, 246, 0.4);
+}
+
+.node-spinner {
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+/* Node type-specific colors */
+.wf-node.node-start {
+    background-color: rgba(16, 185, 129, 0.15);
+    border-color: var(--success);
+}
+
+.wf-node.node-variable {
+    background-color: rgba(139, 92, 246, 0.15);
+    border-color: #8b5cf6;
+}
+
+.wf-node.node-agent {
+    background-color: rgba(59, 130, 246, 0.15);
+    border-color: var(--info);
+}
+
+.wf-node.node-condition {
+    background-color: rgba(236, 72, 153, 0.15);
+    border-color: #ec4899;
+    border-radius: 8px;
+}
+
+.wf-node.node-message {
+    background-color: rgba(245, 158, 11, 0.15);
+    border-color: var(--warning);
+}
+
+.wf-node.node-question {
+    background-color: rgba(6, 182, 212, 0.15);
+    border-color: #06b6d4;
+}
+
+/* Node Icon */
+.wf-node-icon {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    flex-shrink: 0;
+}
+
+.node-start .wf-node-icon { background-color: rgba(16, 185, 129, 0.3); }
+.node-variable .wf-node-icon { background-color: rgba(139, 92, 246, 0.3); }
+.node-agent .wf-node-icon { background-color: rgba(59, 130, 246, 0.3); }
+.node-condition .wf-node-icon { background-color: rgba(236, 72, 153, 0.3); }
+.node-message .wf-node-icon { background-color: rgba(245, 158, 11, 0.3); }
+.node-question .wf-node-icon { background-color: rgba(6, 182, 212, 0.3); }
+
+/* Node Label */
+.wf-node-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 130px;
+}
+
+/* Node menu dots */
+.wf-node-menu {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    margin-left: auto;
+    opacity: 0.5;
+}
+
+/* Connector between nodes */
+.wf-connector {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 2px;
+    background-color: var(--border);
+    position: relative;
+    flex-shrink: 0;
+}
+
+.wf-connector::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    width: 0;
+    height: 0;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    border-left: 6px solid var(--border);
+}
+
+.wf-connector.active {
+    background-color: var(--info);
+}
+
+.wf-connector.active::after {
+    border-left-color: var(--info);
+}
+
+.wf-connector.completed {
+    background-color: var(--success);
+}
+
+.wf-connector.completed::after {
+    border-left-color: var(--success);
+}
+
+/* Branch connector (vertical + horizontal for if/else) */
+.wf-branch-connector {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 40px;
+    position: relative;
+    flex-shrink: 0;
+}
+
+.wf-branch-line-v {
+    position: absolute;
+    left: 20px;
+    width: 2px;
+    background-color: var(--border);
+}
+
+.wf-branch-line-h {
+    height: 2px;
+    background-color: var(--border);
+    width: 20px;
+    margin-left: 20px;
+}
+
+/* Condition label (If/Else) */
+.wf-condition-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-right: 0.5rem;
+    min-width: 50px;
+    flex-shrink: 0;
+}
+
+.wf-condition-label.if-label {
+    background-color: rgba(16, 185, 129, 0.1);
+    border-color: rgba(16, 185, 129, 0.3);
+    color: var(--success);
+}
+
+.wf-condition-label.else-label {
+    background-color: rgba(245, 158, 11, 0.1);
+    border-color: rgba(245, 158, 11, 0.3);
+    color: var(--warning);
+}
+
+/* Tooltip for condition */
+.wf-node-tooltip {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.6875rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    z-index: 10;
+    margin-bottom: 4px;
+}
+
+.wf-node:hover .wf-node-tooltip {
+    display: block;
+}
+
+/* Diagram scrollbar */
+.workflow-diagram::-webkit-scrollbar {
+    height: 6px;
+}
+
+.workflow-diagram::-webkit-scrollbar-track {
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+}
+
+.workflow-diagram::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+
+/* Animation for active nodes */
+@keyframes nodeGlow {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3); }
+    50% { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2); }
+}
+
+.wf-node.active {
+    animation: nodeGlow 1.5s ease-in-out infinite;
 }
 
 .workflow-header {
@@ -717,6 +1100,20 @@ body {
 }
 
 /* Responsive */
+@media (max-width: 900px) {
+    .main {
+        flex-direction: column;
+    }
+    
+    .right-column {
+        width: 100%;
+    }
+    
+    .right-column-placeholder {
+        min-height: 200px;
+    }
+}
+
 @media (max-width: 640px) {
     .header {
         padding: 1.5rem 0;

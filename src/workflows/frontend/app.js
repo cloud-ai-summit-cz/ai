@@ -6,6 +6,101 @@
 // Configuration
 const API_BASE_URL = 'http://localhost:8000';
 const WORKFLOW_NAME = 'wf2';
+const WORKFLOW_YAML = `
+kind: workflow
+trigger:
+  kind: OnConversationStart
+  id: trigger_wf
+  actions:
+    - kind: SetVariable
+      id: action-1764883765010
+      variable: Local.InvoiceOK
+      value: =false
+    - kind: InvokeAzureAgent
+      id: invoice-validation-agent
+      agent:
+        name: invoice-validation-agent
+      input:
+        messages: =System.LastMessage
+      output:
+        autoSend: true
+        messages: Local.LastMessage
+    - kind: ConditionGroup
+      conditions:
+        - condition: =!IsBlank(Find("<INV_OK>", Last(Local.LastMessage).Text))
+          actions:
+            - kind: SetVariable
+              id: action-1764883750258
+              variable: Local.InvoiceOK
+              value: =true
+            - kind: InvokeAzureAgent
+              id: invoice-process-summary-agent
+              agent:
+                name: invoice-process-summary-agent
+              input:
+                messages: =System.LastMessage
+              output:
+                autoSend: true
+          id: if-action-1764883723763-0
+      id: action-1764883723763
+      elseActions:
+        - kind: SendActivity
+          activity: Vypada to spatne...
+          id: action-1764884732691
+        - kind: Question
+          variable: Local.InvoiceKOUser
+          id: action-1764885497445
+          entity: StringPrebuiltEntity
+          skipQuestionMode: SkipOnFirstExecutionIfVariableHasValue
+          prompt: OK?
+        - kind: SetVariable
+          id: action-1764883918865
+          variable: Local.InvoiceOK
+          value: =false
+        - kind: SendActivity
+          activity: The Invoice is wrong! {Local.InvoiceKOUser}
+          id: action-1764884001355
+id: ""
+name: wf2
+description: ""
+
+`;
+const WORKFLOW_PROMPT_DEMO_USE = true
+const WORKFLOW_PROMPT_DEMO = `
+    {
+  "po_number": "534",
+  "invoice_number": "100",
+  "invoice_date": "2025-10-15",
+  "due_date": "",
+  "currency": "EUR",
+  "supplier": {
+    "name": "Zava Specialty Coffee",
+    "address": "333 3rd Ave, Seattle, WA 12345",
+    "email": "",
+    "phone": "123-456-7890"
+  },
+  "bill_to": {
+    "name": "Tomas Kubica",
+    "address": "Karlinska 1918, Karlin, Czechia",
+    "department": "CoPilot Inc"
+  },
+  "line_items": [
+    {
+      "description": "Zava Ethiopia for Espresso",
+      "quantity": 80,
+      "unit_price": 20,
+      "uom": "Kg",
+      "total": 2000
+    }
+  ],
+  "subtotal": 2000,
+  "tax": 300,
+  "shipping": 0,
+  "total": 2300,
+  "confidence": 0.88,
+  "notes": "Handwritten PO (534) detected. Invoice # read as '100'. Invoice date read as 10/15/2025 and converted to ISO. Supplier address and purchaser/shipping address OCRed as 'Karlinska 1918, Karlin, Czechia' (minor uncertainty). Totals (subtotal 2000 + tax 300 + shipping 0 = total 2300) match the invoice."
+}
+    `;
 
 // DOM Elements
 const inputSection = document.getElementById('input-section');
@@ -25,6 +120,7 @@ const restartBtn = document.getElementById('restart-btn');
 const followupInput = document.getElementById('followup-input');
 const followupBtn = document.getElementById('followup-btn');
 const conversationBadge = document.getElementById('conversation-badge');
+const workflowDiagram = document.getElementById('workflow-diagram');
 
 // State
 let selectedFile = null;
@@ -32,6 +128,7 @@ let finalText = '';
 let actorContainers = {}; // Map action_id -> container element
 let currentConversationId = null; // Track conversation ID for follow-ups
 let totalAgentCount = 0; // Track total agents across all turns
+let diagramNodes = {}; // Map action_id -> diagram node element
 
 // Event Icons mapping
 const eventIcons = {
@@ -54,6 +151,309 @@ const eventIcons = {
     reasoning_completed: { icon: '🧠', class: 'reasoning', label: 'Thinking' },
     error: { icon: '❌', class: 'error', label: 'Error' },
 };
+
+// Workflow node type configuration
+const nodeTypes = {
+    'OnConversationStart': { icon: '▶️', class: 'node-start', label: 'Start' },
+    'SetVariable': { icon: '(x)', class: 'node-variable', label: 'Set variable' },
+    'InvokeAzureAgent': { icon: '🤖', class: 'node-agent', label: 'Agent' },
+    'ConditionGroup': { icon: '⚡', class: 'node-condition', label: 'If/Else condition' },
+    'SendActivity': { icon: '💬', class: 'node-message', label: 'Send message' },
+    'Question': { icon: '❓', class: 'node-question', label: 'Ask a question' },
+};
+
+// Simple YAML parser for the workflow structure
+// For reliability, we'll use a pre-parsed structure that matches WORKFLOW_YAML
+function getWorkflowStructure() {
+    return {
+        name: 'wf2',
+        trigger: {
+            kind: 'OnConversationStart',
+            id: 'trigger_wf',
+            actions: [
+                {
+                    kind: 'SetVariable',
+                    id: 'action-1764883765010',
+                    variable: 'Local.InvoiceOK',
+                    value: '=false'
+                },
+                {
+                    kind: 'InvokeAzureAgent',
+                    id: 'invoice-validation-agent',
+                    agentName: 'invoice-validation-agent'
+                },
+                {
+                    kind: 'ConditionGroup',
+                    id: 'action-1764883723763',
+                    condition: '=!IsBlank(Find("<INV_OK>", Last(Local.LastMessage).Text))',
+                    conditions: [
+                        {
+                            id: 'if-action-1764883723763-0',
+                            condition: '=!IsBlank(Find("<INV_OK>", Last(Local.LastMessage).Text))',
+                            actions: [
+                                {
+                                    kind: 'SetVariable',
+                                    id: 'action-1764883750258',
+                                    variable: 'Local.InvoiceOK',
+                                    value: '=true'
+                                },
+                                {
+                                    kind: 'InvokeAzureAgent',
+                                    id: 'invoice-process-summary-agent',
+                                    agentName: 'invoice-process-summary-agent'
+                                }
+                            ]
+                        }
+                    ],
+                    elseActions: [
+                        {
+                            kind: 'SendActivity',
+                            id: 'action-1764884732691',
+                            activity: 'Vypada to spatne...'
+                        },
+                        {
+                            kind: 'Question',
+                            id: 'action-1764885497445',
+                            prompt: 'OK?'
+                        },
+                        {
+                            kind: 'SetVariable',
+                            id: 'action-1764883918865',
+                            variable: 'Local.InvoiceOK',
+                            value: '=false'
+                        },
+                        {
+                            kind: 'SendActivity',
+                            id: 'action-1764884001355',
+                            activity: 'The Invoice is wrong!'
+                        }
+                    ]
+                }
+            ]
+        }
+    };
+}
+
+// Create a workflow node element
+function createNodeElement(action, isStart = false) {
+    const config = isStart 
+        ? nodeTypes['OnConversationStart']
+        : (nodeTypes[action.kind] || { icon: '•', class: 'node-default', label: action.kind });
+    
+    let label = config.label;
+    if (action.kind === 'InvokeAzureAgent' && action.agentName) {
+        label = action.agentName;
+    } else if (action.kind === 'SetVariable') {
+        label = 'Set variable';
+    } else if (action.kind === 'SendActivity') {
+        label = 'Send message';
+    } else if (action.kind === 'Question') {
+        label = 'Ask a question';
+    }
+    
+    const node = document.createElement('div');
+    node.className = `wf-node ${config.class}`;
+    node.dataset.actionId = action.id || '';
+    
+    // Add tooltip for conditions
+    let tooltipHtml = '';
+    if (action.condition) {
+        tooltipHtml = `<div class="wf-node-tooltip">${escapeHtml(action.condition)}</div>`;
+    }
+    
+    node.innerHTML = `
+        <div class="wf-node-icon">${config.icon}</div>
+        <span class="wf-node-label">${escapeHtml(label)}</span>
+        <span class="wf-node-menu">⋯</span>
+        ${tooltipHtml}
+    `;
+    
+    // Store reference for status updates
+    if (action.id) {
+        diagramNodes[action.id] = node;
+    }
+    
+    return node;
+}
+
+// Create a connector element
+function createConnector() {
+    const connector = document.createElement('div');
+    connector.className = 'wf-connector';
+    return connector;
+}
+
+// Create condition label
+function createConditionLabel(type) {
+    const label = document.createElement('div');
+    label.className = `wf-condition-label ${type}-label`;
+    label.innerHTML = `<span>${type === 'if' ? 'If' : 'Else'}</span>`;
+    return label;
+}
+
+// Render the workflow diagram
+function renderWorkflowDiagram() {
+    console.log('=== renderWorkflowDiagram START ===');
+    
+    // Re-query the diagram element
+    const diagramEl = document.getElementById('workflow-diagram');
+    console.log('1. diagramEl found:', !!diagramEl);
+    
+    if (!diagramEl) {
+        console.error('Workflow diagram element not found');
+        return;
+    }
+    
+    const container = diagramEl.querySelector('.diagram-container');
+    console.log('2. container found:', !!container);
+    
+    if (!container) {
+        console.error('Diagram container not found');
+        return;
+    }
+    
+    // Clear and rebuild
+    container.innerHTML = '';
+    diagramNodes = {};
+    
+    console.log('3. Container cleared');
+    
+    try {
+        const workflow = getWorkflowStructure();
+        console.log('4. Workflow structure:', workflow);
+        
+        const actions = workflow.trigger?.actions || [];
+        console.log('5. Actions count:', actions.length);
+        
+        // Create main row for: Start -> SetVariable -> Agent -> Condition
+        const mainRow = document.createElement('div');
+        mainRow.className = 'diagram-row';
+        
+        // Add Start node
+        const startNode = createNodeElement({ kind: 'OnConversationStart', id: 'trigger_wf' }, true);
+        console.log('6. Start node created:', startNode.outerHTML.substring(0, 100));
+        mainRow.appendChild(startNode);
+        mainRow.appendChild(createConnector());
+        
+        // Add SetVariable node
+        if (actions[0]) {
+            mainRow.appendChild(createNodeElement(actions[0]));
+            mainRow.appendChild(createConnector());
+        }
+        
+        // Add Agent node  
+        if (actions[1]) {
+            mainRow.appendChild(createNodeElement(actions[1]));
+            mainRow.appendChild(createConnector());
+        }
+        
+        // Add Condition node
+        const conditionAction = actions[2];
+        if (conditionAction) {
+            mainRow.appendChild(createNodeElement(conditionAction));
+        }
+        
+        console.log('7. Main row children:', mainRow.children.length);
+        container.appendChild(mainRow);
+        
+        // Create IF branch row
+        if (conditionAction && conditionAction.conditions && conditionAction.conditions[0]) {
+            const ifRow = document.createElement('div');
+            ifRow.className = 'diagram-branch-row';
+            ifRow.appendChild(createConditionLabel('if'));
+            
+            const ifActions = conditionAction.conditions[0].actions || [];
+            ifActions.forEach((action, idx) => {
+                if (idx > 0) ifRow.appendChild(createConnector());
+                ifRow.appendChild(createNodeElement(action));
+            });
+            container.appendChild(ifRow);
+            console.log('8. IF row added, children:', ifRow.children.length);
+        }
+        
+        // Create ELSE branch row
+        if (conditionAction && conditionAction.elseActions) {
+            const elseRow = document.createElement('div');
+            elseRow.className = 'diagram-branch-row';
+            elseRow.appendChild(createConditionLabel('else'));
+            
+            const elseActions = conditionAction.elseActions;
+            elseActions.forEach((action, idx) => {
+                if (idx > 0) elseRow.appendChild(createConnector());
+                elseRow.appendChild(createNodeElement(action));
+            });
+            container.appendChild(elseRow);
+            console.log('9. ELSE row added, children:', elseRow.children.length);
+        }
+        
+        console.log('10. Final container innerHTML length:', container.innerHTML.length);
+        console.log('=== renderWorkflowDiagram END ===');
+        
+    } catch (error) {
+        console.error('Failed to render workflow diagram:', error);
+        console.error('Error stack:', error.stack);
+        container.innerHTML = `
+            <div style="display: flex; align-items: center; justify-content: center; gap: 0.75rem; padding: 1.25rem; color: #b4b4b4;">
+                <span>⚠️</span>
+                <span>Error: ${error.message}</span>
+            </div>
+        `;
+    }
+}
+
+// Update diagram node status
+function updateDiagramNodeStatus(actionId, status) {
+    console.log('updateDiagramNodeStatus called:', actionId, status);
+    console.log('Available diagram nodes:', Object.keys(diagramNodes));
+    
+    const node = diagramNodes[actionId];
+    if (!node) {
+        console.log('Node not found for actionId:', actionId);
+        return;
+    }
+    
+    node.classList.remove('active', 'completed', 'failed');
+    
+    // Remove any existing status indicator
+    const existingIndicator = node.querySelector('.wf-node-status');
+    if (existingIndicator) {
+        existingIndicator.remove();
+    }
+    
+    if (status === 'running') {
+        node.classList.add('active');
+        // Add spinner indicator
+        const spinner = document.createElement('div');
+        spinner.className = 'wf-node-status running';
+        spinner.innerHTML = '<span class="node-spinner"></span>';
+        node.appendChild(spinner);
+    } else if (status === 'completed') {
+        node.classList.add('completed');
+        // Add checkmark indicator
+        const checkmark = document.createElement('div');
+        checkmark.className = 'wf-node-status completed';
+        checkmark.innerHTML = '✓';
+        node.appendChild(checkmark);
+    } else if (status === 'failed') {
+        node.classList.add('failed');
+        // Add error indicator
+        const errorMark = document.createElement('div');
+        errorMark.className = 'wf-node-status failed';
+        errorMark.innerHTML = '✗';
+        node.appendChild(errorMark);
+    }
+    
+    // Also update connector before this node
+    const prevSibling = node.previousElementSibling;
+    if (prevSibling && prevSibling.classList.contains('wf-connector')) {
+        prevSibling.classList.remove('active', 'completed');
+        if (status === 'running') {
+            prevSibling.classList.add('active');
+        } else if (status === 'completed') {
+            prevSibling.classList.add('completed');
+        }
+    }
+}
 
 // Initialize
 function init() {
@@ -123,45 +523,20 @@ async function startWorkflow() {
     totalAgentCount = 0;
     workflowStatus.textContent = 'Running';
     workflowStatus.className = 'status-badge running';
-
-    const prompt_test = `
-    {
-  "po_number": "534",
-  "invoice_number": "100",
-  "invoice_date": "2025-10-15",
-  "due_date": "",
-  "currency": "EUR",
-  "supplier": {
-    "name": "Zava Specialty Coffee",
-    "address": "333 3rd Ave, Seattle, WA 12345",
-    "email": "",
-    "phone": "123-456-7890"
-  },
-  "bill_to": {
-    "name": "Tomas Kubica",
-    "address": "Karlinska 1918, Karlin, Czechia",
-    "department": "CoPilot Inc"
-  },
-  "line_items": [
-    {
-      "description": "Zava Ethiopia for Espresso",
-      "quantity": 80,
-      "unit_price": 20,
-      "uom": "Kg",
-      "total": 2000
+    
+    // Render the workflow diagram
+    try {
+        console.log('About to call renderWorkflowDiagram');
+        renderWorkflowDiagram();
+        console.log('renderWorkflowDiagram completed');
+    } catch (e) {
+        console.error('Error calling renderWorkflowDiagram:', e);
     }
-  ],
-  "subtotal": 2000,
-  "tax": 300,
-  "shipping": 0,
-  "total": 2300,
-  "confidence": 0.88,
-  "notes": "Handwritten PO (534) detected. Invoice # read as '100'. Invoice date read as 10/15/2025 and converted to ISO. Supplier address and purchaser/shipping address OCRed as 'Karlinska 1918, Karlin, Czechia' (minor uncertainty). Totals (subtotal 2000 + tax 300 + shipping 0 = total 2300) match the invoice."
-}
-    `;
+
+    
     // Prepare form data
     const formData = new FormData();
-    formData.append('message', prompt_test); //TODO CHANGE BACK TO prompt
+    formData.append('message', WORKFLOW_PROMPT_DEMO_USE ? WORKFLOW_PROMPT_DEMO : prompt);
     formData.append('workflow_name', WORKFLOW_NAME);
     formData.append('workflow_version', '1');
     if (selectedFile) {
@@ -237,6 +612,13 @@ function handleEvent(event) {
         finalText = data.text;
     }
     
+    // Update diagram node status
+    if (type === 'actor_started' && actionId) {
+        updateDiagramNodeStatus(actionId, 'running');
+    } else if (type === 'actor_completed' && actionId) {
+        updateDiagramNodeStatus(actionId, data.status === 'failed' ? 'failed' : 'completed');
+    }
+    
     // Update status on completion/failure
     if (type === 'workflow_completed') {
         workflowStatus.textContent = 'Completed';
@@ -307,6 +689,12 @@ function markAllActorsFailed() {
 // Create a new actor container
 function createActorContainer(actionId) {
     console.log('Creating actor container for:', actionId);
+    
+    // Filter out actors that start with "action-"
+    if (actionId && actionId.startsWith('action-')) {
+        console.log('Skipping actor display (filtered):', actionId);
+        return;
+    }
     
     const container = document.createElement('div');
     container.className = 'actor-container';
@@ -510,6 +898,9 @@ async function sendFollowup() {
     workflowStatus.textContent = 'Running';
     workflowStatus.className = 'status-badge running';
     
+    // Re-render diagram and reset node states
+    renderWorkflowDiagram();
+    
     // Prepare form data with conversation_id
     const formData = new FormData();
     formData.append('message', message);
@@ -584,6 +975,13 @@ function restart() {
     actorContainers = {};
     totalAgentCount = 0;
     currentConversationId = null;
+    diagramNodes = {};
+    
+    // Clear diagram
+    const diagramContainer = workflowDiagram.querySelector('.diagram-container');
+    if (diagramContainer) {
+        diagramContainer.innerHTML = '';
+    }
     
     // Hide conversation badge
     conversationBadge.classList.add('hidden');
