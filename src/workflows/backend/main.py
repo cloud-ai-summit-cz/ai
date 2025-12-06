@@ -4,7 +4,7 @@ FastAPI backend for running agentic workflows with SSE streaming.
 
 import asyncio
 import base64
-import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from enum import Enum
@@ -15,7 +15,8 @@ from typing import AsyncGenerator
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import ResponseStreamEventType
 from azure.identity import DefaultAzureCredential
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from dotenv import load_dotenv
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -99,6 +100,8 @@ class WorkflowRequest(BaseModel):
 # -----------------------------------------------------------------------------
 
 
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=False)
+
 app = FastAPI(
     title="Invoice Processing Workflow API",
     description="API for running agentic invoice processing workflows with SSE streaming",
@@ -115,7 +118,12 @@ app.add_middleware(
 )
 
 # Azure AI Project configuration
-AZURE_AI_ENDPOINT = "https://ai-foundry-mma-ncus.services.ai.azure.com/api/projects/proj-default"
+AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT")
+
+if not AZURE_AI_ENDPOINT:
+    raise RuntimeError(
+        "AZURE_AI_ENDPOINT is not configured. Set it in the environment or .env file."
+    )
 
 
 def get_project_client() -> AIProjectClient:
