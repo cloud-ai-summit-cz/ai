@@ -29,7 +29,7 @@ trigger:
             - kind: InvokeAzureAgent
               id: invoice-validation-summary
               agent:
-                name: invoice-validation-summary
+                name: invoice-validation-summary-agent
               input:
                 messages: =System.LastMessage
               output:
@@ -59,7 +59,7 @@ trigger:
         - kind: InvokeAzureAgent
           id: action-1765014116096
           agent:
-            name: invoice-validation-summary
+            name: invoice-validation-summary-agent
           input:
             messages: =System.LastMessage
           output:
@@ -194,6 +194,11 @@ let actorContainers = {}; // Map action_id -> container element
 let currentConversationId = null; // Track conversation ID for follow-ups
 let totalAgentCount = 0; // Track total agents across all turns
 let diagramNodes = {}; // Map action_id -> diagram node element
+
+// Enable/disable the start button based on image selection
+function updateStartButtonState() {
+    startBtn.disabled = !selectedFile;
+}
 
 // Event Icons mapping
 const eventIcons = {
@@ -616,6 +621,9 @@ function updateDiagramNodeStatus(actionId, status) {
 function init() {
     // Set default prompt
     promptInput.value = 'Please extract the data from this invoice.';
+
+    // Require an image before starting the workflow
+    updateStartButtonState();
     
     // Event listeners
     invoiceInput.addEventListener('change', handleFileSelect);
@@ -661,7 +669,13 @@ function handleFileSelect(event) {
             imagePreview.classList.remove('hidden');
         };
         reader.readAsDataURL(file);
+    } else {
+        selectedFile = null;
+        selectedInvoiceData = null;
+        updateStartButtonState();
     }
+
+    updateStartButtonState();
 }
 
 // Remove selected image
@@ -672,10 +686,17 @@ function removeImage() {
     previewImg.src = '';
     imagePreview.classList.add('hidden');
     uploadLabel.classList.remove('hidden');
+
+    updateStartButtonState();
 }
 
 // Start workflow
 async function startWorkflow() {
+    if (!selectedFile) {
+        alert('Please upload an invoice image to start the workflow.');
+        return;
+    }
+
     const prompt = promptInput.value.trim();
     if (!prompt) {
         alert('Please enter a prompt');
@@ -1384,6 +1405,8 @@ function restart() {
     totalAgentCount = 0;
     currentConversationId = null;
     diagramNodes = {};
+
+    updateStartButtonState();
     
     // Clear diagram
     const diagramContainer = workflowDiagram.querySelector('.diagram-container');
