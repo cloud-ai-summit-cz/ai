@@ -13,6 +13,7 @@ SRC_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 AGENTS=(
     "agent-invoice-intake"
     "agent-invoice-validation"
+    "agent-invoice-validation-summary"
     "agent-invoice-summary"
     "agent-invoice-mailer"
 )
