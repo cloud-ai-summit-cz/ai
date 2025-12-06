@@ -12,6 +12,7 @@ import {
   HelpCircle,
   CheckCircle2
 } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 type PanelType = 'activity' | 'plan' | 'notes' | 'draft' | 'final';
 
@@ -27,14 +28,6 @@ interface PanelTabsProps {
   onQuestionsClick: () => void;
 }
 
-interface TabConfig {
-  id: PanelType;
-  label: string;
-  icon: React.ReactNode;
-  badge?: string | number;
-  highlight?: boolean;
-}
-
 export function PanelTabs({
   activePanel,
   onPanelChange,
@@ -46,33 +39,43 @@ export function PanelTabs({
   hasFinalReport,
   onQuestionsClick,
 }: PanelTabsProps) {
+  const { t } = useI18n();
+
+  interface TabConfig {
+    id: PanelType;
+    label: string;
+    icon: React.ReactNode;
+    badge?: string | number;
+    highlight?: boolean;
+  }
+
   const tabs: TabConfig[] = [
     {
       id: 'activity',
-      label: 'Activity',
+      label: t.panels.activity,
       icon: <Activity className="w-4 h-4" />,
     },
     {
       id: 'plan',
-      label: 'Plan',
+      label: t.panels.plan,
       icon: <ListTodo className="w-4 h-4" />,
       badge: totalTasksCount > 0 ? `${completedTasksCount}/${totalTasksCount}` : undefined,
     },
     {
       id: 'notes',
-      label: 'Notes',
+      label: t.panels.notes,
       icon: <StickyNote className="w-4 h-4" />,
       badge: notesCount > 0 ? notesCount : undefined,
     },
     {
       id: 'draft',
-      label: 'Draft',
+      label: t.panels.draft,
       icon: <FileText className="w-4 h-4" />,
       badge: draftSectionsCount > 0 ? draftSectionsCount : undefined,
     },
     {
       id: 'final',
-      label: 'Final Report',
+      label: t.panels.finalReport,
       icon: <CheckCircle2 className="w-4 h-4" />,
       highlight: hasFinalReport,
     },
@@ -119,7 +122,7 @@ export function PanelTabs({
         `}
       >
         <HelpCircle className="w-4 h-4" />
-        <span>Questions</span>
+        <span>{t.questions.title}</span>
         {pendingQuestionsCount > 0 && (
           <span className="px-1.5 py-0.5 rounded-full bg-yellow-500 text-black text-xs font-bold">
             {pendingQuestionsCount}

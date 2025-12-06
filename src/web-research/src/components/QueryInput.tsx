@@ -5,8 +5,9 @@
  */
 
 import { useState, useRef } from 'react';
-import { Search, Sparkles, Coffee, AlertCircle, Upload, PlayCircle } from 'lucide-react';
+import { Search, Sparkles, Coffee, AlertCircle, Upload, PlayCircle, Globe } from 'lucide-react';
 import type { DemoStateSnapshot } from '../types';
+import { useI18n } from '../i18n';
 
 interface QueryInputProps {
   onSubmit: (query: string) => void;
@@ -15,13 +16,8 @@ interface QueryInputProps {
   error?: string | null;
 }
 
-const EXAMPLE_QUERIES = [
-  "Should Cofilot expand to Vienna?",
-  "Analyze the Berlin specialty coffee market",
-  "Compare Munich vs Hamburg for new location",
-];
-
 export function QueryInput({ onSubmit, onLoadDemo, isLoading, error }: QueryInputProps) {
+  const { language, setLanguage, t } = useI18n();
   const [query, setQuery] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -63,15 +59,46 @@ export function QueryInput({ onSubmit, onLoadDemo, isLoading, error }: QueryInpu
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-8">
+      {/* Language Selector */}
+      <div className="absolute top-4 right-4 flex items-center gap-2">
+        <Globe className="w-4 h-4 text-text-muted" />
+        <div className="flex rounded-lg overflow-hidden border border-border">
+          <button
+            onClick={() => setLanguage('cs')}
+            className={`
+              px-3 py-1.5 text-sm font-medium transition-colors
+              ${language === 'cs'
+                ? 'bg-accent text-white'
+                : 'bg-surface-light text-text-muted hover:text-text hover:bg-surface-lighter'
+              }
+            `}
+          >
+            CZ
+          </button>
+          <button
+            onClick={() => setLanguage('en')}
+            className={`
+              px-3 py-1.5 text-sm font-medium transition-colors
+              ${language === 'en'
+                ? 'bg-accent text-white'
+                : 'bg-surface-light text-text-muted hover:text-text hover:bg-surface-lighter'
+              }
+            `}
+          >
+            EN
+          </button>
+        </div>
+      </div>
+
       {/* Logo/Brand */}
       <div className="flex items-center gap-3 mb-8">
         <Coffee className="w-10 h-10 text-accent" />
-        <h1 className="text-3xl font-semibold text-text">Cofilot Research</h1>
+        <h1 className="text-3xl font-semibold text-text">{t.landing.title}</h1>
       </div>
 
       {/* Tagline */}
       <p className="text-text-muted text-lg mb-12 text-center max-w-md">
-        AI-powered market research for your next business move
+        {t.landing.tagline}
       </p>
 
       {/* Error Display */}
@@ -89,7 +116,7 @@ export function QueryInput({ onSubmit, onLoadDemo, isLoading, error }: QueryInpu
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="What would you like to research?"
+            placeholder={t.landing.placeholder}
             disabled={isLoading}
             className="
               w-full px-6 py-4 pr-14
@@ -121,15 +148,15 @@ export function QueryInput({ onSubmit, onLoadDemo, isLoading, error }: QueryInpu
       </form>
 
       {/* Example Queries */}
-      <div className="mt-8">
+      <div className="mt-8 flex flex-col items-center">
         <p className="text-text-dim text-sm mb-3 flex items-center gap-2">
           <Sparkles className="w-4 h-4" />
-          Try an example:
+          {t.landing.tryExample}
         </p>
-        <div className="flex flex-wrap gap-2 justify-center">
-          {EXAMPLE_QUERIES.map((example) => (
+        <div className="flex flex-col gap-2 items-center max-w-3xl">
+          {t.exampleQueries.map((example, index) => (
             <button
-              key={example}
+              key={index}
               onClick={() => setQuery(example)}
               disabled={isLoading}
               className="
@@ -153,7 +180,7 @@ export function QueryInput({ onSubmit, onLoadDemo, isLoading, error }: QueryInpu
           <div className="flex flex-col items-center">
             <p className="text-text-dim text-sm mb-4 flex items-center gap-2">
               <PlayCircle className="w-4 h-4" />
-              Or load a saved demo:
+              {language === 'cs' ? 'Nebo načtěte uložené demo:' : 'Or load a saved demo:'}
             </p>
             <input
               ref={fileInputRef}
@@ -176,10 +203,10 @@ export function QueryInput({ onSubmit, onLoadDemo, isLoading, error }: QueryInpu
               "
             >
               <Upload className="w-5 h-5" />
-              <span>Load Demo State</span>
+              <span>{t.landing.loadDemo}</span>
             </button>
             <p className="text-text-dim text-xs mt-2">
-              Load a previously saved research session
+              {t.landing.loadDemoDescription}
             </p>
           </div>
         </div>

@@ -16,6 +16,7 @@ import {
   PlayCircle
 } from 'lucide-react';
 import type { SessionStatus } from '../types';
+import { useI18n } from '../i18n';
 
 interface HeaderProps {
   query?: string;
@@ -26,48 +27,50 @@ interface HeaderProps {
   onSaveDemo?: () => void;
 }
 
-function getStatusIndicator(status: SessionStatus) {
-  switch (status) {
-    case 'running':
-      return {
-        icon: <Loader2 className="w-4 h-4 animate-spin" />,
-        text: 'Researching...',
-        color: 'text-accent',
-      };
-    case 'preparing':
-      return {
-        icon: <Loader2 className="w-4 h-4 animate-spin" />,
-        text: 'Preparing...',
-        color: 'text-yellow-400',
-      };
-    case 'pending':
-      return {
-        icon: <AlertCircle className="w-4 h-4" />,
-        text: 'Pending',
-        color: 'text-yellow-400',
-      };
-    case 'completed':
-      return {
-        icon: <CheckCircle2 className="w-4 h-4" />,
-        text: 'Complete',
-        color: 'text-green-400',
-      };
-    case 'failed':
-      return {
-        icon: <AlertCircle className="w-4 h-4" />,
-        text: 'Failed',
-        color: 'text-red-400',
-      };
-    default:
-      return {
-        icon: null,
-        text: '',
-        color: 'text-text-muted',
-      };
-  }
-}
-
 export function Header({ query, status, isConnected, isDemoMode, onReset, onSaveDemo }: HeaderProps) {
+  const { t } = useI18n();
+
+  function getStatusIndicator(status: SessionStatus) {
+    switch (status) {
+      case 'running':
+        return {
+          icon: <Loader2 className="w-4 h-4 animate-spin" />,
+          text: t.header.researching,
+          color: 'text-accent',
+        };
+      case 'preparing':
+        return {
+          icon: <Loader2 className="w-4 h-4 animate-spin" />,
+          text: t.header.preparing,
+          color: 'text-yellow-400',
+        };
+      case 'pending':
+        return {
+          icon: <AlertCircle className="w-4 h-4" />,
+          text: t.header.pending,
+          color: 'text-yellow-400',
+        };
+      case 'completed':
+        return {
+          icon: <CheckCircle2 className="w-4 h-4" />,
+          text: t.header.complete,
+          color: 'text-green-400',
+        };
+      case 'failed':
+        return {
+          icon: <AlertCircle className="w-4 h-4" />,
+          text: t.header.failed,
+          color: 'text-red-400',
+        };
+      default:
+        return {
+          icon: null,
+          text: '',
+          color: 'text-text-muted',
+        };
+    }
+  }
+
   const statusIndicator = getStatusIndicator(status);
   
   return (
@@ -94,7 +97,7 @@ export function Header({ query, status, isConnected, isDemoMode, onReset, onSave
             <div className="w-px h-6 bg-border" />
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-purple-500/20 border border-purple-500/30">
               <PlayCircle className="w-3.5 h-3.5 text-purple-400" />
-              <span className="text-xs text-purple-300 font-medium">Demo Mode</span>
+              <span className="text-xs text-purple-300 font-medium">{t.header.demoMode}</span>
             </div>
           </>
         )}
@@ -118,7 +121,6 @@ export function Header({ query, status, isConnected, isDemoMode, onReset, onSave
             ) : (
               <WifiOff className="w-4 h-4" />
             )}
-            <span className="text-xs">{isConnected ? 'Connected' : 'Disconnected'}</span>
           </div>
         )}
         
@@ -127,10 +129,10 @@ export function Header({ query, status, isConnected, isDemoMode, onReset, onSave
           <button
             onClick={onSaveDemo}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent/20 hover:bg-accent/30 border border-accent/30 transition-colors text-accent text-sm"
-            title="Save current state for demo"
+            title={t.header.saveDemo}
           >
             <Download className="w-4 h-4" />
-            <span>Save Demo</span>
+            <span>{t.header.saveDemo}</span>
           </button>
         )}
         
@@ -139,7 +141,7 @@ export function Header({ query, status, isConnected, isDemoMode, onReset, onSave
           <button
             onClick={onReset}
             className="p-2 rounded hover:bg-surface-light transition-colors text-text-muted hover:text-text"
-            title="New Research"
+            title={t.header.newResearch}
           >
             <RotateCw className="w-4 h-4" />
           </button>
