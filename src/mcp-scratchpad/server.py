@@ -26,6 +26,8 @@ from models import (
     Note,
     DraftSection,
     Task,
+    Question,
+    QuestionPriority,
 )
 from storage import get_storage
 
@@ -449,6 +451,199 @@ def read_plan(ctx: Context) -> dict[str, Any]:
     
     return {
         "tasks": [t.model_dump() for t in session.state.plan]
+    }
+
+
+# =============================================================================
+# QUESTIONS Tools (Human-in-the-Loop)
+# =============================================================================
+
+@mcp.tool
+def add_question(
+    question: str,
+    context: str,
+    ctx: Context,
+    priority: str = "medium",
+) -> dict[str, Any]:
+    """Ask a question to the user for clarification or additional input.
+    
+    Use this when you need information from the user that isn't available
+    in the research context. The user can answer asynchronously.
+    
+    Args:
+        question: The question to ask the user.
+        context: Why this information is needed (helps user understand importance).
+        priority: One of 'low', 'medium', 'high', 'blocking'.
+            - low: Nice to have, won't block research
+            - medium: Would improve research quality  
+            - high: Important for accurate recommendations
+            - blocking: Research cannot proceed without answer
+    
+    Note: Session is determined automatically from request context (X-Session-ID header).
+    """
+    session_id = get_session_id_from_context(ctx)
+    agent_id = get_caller_agent_from_context(ctx)
+    
+    storage = get_storage()
+    session = storage.get_or_create_session(session_id)
+    
+    # Parse priority
+    try:
+        question_priority = QuestionPriority(priority.lower())
+    except ValueError:
+        question_priority = QuestionPriority.MEDIUM
+    
+    q = Question(
+        question=question,
+        context=context,
+        asked_by=agent_id,
+        priority=question_priority,
+    )
+    session.state.questions.append(q)
+    storage.save_session(session)
+    
+    logger.info(f"add_question | session={session_id} | agent={agent_id} | priority={priority} | question_id={q.id}")
+    
+    return {
+        "success": True,
+        "question_id": q.id,
+        "priority": question_priority.value,
+        "message": f"Question added. User will be notified to answer."
+    }
+
+
+@mcp.tool
+def get_pending_questions(ctx: Context) -> dict[str, Any]:
+    """Get all unanswered questions for this session.
+    
+    Use this to check if there are questions waiting for user answers.
+    
+    Note: Session is determined automatically from request context (X-Session-ID header).
+    """
+    session_id = get_session_id_from_context(ctx)
+    
+    storage = get_storage()
+    session = storage.get_or_create_session(session_id)
+    
+    pending = [q for q in session.state.questions if not q.answered]
+    
+    logger.info(f"get_pending_questions | session={session_id} | count={len(pending)}")
+    
+    return {
+        "count": len(pending),
+        "questions": [q.model_dump() for q in pending]
+    }
+
+
+@mcp.tool
+def get_answered_questions(ctx: Context) -> dict[str, Any]:
+    """Get all answered questions with their answers.
+    
+    Use this to review user answers to previously asked questions.
+    
+    Note: Session is determined automatically from request context (X-Session-ID header).
+    """
+    session_id = get_session_id_from_context(ctx)
+    
+    storage = get_storage()
+    session = storage.get_or_create_session(session_id)
+    
+    answered = [q for q in session.state.questions if q.answered]
+    
+    logger.info(f"get_answered_questions | session={session_id} | count={len(answered)}")
+    
+    return {
+        "count": len(answered),
+        "questions": [q.model_dump() for q in answered]
+    }
+
+
+@mcp.tool
+def get_all_questions(ctx: Context) -> dict[str, Any]:
+    """Get all questions (pending and answered) for this session.
+    
+    Note: Session is determined automatically from request context (X-Session-ID header).
+    """
+    session_id = get_session_id_from_context(ctx)
+    
+    storage = get_storage()
+    session = storage.get_or_create_session(session_id)
+    
+    all_questions = session.state.questions
+    pending_count = sum(1 for q in all_questions if not q.answered)
+    answered_count = sum(1 for q in all_questions if q.answered)
+    
+    logger.info(f"get_all_questions | session={session_id} | total={len(all_questions)} | pending={pending_count}")
+    
+    return {
+        "total": len(all_questions),
+        "pending_count": pending_count,
+        "answered_count": answered_count,
+        "questions": [q.model_dump() for q in all_questions]
+    }
+
+
+@mcp.tool
+def submit_answers(
+    answers: List[dict],
+    ctx: Context,
+) -> dict[str, Any]:
+    """Submit answers to pending questions.
+    
+    This is typically called by the orchestrator when the user submits
+    answers through the UI.
+    
+    Args:
+        answers: List of answer objects, each containing:
+            - question_id (required): ID of the question being answered
+            - answer (required): The user's answer
+    
+    Note: Session is determined automatically from request context (X-Session-ID header).
+    """
+    session_id = get_session_id_from_context(ctx)
+    
+    storage = get_storage()
+    session = storage.get_or_create_session(session_id)
+    
+    answered_count = 0
+    answered_ids = []
+    
+    # Build a map of question IDs for quick lookup
+    question_map = {q.id: q for q in session.state.questions}
+    
+    for answer_data in answers:
+        question_id = answer_data.get("question_id")
+        answer_text = answer_data.get("answer")
+        
+        if not question_id or not answer_text:
+            continue
+            
+        if question_id in question_map:
+            q = question_map[question_id]
+            if not q.answered:  # Don't overwrite existing answers
+                q.answer = answer_text
+                q.answered = True
+                q.answered_at = datetime.now()
+                answered_count += 1
+                answered_ids.append(question_id)
+    
+    storage.save_session(session)
+    
+    # Check remaining pending questions
+    remaining_pending = sum(1 for q in session.state.questions if not q.answered)
+    has_blocking_pending = any(
+        q.priority == QuestionPriority.BLOCKING and not q.answered 
+        for q in session.state.questions
+    )
+    
+    logger.info(f"submit_answers | session={session_id} | answered={answered_count} | remaining_pending={remaining_pending}")
+    
+    return {
+        "success": True,
+        "answers_saved": answered_count,
+        "answered_ids": answered_ids,
+        "remaining_pending": remaining_pending,
+        "has_blocking_pending": has_blocking_pending,
     }
 
 

@@ -135,6 +135,10 @@ export function startSession(
     'tool_call_completed',
     'scratchpad_updated',
     'synthesis_completed',
+    // Question events (human-in-the-loop)
+    'question_added',
+    'awaiting_user_input',
+    'questions_answered',
   ];
 
   console.debug(`[SSE] Connecting to: ${url}`);
@@ -211,36 +215,87 @@ export function startSession(
 }
 
 /**
- * Answer a question in a session.
+ * Questions data from scratchpad.
+ */
+export interface QuestionsData {
+  session_id: string;
+  questions: Array<{
+    id: string;
+    question: string;
+    context?: string;
+    asked_by: string;
+    priority: 'low' | 'medium' | 'high' | 'blocking';
+    asked_at: string;
+    answered: boolean;
+    answer?: string;
+    answered_at?: string;
+  }>;
+  pending_count: number;
+  answered_count: number;
+}
+
+/**
+ * Get questions for a session.
  *
  * @param sessionId - The session ID
- * @param questionId - The question ID
- * @param answer - The user's answer
+ * @param status - Filter by status ('pending', 'answered', or undefined for all)
+ * @returns The questions data
  */
-export async function answerQuestion(
+export async function getQuestions(
   sessionId: string,
-  questionId: string,
-  answer: string
-): Promise<void> {
+  status?: 'pending' | 'answered'
+): Promise<QuestionsData> {
+  const url = new URL(`${API_URL}/research/sessions/${sessionId}/questions`, window.location.origin);
+  if (status) {
+    url.searchParams.set('status', status);
+  }
+  
+  const response = await fetch(url.toString());
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new ApiError(
+      `Failed to get questions: ${response.statusText}`,
+      response.status,
+      error.detail
+    );
+  }
+
+  return response.json();
+}
+
+/**
+ * Submit answers to questions in a session.
+ *
+ * @param sessionId - The session ID
+ * @param answers - Array of question ID and answer pairs
+ * @returns Response with answered question IDs
+ */
+export async function submitAnswers(
+  sessionId: string,
+  answers: Array<{ question_id: string; answer: string }>
+): Promise<{ answered_question_ids: string[]; session_unblocked: boolean }> {
   const response = await fetch(
-    `${API_URL}/research/sessions/${sessionId}/questions/${questionId}/answer`,
+    `${API_URL}/research/sessions/${sessionId}/answers`,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ answer }),
+      body: JSON.stringify({ answers }),
     }
   );
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new ApiError(
-      `Failed to answer question: ${response.statusText}`,
+      `Failed to submit answers: ${response.statusText}`,
       response.status,
       error.detail
     );
   }
+
+  return response.json();
 }
 
 /**

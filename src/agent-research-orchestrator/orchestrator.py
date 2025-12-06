@@ -219,8 +219,8 @@ class ToolCallEventQueue:
 
 # Scratchpad tool names for tracking updates
 SCRATCHPAD_WRITE_TOOLS = {"write_draft_section", "add_note", "add_task", "add_tasks", "update_task"}
-SCRATCHPAD_READ_TOOLS = {"read_section", "list_sections"}
-SCRATCHPAD_QUESTION_TOOLS = {"add_question", "get_pending_questions", "get_answered_questions", "submit_answers"}
+SCRATCHPAD_READ_TOOLS = {"read_section", "list_sections", "read_draft", "read_notes", "read_plan"}
+SCRATCHPAD_QUESTION_TOOLS = {"add_question", "get_pending_questions", "get_answered_questions", "get_all_questions", "submit_answers"}
 
 # Agent tool names (subagents exposed as tools to orchestrator)
 AGENT_TOOL_NAMES = {"market_analysis", "competitor_analysis", "location_scouting", "finance_analysis", "synthesize_findings"}
@@ -631,6 +631,8 @@ class AgentOrchestrator:
         self._session_mcp_tools: dict[str, MCPStreamableHTTPTool] = {}  # Session-scoped MCP tools
         # A2A HTTP clients (session-scoped for header injection)
         self._a2a_http_clients: dict[str, httpx.AsyncClient] = {}
+        # Human-in-the-loop: sessions waiting for user input
+        self._waiting_sessions: dict[str, asyncio.Event] = {}
 
     async def __aenter__(self) -> "AgentOrchestrator":
         """Async context manager entry."""
@@ -1189,6 +1191,188 @@ class AgentOrchestrator:
         finally:
             # Close the uncached MCP connection
             await mcp_tool.__aexit__(None, None, None)
+
+    async def get_scratchpad_questions(self, session_id: str) -> dict[str, Any]:
+        """Get all questions for a session.
+        
+        SECURITY: Uses session-scoped MCP tool with X-Session-ID header.
+        
+        Args:
+            session_id: The session ID for data isolation.
+            
+        Returns:
+            Dict with questions array and metadata.
+            
+        Raises:
+            RuntimeError: If scratchpad not available.
+        """
+        # Use use_cache=False for API proxy calls to avoid stale session issues
+        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy", use_cache=False)
+        if not mcp_tool:
+            raise RuntimeError("MCP Scratchpad not configured")
+        
+        try:
+            # Find get_all_questions function
+            get_questions_fn = None
+            for fn in mcp_tool.functions:
+                if fn.name == "get_all_questions":
+                    get_questions_fn = fn
+                    break
+            
+            if not get_questions_fn:
+                raise RuntimeError("get_all_questions tool not available")
+            
+            # No session_id parameter - it's in the header
+            result = await get_questions_fn()
+            full_text = self._parse_mcp_result(result)
+            
+            if not full_text:
+                return {"questions": [], "total": 0, "pending_count": 0, "answered_count": 0}
+            
+            try:
+                data = json.loads(full_text)
+                return {
+                    "questions": data.get("questions", []),
+                    "total": data.get("total", 0),
+                    "pending_count": data.get("pending_count", 0),
+                    "answered_count": data.get("answered_count", 0),
+                }
+            except json.JSONDecodeError:
+                return {"questions": [], "total": 0, "pending_count": 0, "answered_count": 0}
+        finally:
+            # Close the uncached MCP connection
+            await mcp_tool.__aexit__(None, None, None)
+
+    async def submit_scratchpad_answers(
+        self, session_id: str, answers: list[dict[str, str]]
+    ) -> dict[str, Any]:
+        """Submit answers to questions via MCP scratchpad.
+        
+        SECURITY: Uses session-scoped MCP tool with X-Session-ID header.
+        
+        Args:
+            session_id: The session ID for data isolation.
+            answers: List of {question_id, answer} dicts.
+            
+        Returns:
+            Dict with result from submit_answers tool.
+            
+        Raises:
+            RuntimeError: If scratchpad not available.
+        """
+        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy", use_cache=False)
+        if not mcp_tool:
+            raise RuntimeError("MCP Scratchpad not configured")
+        
+        try:
+            # Find submit_answers function
+            submit_fn = None
+            for fn in mcp_tool.functions:
+                if fn.name == "submit_answers":
+                    submit_fn = fn
+                    break
+            
+            if not submit_fn:
+                raise RuntimeError("submit_answers tool not available")
+            
+            # Call with answers
+            result = await submit_fn(answers=answers)
+            full_text = self._parse_mcp_result(result)
+            
+            if not full_text:
+                return {"answers_saved": 0, "remaining_pending": 0}
+            
+            try:
+                return json.loads(full_text)
+            except json.JSONDecodeError:
+                return {"answers_saved": 0, "remaining_pending": 0}
+        finally:
+            # Close the uncached MCP connection
+            await mcp_tool.__aexit__(None, None, None)
+
+    def is_session_waiting_for_input(self, session_id: str) -> bool:
+        """Check if a session's workflow is waiting for user input.
+        
+        Args:
+            session_id: The session ID to check.
+            
+        Returns:
+            True if the session is blocked waiting for user input.
+        """
+        return session_id in self._waiting_sessions
+
+    def unblock_session(self, session_id: str) -> bool:
+        """Unblock a session that was waiting for user input.
+        
+        Args:
+            session_id: The session ID to unblock.
+            
+        Returns:
+            True if session was unblocked, False if it wasn't waiting.
+        """
+        if session_id in self._waiting_sessions:
+            event = self._waiting_sessions.pop(session_id)
+            event.set()  # Signal the asyncio.Event to unblock
+            logger.info(f"Session {session_id} unblocked")
+            return True
+        return False
+
+    async def request_human_input(
+        self,
+        session_id: str,
+        reason: str,
+        blocking_question_ids: list[str],
+        event_queue: "ToolCallEventQueue",
+    ) -> str:
+        """Block workflow until user provides input.
+        
+        This is a LOCAL orchestrator function (not an MCP tool). When called:
+        1. Emits awaiting_user_input SSE event via event_queue
+        2. Creates an asyncio.Event and stores it in _waiting_sessions
+        3. Awaits the Event (blocks workflow)
+        4. Returns guidance message when unblocked
+        
+        The workflow is unblocked when user submits answers via POST /answers endpoint,
+        which calls unblock_session().
+        
+        Args:
+            session_id: The session ID.
+            reason: Human-readable explanation of why input is needed.
+            blocking_question_ids: IDs of questions that triggered this block.
+            event_queue: Queue for emitting SSE events.
+            
+        Returns:
+            Guidance message to tell the agent to read answered questions.
+        """
+        logger.info(f"Workflow blocking for human input: session={session_id}, reason={reason}")
+        
+        # Emit SSE event to notify UI
+        await event_queue.put({
+            "type": "awaiting_user_input",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "session_id": session_id,
+            "data": {
+                "reason": reason,
+                "blocking_question_ids": blocking_question_ids,
+            }
+        })
+        
+        # Create event for blocking
+        wait_event = asyncio.Event()
+        self._waiting_sessions[session_id] = wait_event
+        
+        # Wait for user to submit answers (unblock_session will set the event)
+        logger.info(f"Workflow waiting for user input: session={session_id}")
+        await wait_event.wait()
+        
+        logger.info(f"Workflow resumed after user input: session={session_id}")
+        
+        # Return guidance for the agent
+        return (
+            "User has provided answers to your questions. "
+            "Please read the answered questions using get_answered_questions tool "
+            "to see their responses and continue your research accordingly."
+        )
 
     def _ensure_credential(self) -> DefaultAzureCredential:
         """Ensure credential is initialized."""
@@ -2077,6 +2261,34 @@ class AgentOrchestrator:
                                 task_update=task_update,
                             ).model_dump(),
                         )
+                    
+                    # If this was add_question, emit QUESTION_ADDED event
+                    tool_type = tool_event.get("tool_type")
+                    if tool_type == "add_question":
+                        output = event_data_completed.output
+                        question_id = None
+                        if isinstance(output, dict):
+                            question_id = output.get("question_id")
+                        elif isinstance(output, str):
+                            try:
+                                parsed = json.loads(output)
+                                question_id = parsed.get("question_id")
+                            except json.JSONDecodeError:
+                                pass
+                        
+                        input_args = self._tool_call_log[-1].get("input_args", {}) if self._tool_call_log else {}
+                        yield SSEEvent(
+                            event_type=SSEEventType.QUESTION_ADDED,
+                            session_id=session_id,
+                            timestamp=event_timestamp,
+                            data={
+                                "question_id": question_id,
+                                "question": input_args.get("question", ""),
+                                "context": input_args.get("context", ""),
+                                "priority": input_args.get("priority", "medium"),
+                                "asked_by": event_data_completed.agent_name,
+                            },
+                        )
                 
                 elif tool_event["type"] == "tool_failed":
                     event_data_failed: ToolCallFailedData = tool_event["event_data"]
@@ -2136,6 +2348,19 @@ class AgentOrchestrator:
                         data={
                             "subagent_name": subagent_progress.subagent_name,
                             "text_chunk": subagent_progress.text_chunk,
+                        },
+                    )
+                
+                # === Human-in-the-loop events ===
+                elif tool_event["type"] == "awaiting_user_input":
+                    event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
+                    yield SSEEvent(
+                        event_type=SSEEventType.AWAITING_USER_INPUT,
+                        session_id=session_id,
+                        timestamp=event_timestamp,
+                        data={
+                            "reason": tool_event["data"].get("reason", ""),
+                            "blocking_question_ids": tool_event["data"].get("blocking_question_ids", []),
                         },
                     )
 

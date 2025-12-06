@@ -5,8 +5,15 @@ the Microsoft Agent Framework Market Analyst agent, making it accessible
 to other A2A-compliant agents.
 
 The A2A protocol is defined at: https://a2a-protocol.org/latest/specification/
+
+Streaming & Keepalive:
+The server enables A2A streaming to prevent connection timeouts during long
+operations. Azure Load Balancer has a 4-minute idle timeout that drops connections
+with no data flow. By enabling streaming and sending periodic status updates,
+the connection stays alive for operations that may take several minutes.
 """
 
+import asyncio
 import logging
 import secrets
 
@@ -219,12 +226,17 @@ class MarketAnalystExecutor(AgentExecutor):
         
         If X-Session-ID header was provided in the request, the agent
         will have access to session-scoped MCP Scratchpad for collaboration.
+        
+        Keepalive: For long-running operations, sends periodic status updates
+        to prevent Azure Load Balancer from dropping the idle connection
+        (4-minute timeout).
 
         Args:
             context: The request context containing the message and task info.
             event_queue: Queue for sending events back to the client.
         """
         session_scoped_agent: MarketAnalystAgent | None = None
+        keepalive_task: asyncio.Task | None = None
         try:
             # Extract session_id from context state (set by SessionContextBuilder)
             session_id = context.call_context.state.get("session_id") if context.call_context else None
@@ -260,8 +272,33 @@ class MarketAnalystExecutor(AgentExecutor):
             # Mark task as working
             await updater.start_work()
 
+            # Start keepalive task to send periodic status updates
+            # This prevents Azure LB 4-min idle timeout from dropping the connection
+            async def send_keepalive():
+                """Send periodic status updates to keep connection alive."""
+                keepalive_count = 0
+                while True:
+                    await asyncio.sleep(60)  # Send every 60 seconds
+                    keepalive_count += 1
+                    logger.debug(f"Sending keepalive status update #{keepalive_count}")
+                    await updater.update_status(
+                        state=TaskState.working,
+                        message=new_agent_text_message(
+                            f"Analysis in progress... ({keepalive_count} min elapsed)"
+                        ),
+                    )
+            
+            keepalive_task = asyncio.create_task(send_keepalive())
+
             # Run the agent
             response_text = await agent.run(user_message)
+
+            # Cancel keepalive before completing
+            keepalive_task.cancel()
+            try:
+                await keepalive_task
+            except asyncio.CancelledError:
+                pass
 
             # Add response as artifact and complete
             await updater.add_artifact(
@@ -276,6 +313,13 @@ class MarketAnalystExecutor(AgentExecutor):
             logger.exception(f"Error executing agent: {e}")
             raise ServerError(error=UnsupportedOperationError(message=str(e)))
         finally:
+            # Cancel keepalive task if still running
+            if keepalive_task is not None and not keepalive_task.done():
+                keepalive_task.cancel()
+                try:
+                    await keepalive_task
+                except asyncio.CancelledError:
+                    pass
             # Clean up session-scoped agent resources
             if session_scoped_agent is not None:
                 await session_scoped_agent.close()
@@ -341,7 +385,7 @@ def create_agent_card(port: int) -> AgentCard:
         version=settings.a2a_agent_version,
         url=settings.a2a_public_url,
         capabilities=AgentCapabilities(
-            streaming=False,
+            streaming=True,  # Enable SSE streaming to keep connection alive for long-running ops
             pushNotifications=False,
             stateTransitionHistory=False,
         ),

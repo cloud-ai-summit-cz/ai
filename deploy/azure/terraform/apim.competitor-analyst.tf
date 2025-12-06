@@ -255,7 +255,9 @@ resource "azapi_resource" "apim_api_a2a_competitor_analyst_policy" {
     </cors>
   </inbound>
   <backend>
-    <base />
+    <!-- Extended timeout (230s max effective due to Azure LB 4-min idle limit) -->
+    <!-- buffer-response=false allows streaming/keepalive data to flow through -->
+    <forward-request timeout="230" buffer-response="false" />
   </backend>
   <outbound>
     <base />

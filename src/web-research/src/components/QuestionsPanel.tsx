@@ -24,8 +24,10 @@ interface QuestionsPanelProps {
 
 function getPriorityStyle(priority: Question['priority']): string {
   switch (priority) {
-    case 'high':
+    case 'blocking':
       return 'bg-red-500/20 text-red-400 border-red-500/30';
+    case 'high':
+      return 'bg-orange-500/20 text-orange-400 border-orange-500/30';
     case 'medium':
       return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
     case 'low':
@@ -59,31 +61,29 @@ function QuestionCard({
   onAnswer: (answer: string) => void;
 }) {
   const [inputValue, setInputValue] = useState('');
-  const [selectedOption, setSelectedOption] = useState<string | null>(null);
   
   const handleSubmit = () => {
-    const answer = question.options ? selectedOption : inputValue;
-    if (answer) {
-      onAnswer(answer);
+    if (inputValue) {
+      onAnswer(inputValue);
       setInputValue('');
-      setSelectedOption(null);
     }
   };
   
-  const isAnswered = !!question.answer;
+  const isAnswered = question.answered;
+  const isBlocking = question.priority === 'blocking';
   
   return (
     <div 
       className={`
         p-4 border border-border rounded-lg mb-4 last:mb-0
-        ${question.blocking && !isAnswered ? 'border-red-500/50 bg-red-500/5' : 'bg-surface-light/30'}
+        ${isBlocking && !isAnswered ? 'border-red-500/50 bg-red-500/5' : 'bg-surface-light/30'}
         ${isAnswered ? 'opacity-60' : ''}
       `}
     >
       {/* Header */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2">
-          {question.blocking ? (
+          {isBlocking ? (
             <AlertCircle className="w-5 h-5 text-red-400" />
           ) : (
             <HelpCircle className="w-5 h-5 text-yellow-400" />
@@ -91,17 +91,14 @@ function QuestionCard({
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${getPriorityStyle(question.priority)}`}>
             {question.priority}
           </span>
-          {question.blocking && (
-            <span className="text-xs text-red-400 font-medium">Blocking</span>
-          )}
         </div>
-        <span className={`text-xs ${getAgentColor(question.askedBy)}`}>
-          from {question.askedBy}
+        <span className={`text-xs ${getAgentColor(question.asked_by)}`}>
+          from {question.asked_by}
         </span>
       </div>
       
       {/* Question */}
-      <p className="text-text font-medium mb-2">{question.text}</p>
+      <p className="text-text font-medium mb-2">{question.question}</p>
       
       {question.context && (
         <p className="text-sm text-text-muted mb-4 italic">
@@ -114,33 +111,6 @@ function QuestionCard({
         <div className="flex items-center gap-2 p-3 bg-green-500/10 rounded border border-green-500/30">
           <CheckCircle2 className="w-4 h-4 text-green-400" />
           <span className="text-sm text-green-400">Answered: {question.answer}</span>
-        </div>
-      ) : question.options ? (
-        <div className="space-y-2">
-          {question.options.map((option) => (
-            <button
-              key={option}
-              onClick={() => setSelectedOption(option)}
-              className={`
-                w-full text-left px-4 py-2 rounded border transition-colors
-                ${selectedOption === option 
-                  ? 'bg-accent/20 border-accent text-accent' 
-                  : 'bg-surface-dark border-border hover:border-text-dim text-text'
-                }
-              `}
-            >
-              {option}
-            </button>
-          ))}
-          {selectedOption && (
-            <button
-              onClick={handleSubmit}
-              className="w-full mt-2 px-4 py-2 bg-accent hover:bg-accent-hover text-white rounded font-medium transition-colors flex items-center justify-center gap-2"
-            >
-              <Send className="w-4 h-4" />
-              Submit Answer
-            </button>
-          )}
         </div>
       ) : (
         <div className="flex gap-2">
@@ -166,9 +136,9 @@ function QuestionCard({
 }
 
 export function QuestionsPanel({ questions, onAnswer, isModal, onClose }: QuestionsPanelProps) {
-  const pendingQuestions = questions.filter(q => !q.answer);
-  const answeredQuestions = questions.filter(q => q.answer);
-  const hasBlockingQuestions = pendingQuestions.some(q => q.blocking);
+  const pendingQuestions = questions.filter(q => !q.answered);
+  const answeredQuestions = questions.filter(q => q.answered);
+  const hasBlockingQuestions = pendingQuestions.some(q => q.priority === 'blocking');
   
   const content = (
     <>

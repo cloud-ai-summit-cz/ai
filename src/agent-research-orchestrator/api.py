@@ -83,8 +83,11 @@ from sse_starlette.sse import EventSourceResponse
 from __init__ import __version__
 from config import get_settings
 from models import (
+    AnswersRequest,
+    AnswersResponse,
     CreateSessionRequest,
     HealthStatus,
+    QuestionsResponse,
     ResearchSession,
     SessionListResponse,
 )
@@ -541,6 +544,118 @@ async def get_draft(session_id: str) -> dict[str, Any]:
             "session_id": session_id,
             **draft_data,
         }
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+# === Questions Endpoints (Human-in-the-Loop) ===
+
+
+@app.get("/research/sessions/{session_id}/questions", response_model=QuestionsResponse, tags=["Research", "Questions"])
+async def get_questions(session_id: str, status: str | None = None) -> QuestionsResponse:
+    """Get all questions for a session.
+    
+    Returns questions from agents that need user input. Frontend should poll
+    this endpoint to display questions to the user.
+    
+    Args:
+        session_id: The session ID.
+        status: Optional filter - 'pending', 'answered', or 'all' (default).
+
+    Returns:
+        Questions with workflow status.
+
+    Raises:
+        HTTPException: If session not found.
+    """
+    orchestrator = get_orchestrator()
+    session = orchestrator.get_session(session_id)
+
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    try:
+        questions_data = await orchestrator.get_scratchpad_questions(session_id=session_id)
+        
+        all_questions = questions_data.get("questions", [])
+        
+        # Apply status filter if provided
+        if status == "pending":
+            filtered_questions = [q for q in all_questions if not q.get("answered", False)]
+        elif status == "answered":
+            filtered_questions = [q for q in all_questions if q.get("answered", False)]
+        else:
+            filtered_questions = all_questions
+        
+        pending_count = sum(1 for q in all_questions if not q.get("answered", False))
+        answered_count = sum(1 for q in all_questions if q.get("answered", False))
+        has_blocking_pending = any(
+            q.get("priority") == "blocking" and not q.get("answered", False)
+            for q in all_questions
+        )
+        
+        # Check if workflow is waiting for input
+        workflow_waiting = orchestrator.is_session_waiting_for_input(session_id)
+        
+        return QuestionsResponse(
+            session_id=session_id,
+            questions=filtered_questions,
+            pending_count=pending_count,
+            answered_count=answered_count,
+            has_blocking_pending=has_blocking_pending,
+            workflow_waiting=workflow_waiting,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/research/sessions/{session_id}/answers", response_model=AnswersResponse, tags=["Research", "Questions"])
+async def submit_answers(session_id: str, request: AnswersRequest) -> AnswersResponse:
+    """Submit answers to questions and unblock workflow.
+    
+    Submits user answers to one or more questions. If the workflow is currently
+    waiting for user input, this automatically unblocks it.
+    
+    Args:
+        session_id: The session ID.
+        request: The answers to submit.
+
+    Returns:
+        Result with number of answers saved and workflow status.
+
+    Raises:
+        HTTPException: If session not found or error submitting answers.
+    """
+    orchestrator = get_orchestrator()
+    session = orchestrator.get_session(session_id)
+
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    try:
+        # Convert request to format expected by MCP tool
+        answers_list = [{"question_id": a.question_id, "answer": a.answer} for a in request.answers]
+        
+        # Submit answers via MCP scratchpad
+        result = await orchestrator.submit_scratchpad_answers(
+            session_id=session_id, 
+            answers=answers_list
+        )
+        
+        # Check if workflow was waiting and should be unblocked
+        workflow_unblocked = False
+        if orchestrator.is_session_waiting_for_input(session_id):
+            # Unblock the workflow
+            orchestrator.unblock_session(session_id)
+            workflow_unblocked = True
+            logger.info(f"Workflow unblocked for session {session_id}")
+        
+        return AnswersResponse(
+            session_id=session_id,
+            answers_saved=result.get("answers_saved", 0),
+            workflow_unblocked=workflow_unblocked,
+            remaining_pending=result.get("remaining_pending", 0),
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 

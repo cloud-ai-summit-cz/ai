@@ -138,9 +138,10 @@ class SSEEventType(str, Enum):
     SCRATCHPAD_UPDATED = "scratchpad_updated"
     SCRATCHPAD_SNAPSHOT = "scratchpad_snapshot"
     
-    # Questions (primary)
+    # Questions (primary - human-in-the-loop)
     QUESTION_ADDED = "question_added"
-    QUESTION_ANSWERED = "question_answered"
+    AWAITING_USER_INPUT = "awaiting_user_input"
+    QUESTIONS_ANSWERED = "questions_answered"
     
     # Synthesis (primary)
     SYNTHESIS_STARTED = "synthesis_started"
@@ -356,6 +357,82 @@ class ScratchpadUpdatedData(BaseModel):
     tasks_created: int | None = Field(default=None, description="Number of tasks created")
     tasks: list[dict] | None = Field(default=None, description="Full task list for add_tasks tool")
     task_update: dict | None = Field(default=None, description="Task update details")
+
+
+# === Question Models (Human-in-the-Loop) ===
+
+
+class QuestionPriority(str, Enum):
+    """Priority level for a question."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    BLOCKING = "blocking"
+
+
+class Question(BaseModel):
+    """A question from an agent to the user."""
+    id: str = Field(description="Unique question ID")
+    question: str = Field(description="The question text")
+    context: str = Field(description="Why this information is needed")
+    asked_by: str = Field(description="Agent that asked this question")
+    priority: QuestionPriority = Field(description="Question priority level")
+    asked_at: datetime = Field(description="When the question was asked")
+    answered: bool = Field(default=False, description="Whether user has answered")
+    answer: str | None = Field(default=None, description="User's answer if provided")
+    answered_at: datetime | None = Field(default=None, description="When answered")
+
+
+class QuestionAddedData(BaseModel):
+    """Data for QUESTION_ADDED event (sent to UI via SSE)."""
+    question: Question = Field(description="The question that was added")
+
+
+class AwaitingUserInputData(BaseModel):
+    """Data for AWAITING_USER_INPUT event (sent to UI via SSE).
+    
+    Emitted when the orchestrator blocks waiting for user input.
+    """
+    reason: str = Field(description="Why the workflow is waiting")
+    blocking_question_ids: list[str] = Field(
+        default_factory=list,
+        description="IDs of questions that must be answered before proceeding"
+    )
+
+
+class QuestionsAnsweredData(BaseModel):
+    """Data for QUESTIONS_ANSWERED event (sent to UI via SSE)."""
+    answered_ids: list[str] = Field(description="IDs of questions that were answered")
+    workflow_resumed: bool = Field(description="Whether answering unblocked the workflow")
+
+
+class QuestionsResponse(BaseModel):
+    """Response from GET /questions endpoint."""
+    session_id: str
+    questions: list[Question] = Field(default_factory=list)
+    pending_count: int = Field(description="Number of unanswered questions")
+    answered_count: int = Field(description="Number of answered questions")
+    has_blocking_pending: bool = Field(description="True if any blocking questions unanswered")
+    workflow_waiting: bool = Field(description="True if workflow is waiting for input")
+
+
+class AnswerItem(BaseModel):
+    """A single answer to a question."""
+    question_id: str = Field(description="ID of the question being answered")
+    answer: str = Field(description="The user's answer")
+
+
+class AnswersRequest(BaseModel):
+    """Request to submit answers to questions."""
+    answers: list[AnswerItem] = Field(description="List of answers to submit")
+
+
+class AnswersResponse(BaseModel):
+    """Response from POST /answers endpoint."""
+    session_id: str
+    answers_saved: int = Field(description="Number of answers saved")
+    workflow_unblocked: bool = Field(description="True if this unblocked the workflow")
+    remaining_pending: int = Field(description="Number of questions still pending")
 
 
 # === Health Check Models ===

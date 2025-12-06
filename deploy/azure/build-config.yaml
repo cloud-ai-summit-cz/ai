@@ -7,48 +7,35 @@ acr_name: acrrgsummitai5oxyy5
 
 # Container definitions
 containers:
-  - name: mcp-scratchpad
-    # Path relative to this config file
-    path: ../../src/mcp-scratchpad
-    # Image name (will be prefixed with ACR login server)
-    image: mcp-scratchpad
-    # Optional: specific tag (default: latest)
-    tag: latest
+  # - name: mcp-scratchpad
+  #   path: ../../src/mcp-scratchpad
+  #   image: mcp-scratchpad
+  #   tag: latest
     
-  - name: agent-location-scout
-    path: ../../src/agent-location-scout
-    image: agent-location-scout
-    tag: latest
-    
-  - name: test-hosted-agent
-    path: ../../src/test-hosted-agent
-    image: test-hosted-agent
-    tag: latest
+  # - name: mcp-business-registry
+  #   path: ../../src/mcp-business-registry
+  #   image: mcp-business-registry
+  #   tag: latest
 
-  - name: mcp-business-registry
-    path: ../../src/mcp-business-registry
-    image: mcp-business-registry
-    tag: latest
+  # - name: mcp-government-data
+  #   path: ../../src/mcp-government-data
+  #   image: mcp-government-data
+  #   tag: latest
 
-  - name: mcp-government-data
-    path: ../../src/mcp-government-data
-    image: mcp-government-data
-    tag: latest
+  # - name: mcp-demographics
+  #   path: ../../src/mcp-demographics
+  #   image: mcp-demographics
+  #   tag: latest
 
-  - name: mcp-demographics
-    path: ../../src/mcp-demographics
-    image: mcp-demographics
-    tag: latest
+  # - name: mcp-real-estate
+  #   path: ../../src/mcp-real-estate
+  #   image: mcp-real-estate
+  #   tag: latest
 
-  - name: mcp-real-estate
-    path: ../../src/mcp-real-estate
-    image: mcp-real-estate
-    tag: latest
-
-  - name: mcp-calculator
-    path: ../../src/mcp-calculator
-    image: mcp-calculator
-    tag: latest
+  # - name: mcp-calculator
+  #   path: ../../src/mcp-calculator
+  #   image: mcp-calculator
+  #   tag: latest
 
   - name: agent-market-analyst-a2a
     # Build context is agent-market-analyst (to include prompts/)
@@ -89,5 +76,10 @@ containers:
     dockerfile: standalone/a2a/maf/Dockerfile
     image: agent-synthesizer-a2a
     tag: latest
+
+  # - name: test-hosted-agent
+  #   path: ../../src/test-hosted-agent
+  #   image: test-hosted-agent
+  #   tag: latest
 
 build_all_by_default: true

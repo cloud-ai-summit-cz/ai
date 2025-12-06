@@ -5,8 +5,13 @@ the Microsoft Agent Framework Location Scout agent, making it accessible
 to other A2A-compliant agents.
 
 The A2A protocol is defined at: https://a2a-protocol.org/latest/specification/
+
+Note: This server enables streaming mode to support keepalive heartbeats during
+long-running agent tasks. This prevents Azure Load Balancer from dropping idle
+connections (4-minute timeout) by sending periodic TaskStatusUpdateEvent messages.
 """
 
+import asyncio
 import logging
 import secrets
 
@@ -260,8 +265,32 @@ class LocationScoutExecutor(AgentExecutor):
             # Mark task as working
             await updater.start_work()
 
-            # Run the agent
-            response_text = await agent.run(user_message)
+            # Start keepalive task to prevent Azure LB from dropping idle connections
+            # Azure Load Balancer has a 4-minute idle timeout that cannot be changed
+            async def send_keepalive():
+                keepalive_count = 0
+                while True:
+                    await asyncio.sleep(60)  # Send every 60 seconds (well under 4-min limit)
+                    keepalive_count += 1
+                    await updater.update_status(
+                        state=TaskState.working,
+                        message=new_agent_text_message(
+                            f"Analysis in progress... ({keepalive_count} min elapsed)"
+                        ),
+                    )
+
+            keepalive_task = asyncio.create_task(send_keepalive())
+
+            try:
+                # Run the agent
+                response_text = await agent.run(user_message)
+            finally:
+                # Cancel keepalive task when agent completes
+                keepalive_task.cancel()
+                try:
+                    await keepalive_task
+                except asyncio.CancelledError:
+                    pass
 
             # Add response as artifact and complete
             await updater.add_artifact(
@@ -341,7 +370,7 @@ def create_agent_card(port: int) -> AgentCard:
         version=settings.a2a_agent_version,
         url=settings.a2a_public_url,
         capabilities=AgentCapabilities(
-            streaming=False,
+            streaming=True,
             pushNotifications=False,
             stateTransitionHistory=False,
         ),

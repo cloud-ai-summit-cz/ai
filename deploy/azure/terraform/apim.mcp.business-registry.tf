@@ -76,3 +76,47 @@ resource "azapi_resource" "apim_mcp_business_registry_api" {
     azapi_resource.apim_mcp_business_registry_backend
   ]
 }
+
+# ============================================================================
+# MCP API Policy
+# ============================================================================
+# Configures timeout and buffering policies for the MCP service.
+# Extended timeout to handle long-running operations (max effective ~230s
+# due to Azure Load Balancer 4-minute idle connection limit).
+
+resource "azapi_resource" "apim_mcp_business_registry_policy" {
+  type      = "Microsoft.ApiManagement/service/apis/policies@2024-10-01-preview"
+  name      = "policy"
+  parent_id = azapi_resource.apim_mcp_business_registry_api.id
+
+  body = {
+    properties = {
+      format = "xml"
+      value  = <<-XML
+<policies>
+  <inbound>
+    <base />
+  </inbound>
+  <backend>
+    <!-- Extended timeout (230s max effective due to Azure LB 4-min idle limit) -->
+    <!-- buffer-response=false allows streaming/keepalive data to flow through -->
+    <forward-request timeout="230" buffer-response="false" />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>
+      XML
+    }
+  }
+
+  # Ignore XML whitespace normalization differences
+  lifecycle {
+    ignore_changes = [
+      body.properties.value
+    ]
+  }
+}

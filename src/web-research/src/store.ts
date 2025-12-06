@@ -131,7 +131,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
         ...state.scratchpad,
         questions: [...state.scratchpad.questions, question],
       },
-      showQuestionModal: question.blocking || state.showQuestionModal,
+      showQuestionModal: question.priority === 'blocking' || state.showQuestionModal,
     })),
 
   answerQuestion: (questionId, answer) =>
@@ -140,7 +140,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
         ...state.scratchpad,
         questions: state.scratchpad.questions.map((q) =>
           q.id === questionId
-            ? { ...q, answer, answeredAt: new Date().toISOString() }
+            ? { ...q, answer, answered: true, answered_at: new Date().toISOString() }
             : q
         ),
       },
@@ -690,6 +690,74 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
             agentColor: getAgentColor(subagentData.subagent_name),
           });
         }
+        break;
+      }
+
+      // === Question/HITL events ===
+      case 'question_added': {
+        const questionData = data as {
+          question_id: string;
+          question: string;
+          context?: string;
+          asked_by?: string;
+          priority?: 'low' | 'medium' | 'high' | 'blocking';
+          timestamp?: string;
+        };
+        const newQuestion = {
+          id: questionData.question_id,
+          question: questionData.question,
+          context: questionData.context,
+          asked_by: questionData.asked_by || 'Agent',
+          priority: questionData.priority || 'medium',
+          asked_at: questionData.timestamp || timestamp,
+          answered: false,
+        };
+        store.addQuestion(newQuestion);
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: 'system',
+          timestamp,
+          actor: formatAgentName(questionData.asked_by),
+          action: `❓ Asked: ${questionData.question.substring(0, 80)}${questionData.question.length > 80 ? '...' : ''}`,
+          preview: questionData.context,
+          agentColor: getAgentColor(questionData.asked_by),
+        });
+        break;
+      }
+
+      case 'awaiting_user_input': {
+        const awaitingData = data as {
+          reason?: string;
+          blocking_question_ids?: string[];
+          pending_question_count?: number;
+        };
+        store.setShowQuestionModal(true);
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: 'system',
+          timestamp,
+          actor: 'System',
+          action: `⏸️ Workflow paused - awaiting user input`,
+          preview: awaitingData.reason || `${awaitingData.pending_question_count || 0} question(s) need your response`,
+        });
+        break;
+      }
+
+      case 'questions_answered': {
+        const answeredData = data as {
+          answered_question_ids?: string[];
+          answer_count?: number;
+        };
+        store.addActivity({
+          id: `activity-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: 'system',
+          timestamp,
+          actor: 'User',
+          action: `✅ Answered ${answeredData.answer_count || answeredData.answered_question_ids?.length || 0} question(s)`,
+          success: true,
+        });
+        // Refresh questions from server to get updated state
+        store.pollScratchpadState().catch(() => {});
         break;
       }
 

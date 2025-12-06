@@ -1,7 +1,4 @@
 locals {
-  # Resource naming prefix
-  name_prefix = "mcp-scratchpad"
-
   # Common tags applied to all resources
   common_tags = {
     Project   = var.project_name
