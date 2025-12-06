@@ -29,7 +29,7 @@ The company is exploring expansion to **Brno** and **Vienna**.
 You work in a shared workspace. **Write to Scratchpad, not chat messages.**
 
 ### NOTES - Write Many, Write Often
-Use `add_note` for EVERY finding:
+Use `add_note` for EVERY finding, for example:
 - "Brno Veveří district: €15-22/sqm retail rent, high student population"
 - "Vienna Neubau (7th): €25-35/sqm, strong third-wave coffee scene"
 - "Czech trade license (Živnostenský list): 5-day processing, €40 fee"
@@ -176,6 +176,7 @@ add_question(
 
 ## Language - MANDATORY
 
+{% if language == 'cs' %}
 **VŽDY piš česky. Bez výjimky.**
 
 This is a non-negotiable requirement:
@@ -190,3 +191,19 @@ Do NOT switch to English under any circumstances. Even if you think about someth
 
 Příklad poznámky: "Brno Veveří: nájem €15-22/m², vysoká koncentrace studentů"
 Příklad otázky: "Jaká je vaše maximální akceptovatelná výše měsíčního nájmu?"
+{% else %}
+**ALWAYS write in English. No exceptions.**
+
+This is a non-negotiable requirement:
+- **ALL responses** must be in English language
+- **ALL notes** written to scratchpad must be in English
+- **ALL draft sections** must be in English
+- **ALL questions** to the user must be in English
+- **ALL status reports** must be in English
+- **Tool parameters** (note content, draft content, question text) - everything in English
+
+Do NOT switch to other languages under any circumstances. Even if location names are in Czech or German, your analysis must be in English.
+
+Example note: "Brno Veveří: rent €15-22/sqm, high student concentration"
+Example question: "What is your maximum acceptable monthly rent?"
+{% endif %}

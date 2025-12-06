@@ -39,11 +39,13 @@ export class ApiError extends Error {
  * Create a new research session.
  *
  * @param query - The research query to investigate
+ * @param language - The language for responses ('cs' or 'en')
  * @param context - Optional additional context
  * @returns The created session
  */
 export async function createSession(
   query: string,
+  language: 'cs' | 'en' = 'cs',
   context?: Record<string, unknown>
 ): Promise<ResearchSession> {
   const response = await fetch(`${API_URL}/research/sessions`, {
@@ -51,7 +53,7 @@ export async function createSession(
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ query, context }),
+    body: JSON.stringify({ query, language, context }),
   });
 
   if (!response.ok) {

@@ -40,6 +40,7 @@ class LocationScoutAgent:
         self,
         settings: Optional[Settings] = None,
         session_id: Optional[str] = None,
+        language: str = "cs",
     ) -> None:
         """Initialize the Location Scout Agent.
 
@@ -47,9 +48,11 @@ class LocationScoutAgent:
             settings: Configuration settings. If None, loads from environment.
             session_id: Optional session ID for session-scoped MCP tools.
                        When provided, enables collaboration via MCP Scratchpad.
+            language: Language code for responses ('cs' for Czech, 'en' for English).
         """
         self._settings = settings or Settings()
         self._session_id = session_id
+        self._language = language
         self._agent: ChatAgent | None = None
         self._mcp_government_data: MCPStreamableHTTPTool | None = None
         self._mcp_demographics: MCPStreamableHTTPTool | None = None
@@ -58,8 +61,8 @@ class LocationScoutAgent:
 
     @property
     def system_prompt(self) -> str:
-        """Load the system prompt from file."""
-        return self._settings.get_system_prompt()
+        """Load the system prompt from file with language rendering."""
+        return self._settings.get_system_prompt(language=self._language)
 
     async def initialize(self) -> None:
         """Initialize the agent with Azure OpenAI connection and MCP tools."""

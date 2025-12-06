@@ -78,7 +78,7 @@ interface ResearchStore {
   // === SSE & Workflow ===
   sseCleanup: (() => void) | null;
   pollingInterval: ReturnType<typeof setInterval> | null;
-  startResearchSession: (query: string) => Promise<void>;
+  startResearchSession: (query: string, language?: 'cs' | 'en') => Promise<void>;
   handleSSEEvent: (event: SSEEvent) => void;
   pollScratchpadState: () => Promise<void>;
   startPolling: () => void;
@@ -126,7 +126,6 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
     })),
 
   addQuestion: (question) => {
-    console.log('[STORE] addQuestion called:', { id: question.id, question: question.question?.substring(0, 50) });
     set((state) => ({
       scratchpad: {
         ...state.scratchpad,
@@ -137,25 +136,16 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
   },
 
   answerQuestion: (questionId, answer) => {
-    console.log('[STORE] answerQuestion called:', { questionId, answer });
-    const currentQuestions = get().scratchpad.questions;
-    console.log('[STORE] Current questions:', currentQuestions.map(q => ({ id: q.id, answered: q.answered })));
-    
     set((state) => ({
       scratchpad: {
         ...state.scratchpad,
-        questions: state.scratchpad.questions.map((q) => {
-          const shouldUpdate = q.id === questionId;
-          console.log('[STORE] Question', q.id, 'shouldUpdate:', shouldUpdate);
-          return shouldUpdate
+        questions: state.scratchpad.questions.map((q) =>
+          q.id === questionId
             ? { ...q, answer, answered: true, answered_at: new Date().toISOString() }
-            : q;
-        }),
+            : q
+        ),
       },
     }));
-    
-    const updatedQuestions = get().scratchpad.questions;
-    console.log('[STORE] Updated questions:', updatedQuestions.map(q => ({ id: q.id, answered: q.answered, answer: q.answer })));
   },
 
   // === Activity State ===
@@ -275,7 +265,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
     }
   },
 
-  startResearchSession: async (query: string) => {
+  startResearchSession: async (query: string, language: 'cs' | 'en' = 'cs') => {
     const store = get();
 
     if (store.sseCleanup) {
@@ -290,7 +280,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
     });
 
     try {
-      const session = await createSession(query);
+      const session = await createSession(query, language);
       set({ session });
 
       // Add initial activity

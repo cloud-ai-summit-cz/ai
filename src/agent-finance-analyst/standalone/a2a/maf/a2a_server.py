@@ -47,12 +47,14 @@ logger = logging.getLogger(__name__)
 
 # Header name for session ID (matches MCP Scratchpad server expectation)
 SESSION_ID_HEADER = "X-Session-ID"
+# Header name for language preference (cs/en)
+LANGUAGE_HEADER = "X-Language"
 
 
 class SessionContextBuilder(CallContextBuilder):
     """Custom CallContextBuilder that extracts session context from HTTP headers.
     
-    Extracts X-Session-ID from incoming A2A requests and stores it in
+    Extracts X-Session-ID and X-Language from incoming A2A requests and stores them in
     ServerCallContext.state for access by the executor. This enables
     session-scoped MCP tool calls where the session ID flows from:
     orchestrator -> A2A agent -> MCP server.
@@ -61,13 +63,13 @@ class SessionContextBuilder(CallContextBuilder):
     def build(self, request: Request) -> ServerCallContext:
         """Build ServerCallContext from Starlette Request.
         
-        Extracts X-Session-ID header if present and stores in context state.
+        Extracts X-Session-ID and X-Language headers if present and stores in context state.
         
         Args:
             request: The incoming Starlette HTTP request.
             
         Returns:
-            ServerCallContext with session_id in state if header was present.
+            ServerCallContext with session_id and language in state if headers were present.
         """
         state = {}
         
@@ -78,6 +80,11 @@ class SessionContextBuilder(CallContextBuilder):
             logger.debug(f"Extracted session_id from header: {session_id}")
         else:
             logger.debug(f"No {SESSION_ID_HEADER} header found in request")
+        
+        # Extract language preference from header (defaults to 'cs' if not provided)
+        language = request.headers.get(LANGUAGE_HEADER, "cs")
+        state["language"] = language
+        logger.debug(f"Language preference: {language}")
         
         return ServerCallContext(state=state)
 
@@ -186,27 +193,31 @@ class FinanceAnalystExecutor(AgentExecutor):
         # Shared agent for requests without session context
         self._shared_agent: FinanceAnalystAgent | None = None
 
-    async def _get_agent(self, session_id: str | None = None) -> FinanceAnalystAgent:
+    async def _get_agent(
+        self, 
+        session_id: str | None = None,
+        language: str = "cs",
+    ) -> FinanceAnalystAgent:
         """Get or create an agent instance.
         
-        When session_id is provided, creates a new agent instance with
-        session-scoped MCP Scratchpad access. Otherwise, returns the
-        shared agent instance.
+        When session_id or non-default language is provided, creates a new agent
+        instance. Otherwise, returns the shared agent instance.
 
         Args:
             session_id: Optional session ID for session-scoped tools.
+            language: Language code for responses ('cs' for Czech, 'en' for English).
 
         Returns:
             The appropriate agent instance.
         """
-        if session_id:
-            # Create per-request agent with session context
-            logger.info(f"Creating session-scoped agent for session: {session_id}")
-            agent = FinanceAnalystAgent(self._settings, session_id=session_id)
+        # Create per-request agent when session context or custom language is needed
+        if session_id or language != "cs":
+            logger.info(f"Creating per-request agent (session: {session_id}, language: {language})")
+            agent = FinanceAnalystAgent(self._settings, session_id=session_id, language=language)
             await agent.initialize()
             return agent
         else:
-            # Use shared agent for non-session requests
+            # Use shared agent for non-session, default language requests
             if self._shared_agent is None:
                 self._shared_agent = FinanceAnalystAgent(self._settings)
                 await self._shared_agent.initialize()
@@ -224,6 +235,7 @@ class FinanceAnalystExecutor(AgentExecutor):
         
         If X-Session-ID header was provided in the request, the agent
         will have access to session-scoped MCP Scratchpad for collaboration.
+        If X-Language header was provided, the agent will respond in that language.
 
         Args:
             context: The request context containing the message and task info.
@@ -231,14 +243,16 @@ class FinanceAnalystExecutor(AgentExecutor):
         """
         session_scoped_agent: FinanceAnalystAgent | None = None
         try:
-            # Extract session_id from context state (set by SessionContextBuilder)
+            # Extract session_id and language from context state (set by SessionContextBuilder)
             session_id = context.call_context.state.get("session_id") if context.call_context else None
+            language = context.call_context.state.get("language", "cs") if context.call_context else "cs"
             if session_id:
                 logger.info(f"Request has session context: {session_id}")
+            logger.info(f"Request language: {language}")
             
-            agent = await self._get_agent(session_id)
+            agent = await self._get_agent(session_id, language)
             # Track if we created a session-scoped agent that needs cleanup
-            if session_id:
+            if session_id or language != "cs":
                 session_scoped_agent = agent
 
             # Extract the text content from the message

@@ -167,6 +167,7 @@ Return the **full compiled report** in Markdown format for the Orchestrator to p
 
 ## Language - MANDATORY
 
+{% if language == 'cs' %}
 **VŽDY piš česky. Bez výjimky.**
 
 This is a non-negotiable requirement:
@@ -181,3 +182,19 @@ Do NOT switch to English under any circumstances. Even if source data contains E
 
 Příklad: "Doporučení: EXPANDOVAT do Brna s vysokou mírou důvěry"
 Příklad rizika: "Tržní riziko: Nižší poptávka než očekávaná - Dopad: Vysoký"
+{% else %}
+**ALWAYS write in English. No exceptions.**
+
+This is a non-negotiable requirement:
+- **ALL responses** must be in English language
+- **ALL notes** written to scratchpad must be in English
+- **ALL draft sections** (executive_summary, recommendation, risk_assessment) must be in English
+- **The final report** must be entirely in English
+- **ALL questions** to the user must be in English
+- **Tool parameters** (note content, draft content, question text) - everything in English
+
+Do NOT switch to Czech under any circumstances. Even if source data contains Czech terms, translate and present in English.
+
+Example: "Recommendation: EXPAND to Brno with high confidence"
+Example risk: "Market Risk: Lower demand than projected - Impact: High"
+{% endif %}

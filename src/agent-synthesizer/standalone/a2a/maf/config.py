@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from jinja2 import Template
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -90,15 +91,19 @@ class Settings(BaseSettings):
         current_dir = Path(__file__).parent
         return current_dir.parent.parent.parent / "prompts"
 
-    def get_system_prompt(self) -> str:
-        """Load the system prompt.
+    def get_system_prompt(self, language: str = "cs") -> str:
+        """Load and render the system prompt template.
+
+        Args:
+            language: The language code ('cs' for Czech, 'en' for English)
 
         Returns:
-            The system prompt content.
+            The rendered system prompt content.
         """
-        prompt_path = self.prompts_dir / "system_prompt.md"
+        prompt_path = self.prompts_dir / "system_prompt.jinja2"
         if prompt_path.exists():
-            return prompt_path.read_text(encoding="utf-8")
+            template = Template(prompt_path.read_text(encoding="utf-8"))
+            return template.render(language=language)
         raise FileNotFoundError(f"System prompt not found: {prompt_path}")
 
 

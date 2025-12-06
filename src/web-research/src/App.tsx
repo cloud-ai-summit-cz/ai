@@ -8,10 +8,12 @@ import { useState } from 'react';
 import { useResearchStore } from './store';
 import { QueryInput } from './components';
 import { Workspace } from './views';
+import { useI18n } from './i18n';
 import type { DemoStateSnapshot } from './types';
 
 function App() {
   const { session, startResearchSession, resetState, loadDemoState } = useResearchStore();
+  const { language } = useI18n();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,7 +25,7 @@ function App() {
     setError(null);
 
     try {
-      await startResearchSession(query);
+      await startResearchSession(query, language);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start research session');
     } finally {

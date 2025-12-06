@@ -239,6 +239,7 @@ add_question(
 
 ## Language - MANDATORY
 
+{% if language == 'cs' %}
 **VŽDY piš česky. Bez výjimky.**
 
 This is a non-negotiable requirement:
@@ -253,3 +254,19 @@ Do NOT switch to English under any circumstances. Financial terms can remain sta
 
 Příklad poznámky: "Počáteční investice Brno: €85,000-€120,000 celkem"
 Příklad otázky: "Jaký je váš maximální investiční rozpočet pro tuto expanzi?"
+{% else %}
+**ALWAYS write in English. No exceptions.**
+
+This is a non-negotiable requirement:
+- **ALL responses** must be in English language
+- **ALL notes** written to scratchpad must be in English
+- **ALL draft sections** (financial_outlook) must be in English
+- **ALL questions** to the user must be in English
+- **ALL status reports** must be in English
+- **Tool parameters** (note content, draft content, question text) - everything in English
+
+Do NOT switch to other languages under any circumstances. Financial terms should remain standard (ROI, NPV) with English explanations.
+
+Example note: "Initial investment Brno: €85,000-€120,000 total"
+Example question: "What is your maximum investment budget for this expansion?"
+{% endif %}

@@ -1438,12 +1438,14 @@ class AgentOrchestrator:
     async def _create_a2a_market_analyst(
         self,
         session_id: str,
+        language: str = "cs",
     ) -> tuple[A2AAgent, httpx.AsyncClient]:
         """Create an A2A agent client for market-analyst with session headers.
         
         The market-analyst agent runs as a separate A2A service with its own
         MCP tools (demographics, scratchpad). The session_id is passed via
         X-Session-ID header to enable session-scoped MCP Scratchpad access.
+        The language preference is passed via X-Language header.
         
         NOTE: Tool calls made BY the market-analyst (to MCP servers) are NOT
         visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
@@ -1451,6 +1453,7 @@ class AgentOrchestrator:
         
         Args:
             session_id: Session ID for MCP Scratchpad isolation.
+            language: Language for responses: 'cs' for Czech, 'en' for English.
             
         Returns:
             Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
@@ -1465,6 +1468,7 @@ class AgentOrchestrator:
         headers = {
             "X-Session-ID": session_id,
             "X-Caller-Agent": "research-orchestrator",
+            "X-Language": language,
         }
         if self.settings.a2a_market_analyst_api_key:
             headers["Authorization"] = f"Bearer {self.settings.a2a_market_analyst_api_key}"
@@ -1514,13 +1518,14 @@ class AgentOrchestrator:
     async def _create_a2a_competitor_analyst(
         self,
         session_id: str,
+        language: str = "cs",
     ) -> tuple[A2AAgent, httpx.AsyncClient]:
         """Create an A2A agent client for competitor-analyst with session headers.
         
         The competitor-analyst agent runs as a separate A2A service with its own
         MCP tools (business-registry, scratchpad) and Grounded Web Search (Bing).
         The session_id is passed via X-Session-ID header to enable session-scoped
-        MCP Scratchpad access.
+        MCP Scratchpad access. The language preference is passed via X-Language header.
         
         NOTE: Tool calls made BY the competitor-analyst (to MCP servers) are NOT
         visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
@@ -1528,6 +1533,7 @@ class AgentOrchestrator:
         
         Args:
             session_id: Session ID for MCP Scratchpad isolation.
+            language: Language for responses: 'cs' for Czech, 'en' for English.
             
         Returns:
             Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
@@ -1542,6 +1548,7 @@ class AgentOrchestrator:
         headers = {
             "X-Session-ID": session_id,
             "X-Caller-Agent": "research-orchestrator",
+            "X-Language": language,
         }
         if self.settings.a2a_competitor_analyst_api_key:
             headers["Authorization"] = f"Bearer {self.settings.a2a_competitor_analyst_api_key}"
@@ -1591,6 +1598,7 @@ class AgentOrchestrator:
     async def _create_a2a_finance_analyst(
         self,
         session_id: str,
+        language: str = "cs",
     ) -> tuple[A2AAgent, httpx.AsyncClient]:
         """Create an A2A agent client for finance-analyst with session headers.
         
@@ -1598,7 +1606,7 @@ class AgentOrchestrator:
         MCP tools (calculator, real-estate, government-data, business-registry, scratchpad)
         and Grounded Web Search (Bing) for real-time financial data.
         The session_id is passed via X-Session-ID header to enable session-scoped
-        MCP Scratchpad access.
+        MCP Scratchpad access. The language preference is passed via X-Language header.
         
         NOTE: Tool calls made BY the finance-analyst (to MCP servers) are NOT
         visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
@@ -1606,6 +1614,7 @@ class AgentOrchestrator:
         
         Args:
             session_id: Session ID for MCP Scratchpad isolation.
+            language: Language for responses: 'cs' for Czech, 'en' for English.
             
         Returns:
             Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
@@ -1620,6 +1629,7 @@ class AgentOrchestrator:
         headers = {
             "X-Session-ID": session_id,
             "X-Caller-Agent": "research-orchestrator",
+            "X-Language": language,
         }
         if self.settings.a2a_finance_analyst_api_key:
             headers["Authorization"] = f"Bearer {self.settings.a2a_finance_analyst_api_key}"
@@ -1669,6 +1679,7 @@ class AgentOrchestrator:
     async def _create_a2a_location_scout(
         self,
         session_id: str,
+        language: str = "cs",
     ) -> tuple[A2AAgent, httpx.AsyncClient]:
         """Create an A2A agent client for location-scout with session headers.
         
@@ -1676,6 +1687,7 @@ class AgentOrchestrator:
         MCP tools (government-data, demographics, real-estate, scratchpad) and
         Grounded Web Search (Bing). The session_id is passed via X-Session-ID
         header to enable session-scoped MCP Scratchpad access.
+        The language preference is passed via X-Language header.
         
         NOTE: Tool calls made BY the location-scout (to MCP servers) are NOT
         visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
@@ -1683,6 +1695,7 @@ class AgentOrchestrator:
         
         Args:
             session_id: Session ID for MCP Scratchpad isolation.
+            language: Language for responses: 'cs' for Czech, 'en' for English.
             
         Returns:
             Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
@@ -1697,6 +1710,7 @@ class AgentOrchestrator:
         headers = {
             "X-Session-ID": session_id,
             "X-Caller-Agent": "research-orchestrator",
+            "X-Language": language,
         }
         if self.settings.a2a_location_scout_api_key:
             headers["Authorization"] = f"Bearer {self.settings.a2a_location_scout_api_key}"
@@ -1746,6 +1760,7 @@ class AgentOrchestrator:
     async def _create_a2a_synthesizer(
         self,
         session_id: str,
+        language: str = "cs",
     ) -> tuple[A2AAgent, httpx.AsyncClient]:
         """Create an A2A agent client for synthesizer with session headers.
         
@@ -1754,6 +1769,7 @@ class AgentOrchestrator:
         the scratchpad and performing any final calculations needed for the
         synthesized report. The session_id is passed via X-Session-ID header
         to enable session-scoped MCP Scratchpad access.
+        The language preference is passed via X-Language header.
         
         NOTE: Tool calls made BY the synthesizer (to MCP servers) are NOT
         visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
@@ -1761,6 +1777,7 @@ class AgentOrchestrator:
         
         Args:
             session_id: Session ID for MCP Scratchpad isolation.
+            language: Language for responses: 'cs' for Czech, 'en' for English.
             
         Returns:
             Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
@@ -1775,6 +1792,7 @@ class AgentOrchestrator:
         headers = {
             "X-Session-ID": session_id,
             "X-Caller-Agent": "research-orchestrator",
+            "X-Language": language,
         }
         if self.settings.a2a_synthesizer_api_key:
             headers["Authorization"] = f"Bearer {self.settings.a2a_synthesizer_api_key}"
@@ -1824,13 +1842,14 @@ class AgentOrchestrator:
     # === Session Management ===
 
     def create_session(
-        self, query: str, context: dict[str, Any] | None = None
+        self, query: str, context: dict[str, Any] | None = None, language: str = "cs"
     ) -> ResearchSession:
         """Create a new research session.
 
         Args:
             query: The research query to investigate.
             context: Optional additional context for agents.
+            language: Language for responses: 'cs' for Czech, 'en' for English.
 
         Returns:
             The created session.
@@ -1840,10 +1859,11 @@ class AgentOrchestrator:
             session_id=session_id,
             query=query,
             context=context,
+            language=language,
             status=ResearchSessionStatus.PENDING,
         )
         self._sessions[session_id] = session
-        logger.info(f"Created session {session_id} for query: {query[:50]}...")
+        logger.info(f"Created session {session_id} for query: {query[:50]}... (language={language})")
         return session
 
     def get_session(self, session_id: str) -> ResearchSession | None:
@@ -1927,28 +1947,31 @@ class AgentOrchestrator:
                 session_id, caller_agent="research-orchestrator"
             )
             
+            # Get language preference from session
+            language = session.language
+            
             # === A2A Agent: Market Analyst ===
             # Market-analyst runs as A2A service with its own MCP tools (demographics, scratchpad)
-            # Session ID passed via X-Session-ID header for session-scoped MCP access
-            market_a2a_agent, market_http_client = await self._create_a2a_market_analyst(session_id)
+            # Session ID and language passed via headers for session-scoped MCP access
+            market_a2a_agent, market_http_client = await self._create_a2a_market_analyst(session_id, language)
             a2a_clients_to_cleanup.append(market_http_client)
 
             # === A2A Agent: Competitor Analyst ===
             # Competitor-analyst runs as A2A service with MCP tools (business-registry, scratchpad)
             # and Grounded Web Search (Bing) for real-time competitor intelligence
-            competitor_a2a_agent, competitor_http_client = await self._create_a2a_competitor_analyst(session_id)
+            competitor_a2a_agent, competitor_http_client = await self._create_a2a_competitor_analyst(session_id, language)
             a2a_clients_to_cleanup.append(competitor_http_client)
 
             # === A2A Agent: Finance Analyst ===
             # Finance-analyst runs as A2A service with MCP tools (calculator, real-estate, government-data,
             # business-registry, scratchpad) and Grounded Web Search (Bing) for financial analysis
-            finance_a2a_agent, finance_http_client = await self._create_a2a_finance_analyst(session_id)
+            finance_a2a_agent, finance_http_client = await self._create_a2a_finance_analyst(session_id, language)
             a2a_clients_to_cleanup.append(finance_http_client)
 
             # === A2A Agent: Location Scout ===
             # Location-scout runs as A2A service with MCP tools (government-data, demographics,
             # real-estate, scratchpad) and Grounded Web Search (Bing) for location analysis
-            location_a2a_agent, location_http_client = await self._create_a2a_location_scout(session_id)
+            location_a2a_agent, location_http_client = await self._create_a2a_location_scout(session_id, language)
             a2a_clients_to_cleanup.append(location_http_client)
 
             # === A2A Agent: Synthesizer ===
@@ -1957,7 +1980,7 @@ class AgentOrchestrator:
             synthesizer_a2a_agent: A2AAgent | None = None
             synthesizer_http_client: httpx.AsyncClient | None = None
             if self.settings.a2a_synthesizer_enabled:
-                synthesizer_a2a_agent, synthesizer_http_client = await self._create_a2a_synthesizer(session_id)
+                synthesizer_a2a_agent, synthesizer_http_client = await self._create_a2a_synthesizer(session_id, language)
                 a2a_clients_to_cleanup.append(synthesizer_http_client)
             else:
                 logger.warning("Synthesizer A2A agent not configured - synthesize_findings tool will not be available")
@@ -2060,12 +2083,13 @@ class AgentOrchestrator:
                 tools_list.append(session_mcp_scratchpad)
                 logger.info(f"Added session-scoped MCP Scratchpad to orchestrator (session={session_id[:8]}...)")
             
-            # Load and render system prompt
+            # Load and render system prompt with language setting
             prompt_template = self.settings.get_prompt("system_prompt")
             template = Template(prompt_template)
             system_prompt = template.render(
                 query=session.query,
                 context=session.context,
+                language=session.language,
                 scratchpad_enabled=session_mcp_scratchpad is not None
             )
 

@@ -44,6 +44,11 @@ class CreateSessionRequest(BaseModel):
         default=None,
         description="Optional context to provide to agents",
     )
+    language: str = Field(
+        default="cs",
+        description="Language for agent responses: 'cs' for Czech, 'en' for English",
+        pattern="^(cs|en)$",
+    )
 
 
 class StartSessionRequest(BaseModel):
@@ -73,6 +78,7 @@ class ResearchSession(BaseModel):
     session_id: str = Field(description="Unique session identifier")
     query: str = Field(description="The original research query")
     context: dict[str, Any] | None = Field(default=None, description="Optional context for agents")
+    language: str = Field(default="cs", description="Language for responses: 'cs' or 'en'")
     status: ResearchSessionStatus = Field(description="Current session status")
     created_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = Field(default=None)

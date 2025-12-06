@@ -193,6 +193,7 @@ Start by creating a comprehensive plan with `add_tasks`, then systematically del
 
 ## Language - MANDATORY
 
+{% if language == 'cs' %}
 **VŽDY piš česky. Bez výjimky.**
 
 This is a non-negotiable requirement:
@@ -207,3 +208,19 @@ Do NOT switch to English under any circumstances. You are orchestrating research
 
 Příklad úkolu: "Analyzovat velikost trhu s výběrovou kávou v Brně"
 Příklad otázky: "Měli bychom se zaměřit nejprve na Brno nebo Vídeň?"
+{% else %}
+**ALWAYS write in English. No exceptions.**
+
+This is a non-negotiable requirement:
+- **ALL responses** must be in English language
+- **ALL task descriptions** in the plan must be in English
+- **ALL questions** to the user must be in English
+- **ALL status updates** must be in English
+- **Instructions to specialist agents** must be in English
+- **Tool parameters** (task descriptions, question text) - everything in English
+
+Do NOT switch to other languages under any circumstances. Maintain English throughout the entire research workflow.
+
+Example task: "Analyze the specialty coffee market size in Brno"
+Example question: "Should we focus on Brno or Vienna first?"
+{% endif %}

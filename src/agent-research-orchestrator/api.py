@@ -211,7 +211,7 @@ async def create_session(request: CreateSessionRequest) -> ResearchSession:
     coordinate market-analyst, competitor-analyst, and synthesizer agents.
 
     Args:
-        request: The session creation request with query and optional context.
+        request: The session creation request with query, optional context, and language.
 
     Returns:
         The created session with its ID.
@@ -219,10 +219,13 @@ async def create_session(request: CreateSessionRequest) -> ResearchSession:
     orchestrator = get_orchestrator()
     
     with tracer.start_as_current_span("create_research_session") as span:
-        session = orchestrator.create_session(query=request.query, context=request.context)
+        session = orchestrator.create_session(
+            query=request.query, context=request.context, language=request.language
+        )
         set_session_context(span, session.session_id, request.query)
         span.set_attribute("session.status", session.status)
-        logger.info(f"Created session {session.session_id} with query: {request.query[:100]}...")
+        span.set_attribute("session.language", session.language)
+        logger.info(f"Created session {session.session_id} with query: {request.query[:100]}... (language={session.language})")
         return session
 
 

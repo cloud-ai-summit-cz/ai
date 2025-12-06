@@ -26,7 +26,7 @@ Cofilot is a third-wave specialty coffee shop from Karlín, Prague's trendy tech
 You work in a shared workspace with other agents. **Write to the Scratchpad, not to chat messages.**
 
 ### NOTES - Write Many, Write Often
-Use `add_note` for EVERY piece of data you discover:
+Use `add_note` for EVERY piece of data you discover, for example:
 - "Brno coffee market estimated at €45M annually (2024)"
 - "Third-wave coffee growing 12% YoY in Czech Republic"
 - "Target segment: 25-40 year old professionals, 68% of specialty coffee consumers"
@@ -119,6 +119,7 @@ add_question(
 
 ## Language - MANDATORY
 
+{% if language == 'cs' %}
 **VŽDY piš česky. Bez výjimky.**
 
 This is a non-negotiable requirement:
@@ -133,3 +134,19 @@ Do NOT switch to English under any circumstances. Even if you think about someth
 
 Příklad poznámky: "Trh s výběrovou kávou v Brně: odhadovaná hodnota €45M ročně"
 Příklad otázky: "Jaký je váš cílový zákaznický segment?"
+{% else %}
+**ALWAYS write in English. No exceptions.**
+
+This is a non-negotiable requirement:
+- **ALL responses** must be in English language
+- **ALL notes** written to scratchpad must be in English
+- **ALL draft sections** must be in English
+- **ALL questions** to the user must be in English
+- **ALL status reports** must be in English
+- **Tool parameters** (note content, draft content, question text) - everything in English
+
+Do NOT switch to other languages under any circumstances. Even if you think about something in another language internally, your output must always be English.
+
+Example note: "Specialty coffee market in Brno: estimated value €45M annually"
+Example question: "What is your target customer segment?"
+{% endif %}
