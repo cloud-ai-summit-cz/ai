@@ -35,7 +35,6 @@ export function Workspace({ onNewSession }: WorkspaceProps) {
     showQuestionModal,
     setShowQuestionModal,
     answerQuestion,
-    pollScratchpadState,
     resetState,
     exportDemoState,
   } = useResearchStore();
@@ -63,18 +62,24 @@ export function Workspace({ onNewSession }: WorkspaceProps) {
       // Update local state optimistically
       answerQuestion(questionId, answer);
       
-      // Call API to submit answer
+      // Call API to submit answer (fire and forget - optimistic update already done)
       await submitAnswers(session.sessionId, [{ question_id: questionId, answer }]);
       
-      // Refresh questions to get server state
-      await pollScratchpadState();
-      
-      // Check if there are still pending blocking questions
+      // Check if there are still pending blocking questions AFTER the optimistic update
+      // We need to check based on the current state excluding the just-answered question
       const remainingBlocking = scratchpad.questions.filter(
         q => !q.answered && q.priority === 'blocking' && q.id !== questionId
       );
+      
+      // Only close modal if no more blocking questions remain
       if (remainingBlocking.length === 0) {
-        setShowQuestionModal(false);
+        // Check if there are any other pending questions at all
+        const remainingPending = scratchpad.questions.filter(
+          q => !q.answered && q.id !== questionId
+        );
+        if (remainingPending.length === 0) {
+          setShowQuestionModal(false);
+        }
       }
     } catch (error) {
       console.error('Failed to submit answer:', error);

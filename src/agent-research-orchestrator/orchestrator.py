@@ -2267,14 +2267,31 @@ class AgentOrchestrator:
                     if tool_type == "add_question":
                         output = event_data_completed.output
                         question_id = None
+                        logger.info(f"[QUESTION_ADDED] Raw output type: {type(output)}, value: {output}")
+                        
+                        # Handle list output (MCP tools return [{'type': 'text', 'text': '...'}])
+                        if isinstance(output, list) and len(output) > 0:
+                            output = output[0]  # Get first item
+                        
                         if isinstance(output, dict):
-                            question_id = output.get("question_id")
+                            # Check if this is a TextContent-style dict with nested JSON in "text" field
+                            if "text" in output and isinstance(output["text"], str):
+                                try:
+                                    parsed = json.loads(output["text"])
+                                    question_id = parsed.get("question_id")
+                                    logger.info(f"[QUESTION_ADDED] Parsed from text field: question_id={question_id}")
+                                except json.JSONDecodeError:
+                                    logger.warning(f"[QUESTION_ADDED] Failed to parse text field as JSON")
+                            else:
+                                question_id = output.get("question_id")
+                                logger.info(f"[QUESTION_ADDED] Got from dict directly: question_id={question_id}")
                         elif isinstance(output, str):
                             try:
                                 parsed = json.loads(output)
                                 question_id = parsed.get("question_id")
+                                logger.info(f"[QUESTION_ADDED] Parsed from string: question_id={question_id}")
                             except json.JSONDecodeError:
-                                pass
+                                logger.warning(f"[QUESTION_ADDED] Failed to parse string as JSON")
                         
                         input_args = self._tool_call_log[-1].get("input_args", {}) if self._tool_call_log else {}
                         yield SSEEvent(

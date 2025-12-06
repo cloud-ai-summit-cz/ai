@@ -443,6 +443,9 @@ export async function getDraft(sessionId: string): Promise<DraftData> {
 /**
  * Poll all scratchpad data at once.
  *
+ * Note: Questions are intentionally not polled here to avoid race conditions
+ * with optimistic updates. Questions are updated via SSE events.
+ *
  * @param sessionId - The session ID
  * @returns Object with plan, notes, and draft data
  */

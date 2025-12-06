@@ -125,26 +125,38 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
       scratchpad: { ...state.scratchpad, questions },
     })),
 
-  addQuestion: (question) =>
+  addQuestion: (question) => {
+    console.log('[STORE] addQuestion called:', { id: question.id, question: question.question?.substring(0, 50) });
     set((state) => ({
       scratchpad: {
         ...state.scratchpad,
         questions: [...state.scratchpad.questions, question],
       },
       showQuestionModal: question.priority === 'blocking' || state.showQuestionModal,
-    })),
+    }));
+  },
 
-  answerQuestion: (questionId, answer) =>
+  answerQuestion: (questionId, answer) => {
+    console.log('[STORE] answerQuestion called:', { questionId, answer });
+    const currentQuestions = get().scratchpad.questions;
+    console.log('[STORE] Current questions:', currentQuestions.map(q => ({ id: q.id, answered: q.answered })));
+    
     set((state) => ({
       scratchpad: {
         ...state.scratchpad,
-        questions: state.scratchpad.questions.map((q) =>
-          q.id === questionId
+        questions: state.scratchpad.questions.map((q) => {
+          const shouldUpdate = q.id === questionId;
+          console.log('[STORE] Question', q.id, 'shouldUpdate:', shouldUpdate);
+          return shouldUpdate
             ? { ...q, answer, answered: true, answered_at: new Date().toISOString() }
-            : q
-        ),
+            : q;
+        }),
       },
-    })),
+    }));
+    
+    const updatedQuestions = get().scratchpad.questions;
+    console.log('[STORE] Updated questions:', updatedQuestions.map(q => ({ id: q.id, answered: q.answered, answer: q.answer })));
+  },
 
   // === Activity State ===
   activities: [],
@@ -775,6 +787,9 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
     }
 
     try {
+      // Note: We intentionally don't poll questions here to avoid race conditions
+      // with optimistic updates when users are answering questions.
+      // Questions are updated via SSE events (question_added) and optimistic local updates.
       const { plan, notes, draft } = await pollScratchpad(session.sessionId);
 
       if (plan && plan.tasks.length > 0) {
