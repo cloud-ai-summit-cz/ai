@@ -56,24 +56,83 @@
                 </div>
             </section>
 
-            <!-- Workflow Progress Section -->
-            <section id="workflow-section" class="section workflow-section hidden">
-                <!-- Workflow Diagram -->
-                <div id="workflow-diagram" class="workflow-diagram">
-                    <div class="diagram-container">
-                        <div class="diagram-loading">Loading workflow diagram...</div>
-                    </div>
+            <!-- Tabbed Workspace -->
+            <div id="workflow-tabs" class="workflow-tabs hidden">
+                <div class="tab-bar" role="tablist" aria-label="Workflow views">
+                    <button class="tab-button active" data-tab-target="diagram" role="tab" aria-selected="true">
+                        <span class="tab-button-inner">
+                            <i data-lucide="activity" class="tab-logo"></i>
+                            <span class="tab-label">Activity</span>
+                        </span>
+                    </button>
+                    <button class="tab-button" data-tab-target="progress" role="tab" aria-selected="false">
+                        <span class="tab-button-inner">
+                            <i data-lucide="list-todo" class="tab-logo"></i>
+                            <span class="tab-label">Progress</span>
+                            <span id="tab-progress-badge" class="tab-badge">0</span>
+                        </span>
+                    </button>
+                    <button class="tab-button" data-tab-target="console" role="tab" aria-selected="false">
+                        <span class="tab-button-inner">
+                            <i data-lucide="terminal" class="tab-logo"></i>
+                            <span class="tab-label">Console</span>
+                            <span id="tab-console-badge" class="tab-badge">0</span>
+                        </span>
+                    </button>
                 </div>
 
-                <div class="workflow-header">
-                    <h2>Workflow Progress</h2>
-                    <div id="workflow-status" class="status-badge">Running</div>
+                <div class="tab-panels">
+                    <div class="tab-panel active" data-tab="diagram" role="tabpanel">
+                        <section class="section workflow-diagram-shell">
+                            <div class="panel-header">
+                                <div class="panel-title">Diagram</div>
+                                <span class="panel-pill">Live</span>
+                            </div>
+                            <div id="workflow-diagram" class="workflow-diagram">
+                                <div class="diagram-container">
+                                    <div class="diagram-loading">Loading workflow diagram...</div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="tab-panel" data-tab="progress" role="tabpanel">
+                        <section id="workflow-section" class="section workflow-section hidden">
+                            <div class="workflow-header">
+                                <h2>Workflow Progress</h2>
+                                <div id="workflow-status" class="status-badge">Running</div>
+                            </div>
+                            
+                            <div id="events-container" class="events-container">
+                                <!-- Events will be added here dynamically -->
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="tab-panel" data-tab="console" role="tabpanel">
+                        <section class="section console-section">
+                            <div class="event-console">
+                                <div class="console-header">
+                                    <div class="console-title">
+                                        <span class="console-icon">⬢</span>
+                                        <span>Event Console</span>
+                                    </div>
+                                    <div class="console-controls">
+                                        <button id="console-clear" class="console-btn" title="Clear console">Clear</button>
+                                        <span id="console-status" class="console-status">Ready</span>
+                                    </div>
+                                </div>
+                                <div id="console-output" class="console-output">
+                                    <div class="console-line console-info">
+                                        <span class="console-prefix">[INFO]</span>
+                                        <span class="console-text">Waiting for workflow to start...</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
                 </div>
-                
-                <div id="events-container" class="events-container">
-                    <!-- Events will be added here dynamically -->
-                </div>
-            </section>
+            </div>
 
             <!-- Result Section -->
             <section id="result-section" class="section result-section hidden">
@@ -109,28 +168,6 @@
                 </button>
             </section>
             </div>
-
-            <!-- Right Column - Event Console -->
-            <aside class="right-column">
-                <div class="event-console">
-                    <div class="console-header">
-                        <div class="console-title">
-                            <span class="console-icon">⬢</span>
-                            <span>Event Console</span>
-                        </div>
-                        <div class="console-controls">
-                            <button id="console-clear" class="console-btn" title="Clear console">Clear</button>
-                            <span id="console-status" class="console-status">Ready</span>
-                        </div>
-                    </div>
-                    <div id="console-output" class="console-output">
-                        <div class="console-line console-info">
-                            <span class="console-prefix">[INFO]</span>
-                            <span class="console-text">Waiting for workflow to start...</span>
-                        </div>
-                    </div>
-                </div>
-            </aside>
         </main>
 
         <footer class="footer">

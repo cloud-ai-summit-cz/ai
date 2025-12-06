@@ -185,6 +185,11 @@ const workflowDiagram = document.getElementById('workflow-diagram');
 const consoleOutput = document.getElementById('console-output');
 const consoleClearBtn = document.getElementById('console-clear');
 const consoleStatus = document.getElementById('console-status');
+const workflowTabs = document.getElementById('workflow-tabs');
+const tabButtons = Array.from(document.querySelectorAll('[data-tab-target]'));
+const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
+const progressBadge = document.getElementById('tab-progress-badge');
+const consoleBadge = document.getElementById('tab-console-badge');
 
 // State
 let selectedFile = null;
@@ -194,10 +199,51 @@ let actorContainers = {}; // Map action_id -> container element
 let currentConversationId = null; // Track conversation ID for follow-ups
 let totalAgentCount = 0; // Track total agents across all turns
 let diagramNodes = {}; // Map action_id -> diagram node element
+let consoleMessageCount = 0; // Track console message count
+let actorCompletedCount = 0; // Track completed actor activities
 
 // Enable/disable the start button based on image selection
 function updateStartButtonState() {
     startBtn.disabled = !selectedFile;
+}
+
+function setActiveTab(tabName) {
+    if (!tabButtons.length || !tabPanels.length) return;
+    tabButtons.forEach(btn => {
+        const isActive = btn.dataset.tabTarget === tabName;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-selected', isActive.toString());
+    });
+    tabPanels.forEach(panel => {
+        const isActive = panel.dataset.tab === tabName;
+        panel.classList.toggle('active', isActive);
+        panel.classList.toggle('hidden', !isActive);
+    });
+}
+
+function showWorkspaceTabs(defaultTab = 'diagram') {
+    if (!workflowTabs) return;
+    workflowTabs.classList.remove('hidden');
+    setActiveTab(defaultTab);
+}
+
+function updateConsoleBadge() {
+    if (consoleBadge) {
+        consoleBadge.textContent = consoleMessageCount.toString();
+    }
+}
+
+function updateProgressBadge() {
+    if (progressBadge) {
+        progressBadge.textContent = actorCompletedCount.toString();
+    }
+}
+
+function resetBadges() {
+    consoleMessageCount = 0;
+    actorCompletedCount = 0;
+    updateConsoleBadge();
+    updateProgressBadge();
 }
 
 // Event Icons mapping
@@ -624,6 +670,7 @@ function init() {
 
     // Require an image before starting the workflow
     updateStartButtonState();
+    resetBadges();
     
     // Event listeners
     invoiceInput.addEventListener('change', handleFileSelect);
@@ -643,6 +690,14 @@ function init() {
     // Console clear button
     if (consoleClearBtn) {
         consoleClearBtn.addEventListener('click', clearConsole);
+    }
+
+    // Tabs
+    if (tabButtons.length) {
+        tabButtons.forEach(btn => {
+            btn.addEventListener('click', () => setActiveTab(btn.dataset.tabTarget));
+        });
+        setActiveTab('diagram');
     }
 }
 
@@ -710,6 +765,8 @@ async function startWorkflow() {
     inputSection.classList.add('hidden');
     workflowSection.classList.remove('hidden');
     resultSection.classList.add('hidden');
+    showWorkspaceTabs('diagram');
+    resetBadges();
     
     // Reset state
     eventsContainer.innerHTML = '';
@@ -828,6 +885,8 @@ function handleEvent(event) {
         updateDiagramNodeStatus(actionId, 'running');
     } else if (type === 'actor_completed' && actionId) {
         updateDiagramNodeStatus(actionId, data.status === 'failed' ? 'failed' : 'completed');
+        actorCompletedCount += 1;
+        updateProgressBadge();
     }
     
     // Update status on completion/failure
@@ -1237,6 +1296,7 @@ async function handleQuestionResponse(value) {
     
     // Switch to workflow view, keep result visible
     workflowSection.classList.remove('hidden');
+    showWorkspaceTabs('progress');
     
     // Add separator for the response
     addFollowupSeparator(`Response: ${value}`);
@@ -1321,6 +1381,7 @@ async function sendFollowup() {
     
     // Switch to workflow view, keep result visible
     workflowSection.classList.remove('hidden');
+    showWorkspaceTabs('progress');
     
     // Add separator for follow-up (keep previous events)
     addFollowupSeparator(message);
@@ -1395,6 +1456,9 @@ function restart() {
     inputSection.classList.remove('hidden');
     workflowSection.classList.add('hidden');
     resultSection.classList.add('hidden');
+    if (workflowTabs) {
+        workflowTabs.classList.add('hidden');
+    }
     
     // Reset state
     startBtn.disabled = false;
@@ -1405,6 +1469,9 @@ function restart() {
     totalAgentCount = 0;
     currentConversationId = null;
     diagramNodes = {};
+
+    setActiveTab('diagram');
+    resetBadges();
 
     updateStartButtonState();
     
@@ -1517,6 +1584,9 @@ function logToConsole(event) {
     // Filter out text_delta events (too noisy even for console)
     if (type === 'text_delta') return;
     const actionId = data?.action_id;
+
+    consoleMessageCount += 1;
+    updateConsoleBadge();
     
     const line = document.createElement('div');
     line.className = `console-line console-new ${getConsoleEventClass(type)}`;
@@ -1551,6 +1621,8 @@ function logToConsole(event) {
 
 function clearConsole() {
     if (!consoleOutput) return;
+    consoleMessageCount = 0;
+    updateConsoleBadge();
     consoleOutput.innerHTML = `
         <div class="console-line console-info">
             <span class="console-prefix">[INFO]</span>
