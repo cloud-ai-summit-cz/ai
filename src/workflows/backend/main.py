@@ -119,6 +119,7 @@ app.add_middleware(
 
 # Azure AI Project configuration
 AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT")
+MANAGED_IDENTITY_CLIENT_ID = os.getenv("AZURE_CLIENT_ID")  # Optional: user-assigned MI
 
 if not AZURE_AI_ENDPOINT:
     raise RuntimeError(
@@ -128,9 +129,13 @@ if not AZURE_AI_ENDPOINT:
 
 def get_project_client() -> AIProjectClient:
     """Create and return an Azure AI Project client."""
+    credential = DefaultAzureCredential(
+        managed_identity_client_id=MANAGED_IDENTITY_CLIENT_ID,
+    )
+
     return AIProjectClient(
         endpoint=AZURE_AI_ENDPOINT,
-        credential=DefaultAzureCredential(),
+        credential=credential,
     )
 
 

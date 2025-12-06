@@ -57,8 +57,9 @@ az containerapp update \
 
 Identity & permissions:
 
-- Ensure the Container App has a managed identity (`az containerapp identity assign --name be-invoice-demo --resource-group <rg-name> --system`).
-- Grant that identity access to the Azure AI Project (e.g., `Azure AI Developer` or equivalent role).
+- **System-assigned MI** (default): `az containerapp identity assign --name be-invoice-demo --resource-group <rg-name> --system`. Leave `AZURE_CLIENT_ID` unset.
+- **User-assigned MI**: set both `AZURE_CLIENT_ID=<uami-client-id>` and `USER_ASSIGNED_IDENTITY_ID=<uami-resource-id>`, then assign it: `az containerapp identity assign --name be-invoice-demo --resource-group <rg-name> --user-assigned $USER_ASSIGNED_IDENTITY_ID`.
+- Grant the active identity (system or user-assigned) access to the Azure AI Project (e.g., `Azure AI Developer` role).
 
 ## Example Usage
 
