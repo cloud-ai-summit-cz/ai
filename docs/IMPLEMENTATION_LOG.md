@@ -2,6 +2,65 @@
 
 Technical decisions and implementation notes for the Copilot AI Platform project.
 
+## 2025-12-06: Rate Limit Retry Middleware for Agent Framework
+
+### Context
+Azure OpenAI API returns 429 (Too Many Requests) errors when rate limits are exceeded. These errors were causing the entire workflow to fail instead of gracefully retrying.
+
+### Solution
+Implemented `RateLimitRetryMiddleware` using Microsoft Agent Framework's `ChatMiddleware` pattern. This follows the official middleware architecture documented at:
+- https://learn.microsoft.com/en-us/agent-framework/user-guide/agents/agent-middleware
+- https://learn.microsoft.com/en-us/agent-framework/tutorials/agents/middleware
+
+### Changes Made
+
+#### 1. New Module: `src/agent-research-orchestrator/retry_middleware.py`
+- `RateLimitRetryMiddleware`: ChatMiddleware class for 429 error handling
+- Implements exponential backoff with jitter (Microsoft recommended pattern)
+- Extracts `Retry-After` header from API responses when available
+- Configurable: max_retries, initial_delay, max_delay, exponential_base, jitter
+- Default: 5 retries, 2s initial delay, 60s max delay, 2x exponential base
+
+#### 2. Updated: `src/agent-research-orchestrator/orchestrator.py`
+- Added import for `RateLimitRetryMiddleware`
+- Applied middleware to main orchestrator `ChatAgent`
+- Applied middleware to Foundry sub-agents via `_create_foundry_agent()`
+
+#### 3. New Files: `src/agent-*/standalone/a2a/maf/retry_middleware.py` (5 files)
+- Created identical retry middleware for each standalone subagent:
+  - `agent-market-analyst`
+  - `agent-competitor-analyst`
+  - `agent-location-scout`
+  - `agent-finance-analyst`
+  - `agent-synthesizer`
+
+#### 4. Updated: `src/agent-*/standalone/a2a/maf/agent.py` (5 files)
+- Added import for `RateLimitRetryMiddleware`
+- Applied middleware to each subagent's `ChatAgent` via `responses_client.create_agent()`
+
+### Configuration
+```python
+retry_middleware = RateLimitRetryMiddleware(
+    max_retries=5,       # Max retry attempts
+    initial_delay=2.0,   # Initial delay in seconds
+    max_delay=60.0,      # Maximum delay cap
+    exponential_base=2.0, # Backoff multiplier
+    jitter=True,         # Add randomness to prevent thundering herd
+)
+```
+
+### Retry Logic
+- Delay formula: `min(initial_delay * (2 ^ attempt), max_delay)`
+- Jitter adds 0-25% random variation
+- Respects `Retry-After` header from API if present
+- Logs all retry attempts at WARNING level
+
+### Reference
+- Azure retry patterns: https://learn.microsoft.com/en-us/azure/architecture/patterns/retry
+- Azure OpenAI error handling: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/supported-languages#error-handling
+
+---
+
 ## 2025-01-XX: ADR-007 - Direct Orchestrator Events for UI (Reverting Trace-Based SSE)
 
 ### Context

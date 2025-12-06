@@ -14,6 +14,7 @@ from agent_framework.azure import AzureOpenAIResponsesClient
 from azure.identity import DefaultAzureCredential
 
 from config import Settings
+from retry_middleware import RateLimitRetryMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -163,9 +164,17 @@ class CompetitorAnalystAgent:
             api_version=self._settings.azure_openai_api_version,
         )
 
+        # Create retry middleware for handling 429 rate limit errors
+        retry_middleware = RateLimitRetryMiddleware(
+            max_retries=5,
+            initial_delay=2.0,
+            max_delay=60.0,
+        )
+
         self._agent = responses_client.create_agent(
             instructions=self.system_prompt,
             tools=mcp_tools,
+            middleware=[retry_middleware],
         )
         logger.info(f"[INIT] Agent initialized successfully with {len(mcp_tools)} MCP tool(s)!")
         logger.info("=" * 60)

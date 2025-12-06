@@ -41,6 +41,7 @@ from agent_framework.a2a import A2AAgent
 from agent_framework_azure_ai import AzureAIAgentClient
 from azure.identity.aio import DefaultAzureCredential
 
+from retry_middleware import RateLimitRetryMiddleware
 from telemetry import get_tracer, set_session_context, set_agent_context, set_tool_context
 
 from config import (
@@ -1408,12 +1409,22 @@ class AgentOrchestrator:
             should_cleanup_agent=False,
         )
 
+        # Add retry middleware for handling 429 rate limit errors
+        retry_middleware = RateLimitRetryMiddleware(
+            max_retries=5,
+            initial_delay=2.0,
+            max_delay=60.0,
+            exponential_base=2.0,
+            jitter=True,
+        )
+
         agent = ChatAgent(
             chat_client=client,
             name=agent_name,
             description=description,
             instructions="",  # Use agent's existing instructions
             tools=tools or [],
+            middleware=[retry_middleware],
         )
         
         return agent, client
@@ -2094,13 +2105,22 @@ class AgentOrchestrator:
             )
 
             # Create the main orchestrator agent with specialist agents as tools
+            # Include retry middleware for handling 429 rate limit errors
             chat_client = self._create_orchestrator_client()
             clients_to_cleanup.append(chat_client)
+            retry_middleware = RateLimitRetryMiddleware(
+                max_retries=5,
+                initial_delay=2.0,
+                max_delay=60.0,
+                exponential_base=2.0,
+                jitter=True,
+            )
             orchestrator_agent = ChatAgent(
                 chat_client=chat_client,
                 name="research-orchestrator",
                 instructions=system_prompt,
                 tools=tools_list,
+                middleware=[retry_middleware],
             )
             agents_to_cleanup.append(orchestrator_agent)
 
