@@ -28,6 +28,12 @@ npx serve -p 3000
 
 Then open http://localhost:3000
 
+### Azure Static Web Apps
+
+- This frontend is static and can be deployed to Azure Static Web Apps (SWA).
+- At runtime, the app reads `window.__APP_CONFIG.API_BASE_URL` if provided; otherwise it uses `http://localhost:8000` on localhost or the Container App FQDN `https://be-invoice-demo.bluetree-fdff5920.eastus2.azurecontainerapps.io` when hosted.
+- For custom backends, set `window.__APP_CONFIG = { API_BASE_URL: "https://your-backend" };` via an inline script or environment injection before loading `app.js`.
+
 ## Requirements
 
 - Backend running at http://localhost:8000
