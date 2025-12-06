@@ -5,7 +5,7 @@
 
 // Configuration
 const API_BASE_URL = 'http://localhost:8000';
-const WORKFLOW_NAME = 'wf2';
+const WORKFLOW_NAME = 'Cofilot-Invoice-Processing-Demo';
 const WORKFLOW_YAML = `
 kind: workflow
 trigger:
@@ -21,16 +21,26 @@ trigger:
       output:
         autoSend: true
         messages: Local.LastMessage
+        responseObject: Local.LastMessageJSON
     - kind: ConditionGroup
       conditions:
         - condition: =!IsBlank(Find("<INV_OK>", Last(Local.LastMessage).Text))
           actions:
+            - kind: InvokeAzureAgent
+              id: invoice-validation-summary
+              agent:
+                name: invoice-validation-summary
+              input:
+                messages: =System.LastMessage
+              output:
+                autoSend: true
+                messages: Local.ValSummary
             - kind: Question
               variable: Local.UserApproval
               id: action-1764937921178
               entity: StringPrebuiltEntity
               skipQuestionMode: SkipOnFirstExecutionIfVariableHasValue
-              prompt: <QUESTION>Validation OK - Approve?
+              prompt: <QUESTION>Invoice validation passed. {Last(Local.ValSummary).Text} Approve?
             - kind: InvokeAzureAgent
               id: invoice-process-summary-agent
               agent:
@@ -41,20 +51,26 @@ trigger:
                 autoSend: true
                 messages: Local.LastMessage
             - kind: SendActivity
-              activity: |-
-                <FINAL> Success! Ivoice approved for payment processing. 
-
-                summary: {Local.LastMessage}
+              activity: <FINAL> Success! {Last(Local.LastMessage).Text}
               id: action-1764942712798
           id: if-action-1764883723763-0
       id: action-1764883723763
       elseActions:
+        - kind: InvokeAzureAgent
+          id: action-1765014116096
+          agent:
+            name: invoice-validation-summary
+          input:
+            messages: =System.LastMessage
+          output:
+            autoSend: true
+            messages: Local.ValSummary
         - kind: Question
           variable: Local.UserApproval
           id: action-1764937921111
           entity: StringPrebuiltEntity
           skipQuestionMode: SkipOnFirstExecutionIfVariableHasValue
-          prompt: <QUESTION>Validation Fail - send back?
+          prompt: "<QUESTION>Invoice validation failed: {Last(Local.ValSummary).Text} - Revoke?"
         - kind: InvokeAzureAgent
           id: invoice-mailer-agent
           agent:
@@ -64,12 +80,12 @@ trigger:
           output:
             autoSend: true
         - kind: SendActivity
-          activity: <FINAL> Invoice sent back to supplier.
+          activity: <FINAL> Invoice revoked.
           id: action-1764963963215
     - kind: EndConversation
       id: action-1764936956468
 id: ""
-name: wf2
+name: Cofilot-Invoice-Processing-Demo
 description: ""
 
 `;
