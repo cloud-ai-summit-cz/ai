@@ -1,7 +1,7 @@
 # Container Apps Environment
 resource "azapi_resource" "container_app_environment" {
   type      = "Microsoft.App/managedEnvironments@2024-03-01"
-  name      = "cae-${local.name_prefix}-${random_string.suffix.result}"
+  name      = "cae-${var.project_name}-${random_string.suffix.result}"
   location  = azurerm_resource_group.main.location
   parent_id = azurerm_resource_group.main.id
   tags      = local.common_tags

@@ -142,6 +142,53 @@
         "type": "object",
         "properties": {}
       }
+    },
+    {
+      "name": "add_question",
+      "description": "Add a question for user clarification. Use this when you need information from the user to proceed with research.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The question to ask the user"
+          },
+          "context": {
+            "type": "string",
+            "description": "Why this information is needed (helps user understand importance)"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "blocking"],
+            "description": "Question priority: low (nice to have), medium (improves quality), high (important), blocking (cannot proceed without)"
+          }
+        },
+        "required": ["question", "context", "priority"]
+      }
+    },
+    {
+      "name": "get_pending_questions",
+      "description": "Get all unanswered questions for the session",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_answered_questions",
+      "description": "Get all questions that have been answered by the user",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_all_questions",
+      "description": "Get all questions (both pending and answered) for the session",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
     }
   ]
 }

@@ -1,0 +1,11 @@
+[project]
+name = "agent-provisioning"
+version = "0.1.0"
+description = "Provision all agents to Azure AI Foundry"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[tool.uv]
+dev-dependencies = []

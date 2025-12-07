@@ -1,7 +1,4 @@
 locals {
-  # Resource naming prefix
-  name_prefix = "mcp-scratchpad"
-
   # Common tags applied to all resources
   common_tags = {
     Project   = var.project_name
@@ -35,6 +32,27 @@ locals {
 
   # MCP Calculator image
   mcp_calculator_image = "${azurerm_container_registry.main.login_server}/mcp-calculator:latest"
+
+  # Agent Market Analyst A2A image
+  agent_market_analyst_a2a_image = "${azurerm_container_registry.main.login_server}/agent-market-analyst-a2a:latest"
+
+  # Agent Competitor Analyst A2A image
+  agent_competitor_analyst_a2a_image = "${azurerm_container_registry.main.login_server}/agent-competitor-analyst-a2a:latest"
+
+  # Agent Finance Analyst A2A image
+  agent_finance_analyst_a2a_image = "${azurerm_container_registry.main.login_server}/agent-finance-analyst-a2a:latest"
+
+  # Agent Location Scout A2A image
+  agent_location_scout_a2a_image = "${azurerm_container_registry.main.login_server}/agent-location-scout-a2a:latest"
+
+  # Agent Synthesizer A2A image
+  agent_synthesizer_a2a_image = "${azurerm_container_registry.main.login_server}/agent-synthesizer-a2a:latest"
+
+  # Research Orchestrator API image
+  agent_research_orchestrator_image = "${azurerm_container_registry.main.login_server}/agent-research-orchestrator:latest"
+
+  # Web Research UI image
+  web_research_image = "${azurerm_container_registry.main.login_server}/web-research:latest"
 
   # ============================================================================
   # AI Foundry Endpoints (computed from Terraform-managed resources)

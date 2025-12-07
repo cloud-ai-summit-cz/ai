@@ -6,6 +6,7 @@
  */
 
 import { useResearchStore } from '../store';
+import { submitAnswers } from '../api';
 import {
   Header,
   PanelTabs,
@@ -38,7 +39,7 @@ export function Workspace({ onNewSession }: WorkspaceProps) {
     exportDemoState,
   } = useResearchStore();
 
-  const pendingQuestionsCount = scratchpad.questions.filter(q => !q.answer).length;
+  const pendingQuestionsCount = scratchpad.questions.filter(q => !q.answered).length;
   const completedTasksCount = scratchpad.plan.filter(t => 
     t.status === 'completed' || t.status === 'done'
   ).length;
@@ -51,6 +52,39 @@ export function Workspace({ onNewSession }: WorkspaceProps) {
   // Navigate handler for activity panel links
   const handleNavigate = (panel: 'plan' | 'notes' | 'draft') => {
     setActivePanel(panel);
+  };
+
+  // Handle answering a question - calls API and updates local state
+  const handleAnswerQuestion = async (questionId: string, answer: string) => {
+    if (!session?.sessionId) return;
+    
+    try {
+      // Update local state optimistically
+      answerQuestion(questionId, answer);
+      
+      // Call API to submit answer (fire and forget - optimistic update already done)
+      await submitAnswers(session.sessionId, [{ question_id: questionId, answer }]);
+      
+      // Check if there are still pending blocking questions AFTER the optimistic update
+      // We need to check based on the current state excluding the just-answered question
+      const remainingBlocking = scratchpad.questions.filter(
+        q => !q.answered && q.priority === 'blocking' && q.id !== questionId
+      );
+      
+      // Only close modal if no more blocking questions remain
+      if (remainingBlocking.length === 0) {
+        // Check if there are any other pending questions at all
+        const remainingPending = scratchpad.questions.filter(
+          q => !q.answered && q.id !== questionId
+        );
+        if (remainingPending.length === 0) {
+          setShowQuestionModal(false);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to submit answer:', error);
+      // Could add error notification here
+    }
   };
 
   // Save demo state handler
@@ -117,7 +151,7 @@ export function Workspace({ onNewSession }: WorkspaceProps) {
       {showQuestionModal && (
         <QuestionsPanel
           questions={scratchpad.questions}
-          onAnswer={answerQuestion}
+          onAnswer={handleAnswerQuestion}
           isModal
           onClose={() => setShowQuestionModal(false)}
         />

@@ -34,6 +34,11 @@ event_types:
   # Scratchpad Operations
   - scratchpad_updated    # Scratchpad write operation completed
   
+  # Human-in-the-Loop (Questions)
+  - question_added           # Agent added a question for user
+  - awaiting_user_input      # Workflow blocked, waiting for user answers
+  - questions_answered       # User submitted answers
+  
   # Synthesis
   - synthesis_completed   # Final report ready
   
@@ -305,6 +310,80 @@ scratchpad_updated:
       type: object
       nullable: true
       description: Task update details (for update_task)
+    timestamp:
+      type: string
+      format: ISO 8601
+
+# --- Human-in-the-Loop Events ---
+
+question_added:
+  description: Emitted when an agent adds a question for user clarification
+  source: middleware
+  payload:
+    session_id:
+      type: string
+    question_id:
+      type: string
+      description: Unique question identifier
+      example: "q_abc12345"
+    question:
+      type: string
+      description: The question text
+      example: "What is your target budget for the initial investment?"
+    context:
+      type: string
+      description: Why this information is needed
+      example: "Needed for financial projections and ROI calculations"
+    priority:
+      type: string
+      enum: [low, medium, high, blocking]
+      description: Question priority level
+    asked_by:
+      type: string
+      description: Agent that asked the question
+      example: "finance-analyst"
+    timestamp:
+      type: string
+      format: ISO 8601
+
+awaiting_user_input:
+  description: Emitted when workflow is blocked waiting for user to answer questions
+  source: orchestrator
+  payload:
+    session_id:
+      type: string
+    reason:
+      type: string
+      description: Why human input is needed
+      example: "Need budget clarification before financial projections can proceed"
+    blocking_question_ids:
+      type: array
+      items:
+        type: string
+      description: Question IDs that must be answered to continue
+      example: ["q_abc12345", "q_def67890"]
+    pending_questions_count:
+      type: integer
+      description: Total number of unanswered questions
+    timestamp:
+      type: string
+      format: ISO 8601
+
+questions_answered:
+  description: Emitted when user submits answers to questions
+  source: api
+  payload:
+    session_id:
+      type: string
+    answered_question_ids:
+      type: array
+      items:
+        type: string
+      description: IDs of questions that were answered
+      example: ["q_abc12345"]
+    workflow_unblocked:
+      type: boolean
+      description: Whether this unblocked a waiting workflow
     timestamp:
       type: string
       format: ISO 8601

@@ -217,6 +217,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "agent-framework" },
+    { name = "agent-framework-a2a" },
     { name = "agent-framework-azure-ai" },
     { name = "azure-ai-projects" },
     { name = "azure-identity" },
@@ -246,6 +247,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "agent-framework", specifier = ">=1.0.0b1" },
+    { name = "agent-framework-a2a", specifier = ">=1.0.0b1" },
     { name = "agent-framework-azure-ai", specifier = ">=1.0.0b1" },
     { name = "azure-ai-projects", specifier = ">=1.0.0b5" },
     { name = "azure-identity", specifier = ">=1.19.0" },

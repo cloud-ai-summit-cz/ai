@@ -213,3 +213,37 @@ output "mcp_connection_calculator" {
   description = "The Foundry project connection name for MCP Calculator"
   value       = azapi_resource.mcp_connection_calculator.name
 }
+
+# ============================================================================
+# Azure API Management Outputs
+# ============================================================================
+
+output "apim_name" {
+  description = "The name of the API Management instance"
+  value       = azapi_resource.apim.name
+}
+
+output "apim_gateway_url" {
+  description = "The gateway URL of the API Management instance"
+  value       = azapi_resource.apim.output.properties.gatewayUrl
+}
+
+output "apim_management_url" {
+  description = "The management API URL of the API Management instance"
+  value       = azapi_resource.apim.output.properties.managementApiUrl
+}
+
+output "apim_openai_api_url" {
+  description = "The URL for accessing Azure OpenAI through APIM"
+  value       = "${azapi_resource.apim.output.properties.gatewayUrl}/openai"
+}
+
+output "apim_foundry_connection_name" {
+  description = "The name of the APIM connection in Foundry"
+  value       = azapi_resource.foundry_apim_connection.name
+}
+
+output "apim_principal_id" {
+  description = "The principal ID of the APIM managed identity"
+  value       = azapi_resource.apim.output.identity.principalId
+}

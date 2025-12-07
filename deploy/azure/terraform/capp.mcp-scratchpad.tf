@@ -1,7 +1,7 @@
 # Container App for MCP Scratchpad
 resource "azapi_resource" "capp_mcp_scratchpad" {
   type      = "Microsoft.App/containerApps@2024-03-01"
-  name      = "ca-${local.name_prefix}"
+  name      = "ca-mcp-scratchpad"
   location  = azurerm_resource_group.main.location
   parent_id = azurerm_resource_group.main.id
   tags      = local.common_tags
@@ -118,5 +118,12 @@ resource "azapi_resource" "capp_mcp_scratchpad" {
         }
       }
     }
+  }
+
+  # Ignore case sensitivity differences in transport (Azure returns "Http" but we specify "http")
+  lifecycle {
+    ignore_changes = [
+      body.properties.configuration.ingress.transport
+    ]
   }
 }

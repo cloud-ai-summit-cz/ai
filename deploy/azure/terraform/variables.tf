@@ -240,5 +240,65 @@ variable "agent_max_replicas" {
 }
 
 # ============================================================================
+# Azure API Management Variables
+# ============================================================================
+
+variable "apim_publisher_email" {
+  description = <<-EOT
+    The email address of the API Management publisher.
+    
+    This email is used for notifications and administrative purposes.
+    Must be a valid email address.
+    
+    Example: "api-admin@example.com"
+  EOT
+  type        = string
+  default     = "api-admin@example.com"
+}
+
+variable "apim_publisher_name" {
+  description = <<-EOT
+    The name of the API Management publisher/organization.
+    
+    This name appears in the developer portal and API documentation.
+    
+    Example: "Contoso AI Platform"
+  EOT
+  type        = string
+  default     = "AI Platform"
+}
+
+variable "apim_capacity" {
+  description = <<-EOT
+    The capacity (scale units) for the API Management instance.
+    
+    For StandardV2 tier, each unit provides additional throughput.
+    Typical values: 1 for development, 2+ for production.
+    
+    Example: 1
+  EOT
+  type        = number
+  default     = 1
+}
+
+# ============================================================================
+# A2A Agent Authentication
+# ============================================================================
+
+variable "a2a_api_key" {
+  description = <<-EOT
+    The API key for authenticating with A2A agents.
+    
+    This key is required for clients to authenticate with A2A protocol agents.
+    Should be a secure random string. Keep this secret!
+    Generate with: openssl rand -hex 32
+    
+    Example: "your-secure-random-a2a-key-here"
+  EOT
+  type        = string
+  sensitive   = true
+}
+
+# ============================================================================
 # Azure Container Registry Variables
 # ============================================================================

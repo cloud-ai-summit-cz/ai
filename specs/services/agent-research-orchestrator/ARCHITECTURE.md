@@ -237,79 +237,162 @@ See individual agent specs for more details:
 
 ## Human-in-the-Loop Architecture
 
-The orchestrator supports pausing for human input using MAF's checkpointing mechanism combined with the scratchpad question queue.
+The orchestrator supports pausing for human input using a local function tool combined with the scratchpad question queue.
+
+### Design Principles
+
+1. **MCP for question storage**: Questions are stored in `mcp-scratchpad` using `add_question`, `get_pending_questions`, `get_answered_questions`, `get_all_questions`
+2. **UI polls for questions**: Frontend polls `/questions` endpoint (consistent with Notes, Draft, Plan polling pattern)
+3. **Local blocking function**: `request_human_input()` is a local Python function (not MCP) that blocks the agent loop
+4. **Agent autonomy**: Agent decides when to read answered questions (guided by system prompt)
+5. **Save = Submit + Unblock**: When user clicks Save, answers are submitted AND workflow unblocks if waiting
 
 ### Question Queue Pattern
 
-Agents add questions to the scratchpad; the orchestrator decides when to pause based on question priority and blocking status.
+Agents can add questions at any time. The orchestrator decides when it's truly blocked and needs to wait.
 
 ```mermaid
 sequenceDiagram
-    participant UI as React UI
-    participant API as FastAPI
-    participant Orch as Orchestrator
+    participant Agent as Orchestrator Agent
+    participant Orch as Orchestrator Code
     participant SP as mcp-scratchpad
-    participant Agent as Specialist Agent
+    participant UI as React UI
+    participant User
+
+    Note over Agent: Working on research...
+    Agent->>SP: add_question("What's your budget?", context, priority="high")
+    SP-->>Agent: {question_id: "q_001"}
     
-    Note over Agent: Agent needs human input
-    Agent->>SP: add_question("Budget?", priority=high, blocking=true)
-    SP-->>Orch: notification: question_added
+    Note over Agent: Continues with other work
+    Agent->>SP: market_analysis(...)
+    Agent->>SP: competitor_analysis(...)
     
-    Note over Orch: Continue until decision point
+    Note over Agent: Checks for answers (agent decides when)
+    Agent->>SP: get_answered_questions()
+    SP-->>Agent: [] (none yet)
     
-    Orch->>SP: get_pending_questions()
-    SP-->>Orch: [{id: "q1", blocking: true, priority: "high", ...}]
+    Note over Agent: Realizes it's truly blocked
+    Agent->>Orch: request_human_input(<br/>  reason="Need budget for projections",<br/>  blocking_question_ids=["q_001"]<br/>)
     
-    Note over Orch: Blocking high-priority → pause
+    Orch->>UI: SSE: awaiting_user_input
+    Note over Orch: await user_answered_event.wait()
     
-    Orch->>Orch: Create checkpoint (MAF)
-    Orch-->>API: WorkflowPaused(checkpoint_id, questions)
-    API-->>UI: SSE: questions_pending
+    Note over UI: Questions tab highlights
+    UI->>Orch: GET /questions (polling)
+    Orch->>SP: get_all_questions()
+    Orch-->>UI: [{id: "q_001", question: "Budget?", ...}]
     
-    UI->>UI: Display questions to user
-    UI->>API: POST /sessions/{id}/answers {q1: "€100k"}
-    API->>SP: submit_answers({q1: "€100k"})
-    API->>Orch: Resume from checkpoint
+    User->>UI: Types "$150,000", clicks Save
+    UI->>Orch: POST /answers [{q_001: "$150,000"}]
+    Orch->>SP: submit_answers([{q_001: "$150,000"}])
+    Orch->>Orch: user_answered_event.set()
     
-    Orch->>Orch: Restore checkpoint
-    Orch->>SP: read_section("user_answers")
-    Orch->>Agent: Continue with context
+    Orch-->>Agent: "User has provided answers. Read questions to continue."
+    Agent->>SP: get_answered_questions()
+    SP-->>Agent: [{id: "q_001", answer: "$150,000"}]
+    
+    Note over Agent: Continues with finance_analysis using budget
 ```
 
-### When to Pause
+### Local Function: `request_human_input()`
 
-The orchestrator uses these heuristics to decide when to pause for human input:
-
-| Condition | Action |
-|-----------|--------|
-| Any `blocking=true` + `priority=high` question | Pause immediately |
-| Phase boundary (e.g., market→competitor→finance) | Check for accumulated questions |
-| Agent output contains "need human input" | Pause after that agent |
-| More than 3 unanswered questions | Pause at next agent boundary |
-
-### Checkpoint Management
-
-MAF provides automatic checkpointing at workflow boundaries:
+This is a **local Python function** registered as a tool with the MAF agent, NOT an MCP tool. This gives the orchestrator full control over the blocking behavior.
 
 ```python
-# Workflow pauses and creates checkpoint
-checkpoint_info = await workflow.create_checkpoint()
-
-# Later, resume from checkpoint
-await workflow.resume_from_checkpoint(
-    checkpoint_id=checkpoint_info.checkpoint_id,
-    context={"user_answers": answers}
-)
+class HumanInputTool:
+    """Local function tool for blocking on human input.
+    
+    This is NOT an MCP tool - it's a local Python function that:
+    1. Emits SSE event to notify UI
+    2. Blocks using asyncio.Event
+    3. Returns when user submits answers
+    """
+    
+    def __init__(self, session_id: str, event_queue: asyncio.Queue, answer_event: asyncio.Event):
+        self.session_id = session_id
+        self.event_queue = event_queue
+        self.answer_event = answer_event
+    
+    async def request_human_input(
+        self,
+        reason: str,
+        blocking_question_ids: list[str] | None = None,
+    ) -> str:
+        """Block workflow until user provides answers.
+        
+        Args:
+            reason: Why human input is needed (shown to user)
+            blocking_question_ids: Optional list of question IDs that must be answered
+            
+        Returns:
+            Message indicating user has answered (agent should read questions)
+        """
+        # 1. Emit SSE event
+        await self.event_queue.put({
+            "type": "awaiting_user_input",
+            "data": {
+                "reason": reason,
+                "blocking_question_ids": blocking_question_ids or [],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        })
+        
+        # 2. Block until user answers
+        await self.answer_event.wait()
+        self.answer_event.clear()  # Reset for potential future use
+        
+        # 3. Return guidance to agent
+        return (
+            "User has provided answers to your questions. "
+            "Call get_answered_questions() to retrieve the answers and continue your work."
+        )
 ```
 
-### API Endpoints for HITL
+### When to Call `request_human_input()`
+
+The orchestrator agent is guided by the system prompt to call this function only when truly blocked:
+
+```markdown
+## When to Block for Human Input
+
+Call `request_human_input()` ONLY when:
+1. You have unanswered questions with priority "high" or "blocking"
+2. AND there is no reasonable work that can proceed without those answers
+3. AND you have exhausted other research avenues
+
+Do NOT call it:
+- If there are still tasks you can work on
+- For "nice to have" questions (low/medium priority)
+- Before giving agents a chance to complete their work
+
+When you call it, the user will be notified and research will pause until they respond.
+```
+
+### Question Priorities
+
+| Priority | Meaning | Agent Behavior |
+|----------|---------|----------------|
+| `low` | Nice to have, won't affect core recommendation | Never block, use defaults if needed |
+| `medium` | Would improve accuracy/depth | Check periodically, proceed without if necessary |
+| `high` | Important for accurate recommendations | Should be answered before synthesis |
+| `blocking` | Research cannot reasonably proceed | Triggers `request_human_input()` |
+
+### API Endpoints for Questions
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `POST /sessions/{id}/answers` | POST | Submit answers to pending questions |
-| `GET /sessions/{id}/questions` | GET | Get current pending questions |
-| `POST /sessions/{id}/resume` | POST | Resume paused workflow |
-| `GET /sessions/{id}/checkpoint` | GET | Get current checkpoint status |
+| `GET /sessions/{id}/questions` | GET | Poll all questions (pending + answered) |
+| `POST /sessions/{id}/questions/answers` | POST | Submit answers; unblocks if waiting |
+
+> **Note**: No separate `/resume` endpoint needed. Submitting answers automatically unblocks the workflow.
+
+### SSE Events for Questions
+
+| Event | When | Payload |
+|-------|------|---------|
+| `question_added` | Agent adds a question | `{question_id, question, priority, asked_by}` |
+| `awaiting_user_input` | `request_human_input()` called | `{reason, blocking_question_ids}` |
+| `questions_answered` | User submits answers | `{answered_question_ids}` |
 
 ## Event Streaming Architecture
 

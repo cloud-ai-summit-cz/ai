@@ -28,6 +28,7 @@ class WorkspaceState(BaseModel):
     notes: list[Note] = []
     draft_sections: dict[str, DraftSection] = {}
     plan: list[Task] = []
+    questions: list[Question] = []
 
 class Note(BaseModel):
     """A raw piece of information, fact, or finding."""
@@ -53,6 +54,25 @@ class Task(BaseModel):
     status: str = "todo"  # todo, in_progress, completed, blocked
     assigned_to: str | None = None
     dependencies: list[str] = []
+
+class QuestionPriority(str, Enum):
+    """Priority levels for questions."""
+    LOW = "low"          # Nice to have, won't block research
+    MEDIUM = "medium"    # Would improve research quality
+    HIGH = "high"        # Important for accurate recommendations
+    BLOCKING = "blocking" # Research cannot proceed without answer
+
+class Question(BaseModel):
+    """A question for user clarification (human-in-the-loop)."""
+    id: str
+    question: str
+    context: str  # Why this information is needed
+    priority: QuestionPriority = QuestionPriority.MEDIUM
+    asked_by: str  # Agent that asked the question
+    asked_at: datetime
+    answered: bool = False
+    answer: str | None = None
+    answered_at: datetime | None = None
 ```
 
 ## Storage Design (Demo Phase)

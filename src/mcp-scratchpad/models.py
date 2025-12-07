@@ -5,10 +5,42 @@ Designed to be storage-agnostic - can be used with in-memory, Cosmos DB, Redis, 
 """
 
 from datetime import datetime
+from enum import Enum
 from typing import Dict, List, Optional
 import uuid
 
 from pydantic import BaseModel, Field
+
+
+class QuestionPriority(str, Enum):
+    """Priority level for a question.
+    
+    - low: Nice to have, won't block research
+    - medium: Would improve research quality
+    - high: Important for accurate recommendations
+    - blocking: Research cannot proceed without answer
+    """
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    BLOCKING = "blocking"
+
+
+class Question(BaseModel):
+    """A question for the user from an agent.
+    
+    Used for human-in-the-loop interactions where agents need
+    clarification or additional input from the user.
+    """
+    id: str = Field(default_factory=lambda: f"q_{uuid.uuid4().hex[:8]}")
+    question: str  # The question text
+    context: str  # Why this information is needed
+    asked_by: str  # The agent that asked this question
+    priority: QuestionPriority = QuestionPriority.MEDIUM
+    asked_at: datetime = Field(default_factory=datetime.now)
+    answered: bool = False
+    answer: Optional[str] = None
+    answered_at: Optional[datetime] = None
 
 
 class Note(BaseModel):
@@ -45,6 +77,7 @@ class WorkspaceState(BaseModel):
     notes: List[Note] = Field(default_factory=list)
     draft_sections: Dict[str, DraftSection] = Field(default_factory=dict)
     plan: List[Task] = Field(default_factory=list)
+    questions: List[Question] = Field(default_factory=list)
 
 
 class ScratchpadSession(BaseModel):

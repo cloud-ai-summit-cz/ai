@@ -6,7 +6,7 @@ Microsoft Agent Framework (MAF).
 
 Architecture: Dynamic Agent-as-Tool Pattern
 - Main orchestrator agent has full autonomy to decide which agents to call
-- Specialist agents (market-analyst, competitor-analyst, synthesizer) are
+- Specialist agents (market-analyst via A2A, others via Foundry) are
   exposed as tools that the orchestrator can invoke dynamically
 - The orchestrator can call agents multiple times, in any order, based on
   its reasoning about the research query
@@ -18,6 +18,11 @@ Session Isolation (SECURITY):
 - AI agents CANNOT set or modify session_id - it's injected by the orchestrator
 - This prevents cross-session data access
 
+A2A Integration:
+- Market-analyst is called via A2A protocol (agent runs MCP tools internally)
+- Session ID is passed via X-Session-ID header to enable session-scoped MCP access
+- Tool call events from A2A agents are NOT visible to orchestrator (see SSE options)
+
 Uses middleware to intercept tool calls for real-time SSE streaming.
 """
 
@@ -28,11 +33,15 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
 
+import httpx
+from a2a.types import AgentCard
 from jinja2 import Template
 from agent_framework import ChatAgent, FunctionInvocationContext, MCPStreamableHTTPTool
+from agent_framework.a2a import A2AAgent
 from agent_framework_azure_ai import AzureAIAgentClient
 from azure.identity.aio import DefaultAzureCredential
 
+from retry_middleware import RateLimitRetryMiddleware
 from telemetry import get_tracer, set_session_context, set_agent_context, set_tool_context
 
 from config import (
@@ -64,6 +73,12 @@ from models import (
 
 logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
+
+# MCP connection timeout configuration
+# Longer timeouts to handle Azure API Management and TLS handshake latency
+MCP_CONNECTION_TIMEOUT = 60.0  # 60 seconds for initial connection/TLS handshake
+MCP_SSE_READ_TIMEOUT = 120.0  # 120 seconds for SSE stream reads (tool execution)
+MCP_REQUEST_TIMEOUT = 90  # 90 seconds for individual MCP requests
 
 
 # === Session-Scoped MCP Tool Wrapper ===
@@ -205,8 +220,8 @@ class ToolCallEventQueue:
 
 # Scratchpad tool names for tracking updates
 SCRATCHPAD_WRITE_TOOLS = {"write_draft_section", "add_note", "add_task", "add_tasks", "update_task"}
-SCRATCHPAD_READ_TOOLS = {"read_section", "list_sections"}
-SCRATCHPAD_QUESTION_TOOLS = {"add_question", "get_pending_questions", "get_answered_questions", "submit_answers"}
+SCRATCHPAD_READ_TOOLS = {"read_section", "list_sections", "read_draft", "read_notes", "read_plan"}
+SCRATCHPAD_QUESTION_TOOLS = {"add_question", "get_pending_questions", "get_answered_questions", "get_all_questions", "submit_answers"}
 
 # Agent tool names (subagents exposed as tools to orchestrator)
 AGENT_TOOL_NAMES = {"market_analysis", "competitor_analysis", "location_scouting", "finance_analysis", "synthesize_findings"}
@@ -592,9 +607,11 @@ class AgentOrchestrator:
     - This prevents cross-session data access
 
     Specialist agents:
-    1. market-analyst: Analyzes market opportunities and trends
-    2. competitor-analyst: Analyzes competitive landscape
-    3. synthesizer: Combines insights into actionable recommendations
+    1. market-analyst: Analyzes market opportunities and trends (via A2A)
+    2. competitor-analyst: Analyzes competitive landscape (DISABLED - future A2A)
+    3. location-scout: Evaluates locations and properties (DISABLED - future A2A)
+    4. finance-analyst: Analyzes financial viability (DISABLED - future A2A)
+    5. synthesizer: Combines insights into recommendations (DISABLED - future A2A)
 
     MCP Scratchpad tools:
     - write_section, read_section, list_sections: Document collaboration
@@ -613,6 +630,10 @@ class AgentOrchestrator:
         self._tool_call_log: list[dict[str, Any]] = []
         self._mcp_scratchpad: MCPStreamableHTTPTool | None = None
         self._session_mcp_tools: dict[str, MCPStreamableHTTPTool] = {}  # Session-scoped MCP tools
+        # A2A HTTP clients (session-scoped for header injection)
+        self._a2a_http_clients: dict[str, httpx.AsyncClient] = {}
+        # Human-in-the-loop: sessions waiting for user input
+        self._waiting_sessions: dict[str, asyncio.Event] = {}
 
     async def __aenter__(self) -> "AgentOrchestrator":
         """Async context manager entry."""
@@ -627,6 +648,9 @@ class AgentOrchestrator:
                 url=self.settings.mcp_scratchpad_url,
                 headers={"Authorization": f"Bearer {self.settings.mcp_scratchpad_api_key}"},
                 description="Shared workspace for storing research findings and collaboration between agents",
+                timeout=MCP_CONNECTION_TIMEOUT,
+                sse_read_timeout=MCP_SSE_READ_TIMEOUT,
+                request_timeout=MCP_REQUEST_TIMEOUT,
             )
             await self._mcp_scratchpad.__aenter__()
             logger.info(f"MCP Scratchpad connected with {len(self._mcp_scratchpad.functions)} tools")
@@ -703,6 +727,9 @@ class AgentOrchestrator:
                     "X-Caller-Agent": caller_agent,
                 },
                 description="Shared workspace for storing research findings and collaboration between agents",
+                timeout=MCP_CONNECTION_TIMEOUT,
+                sse_read_timeout=MCP_SSE_READ_TIMEOUT,
+                request_timeout=MCP_REQUEST_TIMEOUT,
             )
             await session_tool.__aenter__()
             return session_tool
@@ -721,6 +748,9 @@ class AgentOrchestrator:
                     "X-Caller-Agent": caller_agent,
                 },
                 description="Shared workspace for storing research findings and collaboration between agents",
+                timeout=MCP_CONNECTION_TIMEOUT,
+                sse_read_timeout=MCP_SSE_READ_TIMEOUT,
+                request_timeout=MCP_REQUEST_TIMEOUT,
             )
             await session_tool.__aenter__()
             self._session_mcp_tools[cache_key] = session_tool
@@ -746,157 +776,6 @@ class AgentOrchestrator:
                     logger.debug(f"Cleaned up MCP tool: {key}")
                 except Exception as e:
                     logger.debug(f"Error cleaning up MCP tool {key}: {e}")
-
-    async def _create_mcp_tools_for_agent(
-        self,
-        agent_name: str,
-        session_id: str,
-    ) -> list[MCPStreamableHTTPTool]:
-        """Create MCP tools for a specific agent based on their role.
-        
-        ADR-006: MCP tools are now managed by the orchestrator instead of being
-        configured at agent provisioning time in Foundry. This enables:
-        - Real-time SSE streaming of tool calls via middleware
-        - Session isolation for scratchpad via X-Session-ID headers
-        - Full observability without App Insights polling latency
-        
-        Agent to MCP tool mapping:
-        - market-analyst: scratchpad, demographics
-        - competitor-analyst: scratchpad, business-registry
-        - synthesizer: scratchpad only
-        - research-orchestrator: scratchpad only
-        
-        Args:
-            agent_name: Name of the agent (e.g., "market-analyst").
-            session_id: Session ID for scratchpad isolation.
-            
-        Returns:
-            List of MCPStreamableHTTPTool instances for the agent.
-        """
-        tools: list[MCPStreamableHTTPTool] = []
-        
-        # Session-scoped scratchpad (always included if configured)
-        scratchpad_tool = await self._get_session_mcp_tool(session_id, caller_agent=agent_name)
-        if scratchpad_tool:
-            tools.append(scratchpad_tool)
-        
-        # Agent-specific MCP tools (ADR-006: orchestrator-managed)
-        if agent_name == "market-analyst":
-            # Demographics for population, income, consumer behavior
-            if self.settings.mcp_demographics_enabled:
-                demographics_tool = MCPStreamableHTTPTool(
-                    name="demographics",
-                    url=self.settings.mcp_demographics_url,
-                    headers={"Authorization": f"Bearer {self.settings.mcp_demographics_api_key}"},
-                    description="Demographic and consumer behavior data: population, income, age distribution, spending patterns",
-                )
-                await demographics_tool.__aenter__()
-                tools.append(demographics_tool)
-                logger.info(f"Added mcp-demographics to {agent_name}")
-        
-        elif agent_name == "competitor-analyst":
-            # Business registry for company data, financials, industry players
-            if self.settings.mcp_business_registry_enabled:
-                business_registry_tool = MCPStreamableHTTPTool(
-                    name="business_registry",
-                    url=self.settings.mcp_business_registry_url,
-                    headers={"Authorization": f"Bearer {self.settings.mcp_business_registry_api_key}"},
-                    description="Business registry: company profiles, financials, locations, industry players",
-                )
-                await business_registry_tool.__aenter__()
-                tools.append(business_registry_tool)
-                logger.info(f"Added mcp-business-registry to {agent_name}")
-        
-        elif agent_name == "location-scout":
-            # Government data for regulations, permits, zoning
-            if self.settings.mcp_government_data_enabled:
-                government_data_tool = MCPStreamableHTTPTool(
-                    name="government_data",
-                    url=self.settings.mcp_government_data_url,
-                    headers={"Authorization": f"Bearer {self.settings.mcp_government_data_api_key}"},
-                    description="Government data: permits, zoning, regulations, tax rates, licensing requirements",
-                )
-                await government_data_tool.__aenter__()
-                tools.append(government_data_tool)
-                logger.info(f"Added mcp-government-data to {agent_name}")
-            
-            # Demographics for location analysis
-            if self.settings.mcp_demographics_enabled:
-                demographics_tool = MCPStreamableHTTPTool(
-                    name="demographics",
-                    url=self.settings.mcp_demographics_url,
-                    headers={"Authorization": f"Bearer {self.settings.mcp_demographics_api_key}"},
-                    description="Demographic and consumer behavior data: population, income, age distribution, spending patterns",
-                )
-                await demographics_tool.__aenter__()
-                tools.append(demographics_tool)
-                logger.info(f"Added mcp-demographics to {agent_name}")
-            
-            # Real estate for property listings and location scores
-            if self.settings.mcp_real_estate_enabled:
-                real_estate_tool = MCPStreamableHTTPTool(
-                    name="real_estate",
-                    url=self.settings.mcp_real_estate_url,
-                    headers={"Authorization": f"Bearer {self.settings.mcp_real_estate_api_key}"},
-                    description="Real estate data: commercial properties, rental rates, foot traffic, location scores",
-                )
-                await real_estate_tool.__aenter__()
-                tools.append(real_estate_tool)
-                logger.info(f"Added mcp-real-estate to {agent_name}")
-        
-        elif agent_name == "finance-analyst":
-            # Calculator for financial projections
-            if self.settings.mcp_calculator_enabled:
-                calculator_tool = MCPStreamableHTTPTool(
-                    name="calculator",
-                    url=self.settings.mcp_calculator_url,
-                    headers={"Authorization": f"Bearer {self.settings.mcp_calculator_api_key}"},
-                    description="Financial calculator: startup costs, operating costs, revenue projections, break-even, ROI, NPV, cash flow",
-                )
-                await calculator_tool.__aenter__()
-                tools.append(calculator_tool)
-                logger.info(f"Added mcp-calculator to {agent_name}")
-            
-            # Real estate for rental costs
-            if self.settings.mcp_real_estate_enabled:
-                real_estate_tool = MCPStreamableHTTPTool(
-                    name="real_estate",
-                    url=self.settings.mcp_real_estate_url,
-                    headers={"Authorization": f"Bearer {self.settings.mcp_real_estate_api_key}"},
-                    description="Real estate data: commercial properties, rental rates, foot traffic, location scores",
-                )
-                await real_estate_tool.__aenter__()
-                tools.append(real_estate_tool)
-                logger.info(f"Added mcp-real-estate to {agent_name}")
-            
-            # Government data for tax rates and regulatory costs
-            if self.settings.mcp_government_data_enabled:
-                government_data_tool = MCPStreamableHTTPTool(
-                    name="government_data",
-                    url=self.settings.mcp_government_data_url,
-                    headers={"Authorization": f"Bearer {self.settings.mcp_government_data_api_key}"},
-                    description="Government data: permits, zoning, regulations, tax rates, licensing requirements",
-                )
-                await government_data_tool.__aenter__()
-                tools.append(government_data_tool)
-                logger.info(f"Added mcp-government-data to {agent_name}")
-            
-            # Business registry for competitor financial benchmarks
-            if self.settings.mcp_business_registry_enabled:
-                business_registry_tool = MCPStreamableHTTPTool(
-                    name="business_registry",
-                    url=self.settings.mcp_business_registry_url,
-                    headers={"Authorization": f"Bearer {self.settings.mcp_business_registry_api_key}"},
-                    description="Business registry: company profiles, financials, locations, industry players",
-                )
-                await business_registry_tool.__aenter__()
-                tools.append(business_registry_tool)
-                logger.info(f"Added mcp-business-registry to {agent_name}")
-        
-        # synthesizer and research-orchestrator only need scratchpad (already added above)
-        
-        logger.info(f"Created {len(tools)} MCP tools for {agent_name}: {[t.name for t in tools]}")
-        return tools
 
     async def _get_scratchpad_snapshot_for_session(self, session_id: str) -> ScratchpadSnapshotData | None:
         """Fetch current scratchpad state for a specific session.
@@ -1314,6 +1193,188 @@ class AgentOrchestrator:
             # Close the uncached MCP connection
             await mcp_tool.__aexit__(None, None, None)
 
+    async def get_scratchpad_questions(self, session_id: str) -> dict[str, Any]:
+        """Get all questions for a session.
+        
+        SECURITY: Uses session-scoped MCP tool with X-Session-ID header.
+        
+        Args:
+            session_id: The session ID for data isolation.
+            
+        Returns:
+            Dict with questions array and metadata.
+            
+        Raises:
+            RuntimeError: If scratchpad not available.
+        """
+        # Use use_cache=False for API proxy calls to avoid stale session issues
+        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy", use_cache=False)
+        if not mcp_tool:
+            raise RuntimeError("MCP Scratchpad not configured")
+        
+        try:
+            # Find get_all_questions function
+            get_questions_fn = None
+            for fn in mcp_tool.functions:
+                if fn.name == "get_all_questions":
+                    get_questions_fn = fn
+                    break
+            
+            if not get_questions_fn:
+                raise RuntimeError("get_all_questions tool not available")
+            
+            # No session_id parameter - it's in the header
+            result = await get_questions_fn()
+            full_text = self._parse_mcp_result(result)
+            
+            if not full_text:
+                return {"questions": [], "total": 0, "pending_count": 0, "answered_count": 0}
+            
+            try:
+                data = json.loads(full_text)
+                return {
+                    "questions": data.get("questions", []),
+                    "total": data.get("total", 0),
+                    "pending_count": data.get("pending_count", 0),
+                    "answered_count": data.get("answered_count", 0),
+                }
+            except json.JSONDecodeError:
+                return {"questions": [], "total": 0, "pending_count": 0, "answered_count": 0}
+        finally:
+            # Close the uncached MCP connection
+            await mcp_tool.__aexit__(None, None, None)
+
+    async def submit_scratchpad_answers(
+        self, session_id: str, answers: list[dict[str, str]]
+    ) -> dict[str, Any]:
+        """Submit answers to questions via MCP scratchpad.
+        
+        SECURITY: Uses session-scoped MCP tool with X-Session-ID header.
+        
+        Args:
+            session_id: The session ID for data isolation.
+            answers: List of {question_id, answer} dicts.
+            
+        Returns:
+            Dict with result from submit_answers tool.
+            
+        Raises:
+            RuntimeError: If scratchpad not available.
+        """
+        mcp_tool = await self._get_session_mcp_tool(session_id, caller_agent="api-proxy", use_cache=False)
+        if not mcp_tool:
+            raise RuntimeError("MCP Scratchpad not configured")
+        
+        try:
+            # Find submit_answers function
+            submit_fn = None
+            for fn in mcp_tool.functions:
+                if fn.name == "submit_answers":
+                    submit_fn = fn
+                    break
+            
+            if not submit_fn:
+                raise RuntimeError("submit_answers tool not available")
+            
+            # Call with answers
+            result = await submit_fn(answers=answers)
+            full_text = self._parse_mcp_result(result)
+            
+            if not full_text:
+                return {"answers_saved": 0, "remaining_pending": 0}
+            
+            try:
+                return json.loads(full_text)
+            except json.JSONDecodeError:
+                return {"answers_saved": 0, "remaining_pending": 0}
+        finally:
+            # Close the uncached MCP connection
+            await mcp_tool.__aexit__(None, None, None)
+
+    def is_session_waiting_for_input(self, session_id: str) -> bool:
+        """Check if a session's workflow is waiting for user input.
+        
+        Args:
+            session_id: The session ID to check.
+            
+        Returns:
+            True if the session is blocked waiting for user input.
+        """
+        return session_id in self._waiting_sessions
+
+    def unblock_session(self, session_id: str) -> bool:
+        """Unblock a session that was waiting for user input.
+        
+        Args:
+            session_id: The session ID to unblock.
+            
+        Returns:
+            True if session was unblocked, False if it wasn't waiting.
+        """
+        if session_id in self._waiting_sessions:
+            event = self._waiting_sessions.pop(session_id)
+            event.set()  # Signal the asyncio.Event to unblock
+            logger.info(f"Session {session_id} unblocked")
+            return True
+        return False
+
+    async def request_human_input(
+        self,
+        session_id: str,
+        reason: str,
+        blocking_question_ids: list[str],
+        event_queue: "ToolCallEventQueue",
+    ) -> str:
+        """Block workflow until user provides input.
+        
+        This is a LOCAL orchestrator function (not an MCP tool). When called:
+        1. Emits awaiting_user_input SSE event via event_queue
+        2. Creates an asyncio.Event and stores it in _waiting_sessions
+        3. Awaits the Event (blocks workflow)
+        4. Returns guidance message when unblocked
+        
+        The workflow is unblocked when user submits answers via POST /answers endpoint,
+        which calls unblock_session().
+        
+        Args:
+            session_id: The session ID.
+            reason: Human-readable explanation of why input is needed.
+            blocking_question_ids: IDs of questions that triggered this block.
+            event_queue: Queue for emitting SSE events.
+            
+        Returns:
+            Guidance message to tell the agent to read answered questions.
+        """
+        logger.info(f"Workflow blocking for human input: session={session_id}, reason={reason}")
+        
+        # Emit SSE event to notify UI
+        await event_queue.put({
+            "type": "awaiting_user_input",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "session_id": session_id,
+            "data": {
+                "reason": reason,
+                "blocking_question_ids": blocking_question_ids,
+            }
+        })
+        
+        # Create event for blocking
+        wait_event = asyncio.Event()
+        self._waiting_sessions[session_id] = wait_event
+        
+        # Wait for user to submit answers (unblock_session will set the event)
+        logger.info(f"Workflow waiting for user input: session={session_id}")
+        await wait_event.wait()
+        
+        logger.info(f"Workflow resumed after user input: session={session_id}")
+        
+        # Return guidance for the agent
+        return (
+            "User has provided answers to your questions. "
+            "Please read the answered questions using get_answered_questions tool "
+            "to see their responses and continue your research accordingly."
+        )
+
     def _ensure_credential(self) -> DefaultAzureCredential:
         """Ensure credential is initialized."""
         if self._credential is None:
@@ -1348,12 +1409,22 @@ class AgentOrchestrator:
             should_cleanup_agent=False,
         )
 
+        # Add retry middleware for handling 429 rate limit errors
+        retry_middleware = RateLimitRetryMiddleware(
+            max_retries=5,
+            initial_delay=2.0,
+            max_delay=60.0,
+            exponential_base=2.0,
+            jitter=True,
+        )
+
         agent = ChatAgent(
             chat_client=client,
             name=agent_name,
             description=description,
             instructions="",  # Use agent's existing instructions
             tools=tools or [],
+            middleware=[retry_middleware],
         )
         
         return agent, client
@@ -1375,16 +1446,421 @@ class AgentOrchestrator:
             async_credential=credential,
         )
 
+    async def _create_a2a_market_analyst(
+        self,
+        session_id: str,
+        language: str = "cs",
+    ) -> tuple[A2AAgent, httpx.AsyncClient]:
+        """Create an A2A agent client for market-analyst with session headers.
+        
+        The market-analyst agent runs as a separate A2A service with its own
+        MCP tools (demographics, scratchpad). The session_id is passed via
+        X-Session-ID header to enable session-scoped MCP Scratchpad access.
+        The language preference is passed via X-Language header.
+        
+        NOTE: Tool calls made BY the market-analyst (to MCP servers) are NOT
+        visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
+        options on propagating tool events for SSE streaming.
+        
+        Args:
+            session_id: Session ID for MCP Scratchpad isolation.
+            language: Language for responses: 'cs' for Czech, 'en' for English.
+            
+        Returns:
+            Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
+        """
+        if not self.settings.a2a_market_analyst_enabled:
+            raise RuntimeError(
+                "A2A Market Analyst not configured. Set A2A_MARKET_ANALYST_URL and A2A_MARKET_ANALYST_API_KEY."
+            )
+        
+        # Create HTTP client with session-scoped headers
+        # Extended timeout for LLM + MCP operations (can take several minutes)
+        headers = {
+            "X-Session-ID": session_id,
+            "X-Caller-Agent": "research-orchestrator",
+            "X-Language": language,
+        }
+        if self.settings.a2a_market_analyst_api_key:
+            headers["Authorization"] = f"Bearer {self.settings.a2a_market_analyst_api_key}"
+        
+        http_client = httpx.AsyncClient(
+            timeout=300.0,  # 5 minutes for complex analysis
+            headers=headers,
+        )
+        
+        # Fetch the Agent Card to discover capabilities
+        agent_card_url = f"{self.settings.a2a_market_analyst_url}/agent-card.json"
+        logger.info(f"Fetching A2A Agent Card from {agent_card_url}")
+        
+        try:
+            response = await http_client.get(agent_card_url)
+            response.raise_for_status()
+            agent_card = AgentCard.model_validate(response.json())
+            
+            logger.info(f"A2A Agent Card: {agent_card.name} v{agent_card.version}")
+            logger.info(f"A2A Agent URL: {agent_card.url}")
+            if agent_card.skills:
+                logger.info(f"A2A Agent Skills: {[s.name for s in agent_card.skills]}")
+        except httpx.HTTPStatusError as e:
+            await http_client.aclose()
+            raise RuntimeError(
+                f"Failed to fetch A2A Agent Card: HTTP {e.response.status_code} - {e.response.text[:200]}"
+            )
+        except Exception as e:
+            await http_client.aclose()
+            raise RuntimeError(f"Failed to fetch A2A Agent Card: {e}")
+        
+        # Create A2A agent using the URL from the agent card
+        agent_url = agent_card.url.rstrip("/") if agent_card.url else self.settings.a2a_market_analyst_url
+        
+        agent = A2AAgent(
+            name=agent_card.name,
+            description=agent_card.description,
+            agent_card=agent_card,
+            url=agent_url,
+            http_client=http_client,
+        )
+        
+        logger.info(f"Created A2A market-analyst agent (session={session_id[:8]}...)")
+        
+        return agent, http_client
+
+    async def _create_a2a_competitor_analyst(
+        self,
+        session_id: str,
+        language: str = "cs",
+    ) -> tuple[A2AAgent, httpx.AsyncClient]:
+        """Create an A2A agent client for competitor-analyst with session headers.
+        
+        The competitor-analyst agent runs as a separate A2A service with its own
+        MCP tools (business-registry, scratchpad) and Grounded Web Search (Bing).
+        The session_id is passed via X-Session-ID header to enable session-scoped
+        MCP Scratchpad access. The language preference is passed via X-Language header.
+        
+        NOTE: Tool calls made BY the competitor-analyst (to MCP servers) are NOT
+        visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
+        options on propagating tool events for SSE streaming.
+        
+        Args:
+            session_id: Session ID for MCP Scratchpad isolation.
+            language: Language for responses: 'cs' for Czech, 'en' for English.
+            
+        Returns:
+            Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
+        """
+        if not self.settings.a2a_competitor_analyst_enabled:
+            raise RuntimeError(
+                "A2A Competitor Analyst not configured. Set A2A_COMPETITOR_ANALYST_URL and A2A_COMPETITOR_ANALYST_API_KEY."
+            )
+        
+        # Create HTTP client with session-scoped headers
+        # Extended timeout for LLM + MCP operations (can take several minutes)
+        headers = {
+            "X-Session-ID": session_id,
+            "X-Caller-Agent": "research-orchestrator",
+            "X-Language": language,
+        }
+        if self.settings.a2a_competitor_analyst_api_key:
+            headers["Authorization"] = f"Bearer {self.settings.a2a_competitor_analyst_api_key}"
+        
+        http_client = httpx.AsyncClient(
+            timeout=300.0,  # 5 minutes for complex analysis
+            headers=headers,
+        )
+        
+        # Fetch the Agent Card to discover capabilities
+        agent_card_url = f"{self.settings.a2a_competitor_analyst_url}/agent-card.json"
+        logger.info(f"Fetching A2A Agent Card from {agent_card_url}")
+        
+        try:
+            response = await http_client.get(agent_card_url)
+            response.raise_for_status()
+            agent_card = AgentCard.model_validate(response.json())
+            
+            logger.info(f"A2A Agent Card: {agent_card.name} v{agent_card.version}")
+            logger.info(f"A2A Agent URL: {agent_card.url}")
+            if agent_card.skills:
+                logger.info(f"A2A Agent Skills: {[s.name for s in agent_card.skills]}")
+        except httpx.HTTPStatusError as e:
+            await http_client.aclose()
+            raise RuntimeError(
+                f"Failed to fetch A2A Agent Card: HTTP {e.response.status_code} - {e.response.text[:200]}"
+            )
+        except Exception as e:
+            await http_client.aclose()
+            raise RuntimeError(f"Failed to fetch A2A Agent Card: {e}")
+        
+        # Create A2A agent using the URL from the agent card
+        agent_url = agent_card.url.rstrip("/") if agent_card.url else self.settings.a2a_competitor_analyst_url
+        
+        agent = A2AAgent(
+            name=agent_card.name,
+            description=agent_card.description,
+            agent_card=agent_card,
+            url=agent_url,
+            http_client=http_client,
+        )
+        
+        logger.info(f"Created A2A competitor-analyst agent (session={session_id[:8]}...)")
+        
+        return agent, http_client
+
+    async def _create_a2a_finance_analyst(
+        self,
+        session_id: str,
+        language: str = "cs",
+    ) -> tuple[A2AAgent, httpx.AsyncClient]:
+        """Create an A2A agent client for finance-analyst with session headers.
+        
+        The finance-analyst agent runs as a separate A2A service with its own
+        MCP tools (calculator, real-estate, government-data, business-registry, scratchpad)
+        and Grounded Web Search (Bing) for real-time financial data.
+        The session_id is passed via X-Session-ID header to enable session-scoped
+        MCP Scratchpad access. The language preference is passed via X-Language header.
+        
+        NOTE: Tool calls made BY the finance-analyst (to MCP servers) are NOT
+        visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
+        options on propagating tool events for SSE streaming.
+        
+        Args:
+            session_id: Session ID for MCP Scratchpad isolation.
+            language: Language for responses: 'cs' for Czech, 'en' for English.
+            
+        Returns:
+            Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
+        """
+        if not self.settings.a2a_finance_analyst_enabled:
+            raise RuntimeError(
+                "A2A Finance Analyst not configured. Set A2A_FINANCE_ANALYST_URL and A2A_FINANCE_ANALYST_API_KEY."
+            )
+        
+        # Create HTTP client with session-scoped headers
+        # Extended timeout for LLM + MCP operations (can take several minutes)
+        headers = {
+            "X-Session-ID": session_id,
+            "X-Caller-Agent": "research-orchestrator",
+            "X-Language": language,
+        }
+        if self.settings.a2a_finance_analyst_api_key:
+            headers["Authorization"] = f"Bearer {self.settings.a2a_finance_analyst_api_key}"
+        
+        http_client = httpx.AsyncClient(
+            timeout=300.0,  # 5 minutes for complex analysis
+            headers=headers,
+        )
+        
+        # Fetch the Agent Card to discover capabilities
+        agent_card_url = f"{self.settings.a2a_finance_analyst_url}/agent-card.json"
+        logger.info(f"Fetching A2A Agent Card from {agent_card_url}")
+        
+        try:
+            response = await http_client.get(agent_card_url)
+            response.raise_for_status()
+            agent_card = AgentCard.model_validate(response.json())
+            
+            logger.info(f"A2A Agent Card: {agent_card.name} v{agent_card.version}")
+            logger.info(f"A2A Agent URL: {agent_card.url}")
+            if agent_card.skills:
+                logger.info(f"A2A Agent Skills: {[s.name for s in agent_card.skills]}")
+        except httpx.HTTPStatusError as e:
+            await http_client.aclose()
+            raise RuntimeError(
+                f"Failed to fetch A2A Agent Card: HTTP {e.response.status_code} - {e.response.text[:200]}"
+            )
+        except Exception as e:
+            await http_client.aclose()
+            raise RuntimeError(f"Failed to fetch A2A Agent Card: {e}")
+        
+        # Create A2A agent using the URL from the agent card
+        agent_url = agent_card.url.rstrip("/") if agent_card.url else self.settings.a2a_finance_analyst_url
+        
+        agent = A2AAgent(
+            name=agent_card.name,
+            description=agent_card.description,
+            agent_card=agent_card,
+            url=agent_url,
+            http_client=http_client,
+        )
+        
+        logger.info(f"Created A2A finance-analyst agent (session={session_id[:8]}...)")
+        
+        return agent, http_client
+
+    async def _create_a2a_location_scout(
+        self,
+        session_id: str,
+        language: str = "cs",
+    ) -> tuple[A2AAgent, httpx.AsyncClient]:
+        """Create an A2A agent client for location-scout with session headers.
+        
+        The location-scout agent runs as a separate A2A service with its own
+        MCP tools (government-data, demographics, real-estate, scratchpad) and
+        Grounded Web Search (Bing). The session_id is passed via X-Session-ID
+        header to enable session-scoped MCP Scratchpad access.
+        The language preference is passed via X-Language header.
+        
+        NOTE: Tool calls made BY the location-scout (to MCP servers) are NOT
+        visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
+        options on propagating tool events for SSE streaming.
+        
+        Args:
+            session_id: Session ID for MCP Scratchpad isolation.
+            language: Language for responses: 'cs' for Czech, 'en' for English.
+            
+        Returns:
+            Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
+        """
+        if not self.settings.a2a_location_scout_enabled:
+            raise RuntimeError(
+                "A2A Location Scout not configured. Set A2A_LOCATION_SCOUT_URL and A2A_LOCATION_SCOUT_API_KEY."
+            )
+        
+        # Create HTTP client with session-scoped headers
+        # Extended timeout for LLM + MCP operations (can take several minutes)
+        headers = {
+            "X-Session-ID": session_id,
+            "X-Caller-Agent": "research-orchestrator",
+            "X-Language": language,
+        }
+        if self.settings.a2a_location_scout_api_key:
+            headers["Authorization"] = f"Bearer {self.settings.a2a_location_scout_api_key}"
+        
+        http_client = httpx.AsyncClient(
+            timeout=300.0,  # 5 minutes for complex analysis
+            headers=headers,
+        )
+        
+        # Fetch the Agent Card to discover capabilities
+        agent_card_url = f"{self.settings.a2a_location_scout_url}/agent-card.json"
+        logger.info(f"Fetching A2A Agent Card from {agent_card_url}")
+        
+        try:
+            response = await http_client.get(agent_card_url)
+            response.raise_for_status()
+            agent_card = AgentCard.model_validate(response.json())
+            
+            logger.info(f"A2A Agent Card: {agent_card.name} v{agent_card.version}")
+            logger.info(f"A2A Agent URL: {agent_card.url}")
+            if agent_card.skills:
+                logger.info(f"A2A Agent Skills: {[s.name for s in agent_card.skills]}")
+        except httpx.HTTPStatusError as e:
+            await http_client.aclose()
+            raise RuntimeError(
+                f"Failed to fetch A2A Agent Card: HTTP {e.response.status_code} - {e.response.text[:200]}"
+            )
+        except Exception as e:
+            await http_client.aclose()
+            raise RuntimeError(f"Failed to fetch A2A Agent Card: {e}")
+        
+        # Create A2A agent using the URL from the agent card
+        agent_url = agent_card.url.rstrip("/") if agent_card.url else self.settings.a2a_location_scout_url
+        
+        agent = A2AAgent(
+            name=agent_card.name,
+            description=agent_card.description,
+            agent_card=agent_card,
+            url=agent_url,
+            http_client=http_client,
+        )
+        
+        logger.info(f"Created A2A location-scout agent (session={session_id[:8]}...)")
+        
+        return agent, http_client
+
+    async def _create_a2a_synthesizer(
+        self,
+        session_id: str,
+        language: str = "cs",
+    ) -> tuple[A2AAgent, httpx.AsyncClient]:
+        """Create an A2A agent client for synthesizer with session headers.
+        
+        The synthesizer agent runs as a separate A2A service with its own
+        MCP tools (scratchpad, calculator) for reading research findings from
+        the scratchpad and performing any final calculations needed for the
+        synthesized report. The session_id is passed via X-Session-ID header
+        to enable session-scoped MCP Scratchpad access.
+        The language preference is passed via X-Language header.
+        
+        NOTE: Tool calls made BY the synthesizer (to MCP servers) are NOT
+        visible to the orchestrator. See docs/IMPLEMENTATION_LOG.md for
+        options on propagating tool events for SSE streaming.
+        
+        Args:
+            session_id: Session ID for MCP Scratchpad isolation.
+            language: Language for responses: 'cs' for Czech, 'en' for English.
+            
+        Returns:
+            Tuple of (A2AAgent, httpx.AsyncClient) for cleanup tracking.
+        """
+        if not self.settings.a2a_synthesizer_enabled:
+            raise RuntimeError(
+                "A2A Synthesizer not configured. Set A2A_SYNTHESIZER_URL and A2A_SYNTHESIZER_API_KEY."
+            )
+        
+        # Create HTTP client with session-scoped headers
+        # Extended timeout for LLM + MCP operations (can take several minutes)
+        headers = {
+            "X-Session-ID": session_id,
+            "X-Caller-Agent": "research-orchestrator",
+            "X-Language": language,
+        }
+        if self.settings.a2a_synthesizer_api_key:
+            headers["Authorization"] = f"Bearer {self.settings.a2a_synthesizer_api_key}"
+        
+        http_client = httpx.AsyncClient(
+            timeout=300.0,  # 5 minutes for complex synthesis
+            headers=headers,
+        )
+        
+        # Fetch the Agent Card to discover capabilities
+        agent_card_url = f"{self.settings.a2a_synthesizer_url}/agent-card.json"
+        logger.info(f"Fetching A2A Agent Card from {agent_card_url}")
+        
+        try:
+            response = await http_client.get(agent_card_url)
+            response.raise_for_status()
+            agent_card = AgentCard.model_validate(response.json())
+            
+            logger.info(f"A2A Agent Card: {agent_card.name} v{agent_card.version}")
+            logger.info(f"A2A Agent URL: {agent_card.url}")
+            if agent_card.skills:
+                logger.info(f"A2A Agent Skills: {[s.name for s in agent_card.skills]}")
+        except httpx.HTTPStatusError as e:
+            await http_client.aclose()
+            raise RuntimeError(
+                f"Failed to fetch A2A Agent Card: HTTP {e.response.status_code} - {e.response.text[:200]}"
+            )
+        except Exception as e:
+            await http_client.aclose()
+            raise RuntimeError(f"Failed to fetch A2A Agent Card: {e}")
+        
+        # Create A2A agent using the URL from the agent card
+        agent_url = agent_card.url.rstrip("/") if agent_card.url else self.settings.a2a_synthesizer_url
+        
+        agent = A2AAgent(
+            name=agent_card.name,
+            description=agent_card.description,
+            agent_card=agent_card,
+            url=agent_url,
+            http_client=http_client,
+        )
+        
+        logger.info(f"Created A2A synthesizer agent (session={session_id[:8]}...)")
+        
+        return agent, http_client
+
     # === Session Management ===
 
     def create_session(
-        self, query: str, context: dict[str, Any] | None = None
+        self, query: str, context: dict[str, Any] | None = None, language: str = "cs"
     ) -> ResearchSession:
         """Create a new research session.
 
         Args:
             query: The research query to investigate.
             context: Optional additional context for agents.
+            language: Language for responses: 'cs' for Czech, 'en' for English.
 
         Returns:
             The created session.
@@ -1394,10 +1870,11 @@ class AgentOrchestrator:
             session_id=session_id,
             query=query,
             context=context,
+            language=language,
             status=ResearchSessionStatus.PENDING,
         )
         self._sessions[session_id] = session
-        logger.info(f"Created session {session_id} for query: {query[:50]}...")
+        logger.info(f"Created session {session_id} for query: {query[:50]}... (language={language})")
         return session
 
     def get_session(self, session_id: str) -> ResearchSession | None:
@@ -1471,74 +1948,53 @@ class AgentOrchestrator:
         # Track clients for cleanup - initialized before try block
         agents_to_cleanup: list[ChatAgent] = []
         clients_to_cleanup: list[AzureAIAgentClient] = []
-        # Track MCP tools created for agents (for cleanup)
-        agent_mcp_tools: list[MCPStreamableHTTPTool] = []
+        # Track A2A HTTP clients for cleanup
+        a2a_clients_to_cleanup: list[httpx.AsyncClient] = []
 
         try:
-            # Create MCP tools for orchestrator (scratchpad only)
-            # ADR-006: MCP tools are now managed by orchestrator for real-time SSE streaming
-            session_mcp_orchestrator = await self._get_session_mcp_tool(
+            # Create session-scoped MCP Scratchpad for orchestrator
+            # This is the only MCP tool managed by orchestrator - subagents handle their own MCP tools
+            session_mcp_scratchpad = await self._get_session_mcp_tool(
                 session_id, caller_agent="research-orchestrator"
             )
             
-            # Create MCP tools for each specialist agent
-            # ADR-006: Each agent gets scratchpad + their role-specific MCP tools
-            market_tools = await self._create_mcp_tools_for_agent("market-analyst", session_id)
-            agent_mcp_tools.extend([t for t in market_tools if t.name != f"scratchpad-{session_id[:8]}"])
+            # Get language preference from session
+            language = session.language
             
-            competitor_tools = await self._create_mcp_tools_for_agent("competitor-analyst", session_id)
-            agent_mcp_tools.extend([t for t in competitor_tools if t.name != f"scratchpad-{session_id[:8]}"])
-            
-            location_tools = await self._create_mcp_tools_for_agent("location-scout", session_id)
-            agent_mcp_tools.extend([t for t in location_tools if t.name != f"scratchpad-{session_id[:8]}"])
-            
-            finance_tools = await self._create_mcp_tools_for_agent("finance-analyst", session_id)
-            agent_mcp_tools.extend([t for t in finance_tools if t.name != f"scratchpad-{session_id[:8]}"])
-            
-            synthesizer_tools = await self._create_mcp_tools_for_agent("synthesizer", session_id)
-            # synthesizer only has scratchpad, no additional tools to track
-            
-            # Create specialist agents with their MCP tools
-            # ADR-006: Tools injected here instead of at Foundry provisioning time
-            market_agent, market_client = self._create_foundry_agent(
-                agent_name=MARKET_ANALYST_AGENT_NAME,
-                description="Analyzes market opportunities, trends, customer segments, TAM/SAM/SOM, and market dynamics.",
-                tools=market_tools,
-            )
-            agents_to_cleanup.append(market_agent)
-            clients_to_cleanup.append(market_client)
-            
-            competitor_agent, competitor_client = self._create_foundry_agent(
-                agent_name=COMPETITOR_ANALYST_AGENT_NAME,
-                description="Analyzes competitive landscape, competitor strengths and weaknesses, market positioning, and competitive threats.",
-                tools=competitor_tools,
-            )
-            agents_to_cleanup.append(competitor_agent)
-            clients_to_cleanup.append(competitor_client)
-            
-            location_agent, location_client = self._create_foundry_agent(
-                agent_name=LOCATION_SCOUT_AGENT_NAME,
-                description="Evaluates specific locations, districts, commercial properties, regulations, permits, and site viability.",
-                tools=location_tools,
-            )
-            agents_to_cleanup.append(location_agent)
-            clients_to_cleanup.append(location_client)
-            
-            finance_agent, finance_client = self._create_foundry_agent(
-                agent_name=FINANCE_ANALYST_AGENT_NAME,
-                description="Analyzes financial viability: startup costs, operating costs, revenue projections, break-even, ROI, and investment returns.",
-                tools=finance_tools,
-            )
-            agents_to_cleanup.append(finance_agent)
-            clients_to_cleanup.append(finance_client)
-            
-            synthesizer_agent, synthesizer_client = self._create_foundry_agent(
-                agent_name=SYNTHESIZER_AGENT_NAME,
-                description="Synthesizes research findings into cohesive reports with actionable recommendations.",
-                tools=synthesizer_tools,
-            )
-            agents_to_cleanup.append(synthesizer_agent)
-            clients_to_cleanup.append(synthesizer_client)
+            # === A2A Agent: Market Analyst ===
+            # Market-analyst runs as A2A service with its own MCP tools (demographics, scratchpad)
+            # Session ID and language passed via headers for session-scoped MCP access
+            market_a2a_agent, market_http_client = await self._create_a2a_market_analyst(session_id, language)
+            a2a_clients_to_cleanup.append(market_http_client)
+
+            # === A2A Agent: Competitor Analyst ===
+            # Competitor-analyst runs as A2A service with MCP tools (business-registry, scratchpad)
+            # and Grounded Web Search (Bing) for real-time competitor intelligence
+            competitor_a2a_agent, competitor_http_client = await self._create_a2a_competitor_analyst(session_id, language)
+            a2a_clients_to_cleanup.append(competitor_http_client)
+
+            # === A2A Agent: Finance Analyst ===
+            # Finance-analyst runs as A2A service with MCP tools (calculator, real-estate, government-data,
+            # business-registry, scratchpad) and Grounded Web Search (Bing) for financial analysis
+            finance_a2a_agent, finance_http_client = await self._create_a2a_finance_analyst(session_id, language)
+            a2a_clients_to_cleanup.append(finance_http_client)
+
+            # === A2A Agent: Location Scout ===
+            # Location-scout runs as A2A service with MCP tools (government-data, demographics,
+            # real-estate, scratchpad) and Grounded Web Search (Bing) for location analysis
+            location_a2a_agent, location_http_client = await self._create_a2a_location_scout(session_id, language)
+            a2a_clients_to_cleanup.append(location_http_client)
+
+            # === A2A Agent: Synthesizer ===
+            # Synthesizer runs as A2A service with MCP tools (scratchpad, calculator)
+            # for reading research findings and creating final synthesized reports
+            synthesizer_a2a_agent: A2AAgent | None = None
+            synthesizer_http_client: httpx.AsyncClient | None = None
+            if self.settings.a2a_synthesizer_enabled:
+                synthesizer_a2a_agent, synthesizer_http_client = await self._create_a2a_synthesizer(session_id, language)
+                a2a_clients_to_cleanup.append(synthesizer_http_client)
+            else:
+                logger.warning("Synthesizer A2A agent not configured - synthesize_findings tool will not be available")
 
             # Create event queue early so we can pass it to subagent stream callbacks
             event_queue = ToolCallEventQueue()
@@ -1548,83 +2004,123 @@ class AgentOrchestrator:
                 event_queue, agent_call_count, session_id=session_id
             )
 
-            # Convert specialist agents to tools with stream callbacks for visibility
-            # The stream_callback captures tool calls made BY the subagent (e.g., MCP scratchpad)
-            market_tool = market_agent.as_tool(
+            # Convert A2A agent to tool
+            # NOTE: A2A agents run MCP tools internally - tool calls NOT visible here
+            # See SSE options documentation for approaches to propagate tool events
+            market_tool = market_a2a_agent.as_tool(
                 name="market_analysis",
-                description="Call this tool to analyze market opportunities, trends, customer segments, and market sizing for the research query.",
+                description="Call this tool to analyze market opportunities, trends, customer segments, and market sizing for the research query. The agent will use demographics data and shared scratchpad for collaboration.",
                 arg_name="query",
                 arg_description="The specific market analysis question or aspect to investigate",
-                stream_callback=create_subagent_stream_callback(event_queue, "market-analyst", session_id),
+                # NOTE: stream_callback doesn't work for A2A - tool events happen on remote agent
+                # stream_callback=create_subagent_stream_callback(event_queue, "market-analyst", session_id),
             )
-            competitor_tool = competitor_agent.as_tool(
+
+            # Convert A2A competitor analyst agent to tool
+            # NOTE: A2A agents run MCP tools internally - tool calls NOT visible here
+            competitor_tool = competitor_a2a_agent.as_tool(
                 name="competitor_analysis",
-                description="Call this tool to analyze competitive landscape, competitor strengths/weaknesses, and market positioning.",
+                description="Call this tool to analyze competitive landscape, identify and profile competitors, assess positioning and differentiation opportunities, and evaluate competitive threats. The agent will use business registry data, web search, and shared scratchpad for collaboration.",
                 arg_name="query",
                 arg_description="The specific competitor analysis question or aspect to investigate",
-                stream_callback=create_subagent_stream_callback(event_queue, "competitor-analyst", session_id),
+                # NOTE: stream_callback doesn't work for A2A - tool events happen on remote agent
+                # stream_callback=create_subagent_stream_callback(event_queue, "competitor-analyst", session_id),
             )
-            location_tool = location_agent.as_tool(
-                name="location_scouting",
-                description="Call this tool to evaluate specific locations, districts, commercial properties, regulations, permits, and site viability for expansion.",
-                arg_name="query",
-                arg_description="The specific location analysis question or district/property to investigate",
-                stream_callback=create_subagent_stream_callback(event_queue, "location-scout", session_id),
-            )
-            finance_tool = finance_agent.as_tool(
+
+            # Convert A2A finance analyst agent to tool
+            # NOTE: A2A agents run MCP tools internally - tool calls NOT visible here
+            finance_tool = finance_a2a_agent.as_tool(
                 name="finance_analysis",
-                description="Call this tool to analyze financial viability: startup costs, operating costs, revenue projections, break-even analysis, ROI, and investment returns.",
+                description="Call this tool to analyze financial viability: startup costs, operating costs, revenue projections, break-even analysis, ROI, NPV, cash flow projections, and investment returns. The agent will use calculator, real-estate, government-data, business-registry, web search, and shared scratchpad for collaboration.",
                 arg_name="query",
                 arg_description="The specific financial analysis question or scenario to evaluate",
-                stream_callback=create_subagent_stream_callback(event_queue, "finance-analyst", session_id),
+                # NOTE: stream_callback doesn't work for A2A - tool events happen on remote agent
+                # stream_callback=create_subagent_stream_callback(event_queue, "finance-analyst", session_id),
             )
-            synthesizer_tool = synthesizer_agent.as_tool(
-                name="synthesize_findings",
-                description="Call this tool AFTER gathering market, competitor, location, and finance insights to create a final synthesized report with recommendations.",
-                arg_name="context",
-                arg_description="All the gathered research findings and insights to synthesize into a final report",
-                stream_callback=create_subagent_stream_callback(event_queue, "synthesizer", session_id),
+
+            # Convert A2A location scout agent to tool
+            # NOTE: A2A agents run MCP tools internally - tool calls NOT visible here
+            location_tool = location_a2a_agent.as_tool(
+                name="location_scouting",
+                description="Call this tool to evaluate specific locations, neighborhoods, districts, commercial properties, regulatory requirements, permits, zoning, demographics, foot traffic, and site viability for expansion. The agent will use government-data, demographics, real-estate, web search, and shared scratchpad for collaboration.",
+                arg_name="query",
+                arg_description="The specific location analysis question or district/property to investigate",
+                # NOTE: stream_callback doesn't work for A2A - tool events happen on remote agent
+                # stream_callback=create_subagent_stream_callback(event_queue, "location-scout", session_id),
             )
+            
+            # Convert A2A synthesizer agent to tool (if configured)
+            # NOTE: A2A agents run MCP tools internally - tool calls NOT visible here
+            synthesizer_tool = None
+            if synthesizer_a2a_agent is not None:
+                synthesizer_tool = synthesizer_a2a_agent.as_tool(
+                    name="synthesize_findings",
+                    description="Call this tool AFTER gathering market, competitor, location, and finance insights to create a final synthesized report with executive summary, key findings, risk assessment, strategic recommendations, and decision framework. The agent will read from the shared scratchpad and use calculator for any final calculations.",
+                    arg_name="context",
+                    arg_description="Summary of all gathered research findings and insights to synthesize into a comprehensive final report",
+                    # NOTE: stream_callback doesn't work for A2A - tool events happen on remote agent
+                    # stream_callback=create_subagent_stream_callback(event_queue, "synthesizer", session_id),
+                )
+
+            # Build the list of available tools and A2A agents
+            available_tools = ["market_analysis", "competitor_analysis", "finance_analysis", "location_scouting"]
+            a2a_agents = ["market-analyst", "competitor-analyst", "finance-analyst", "location-scout"]
+            if synthesizer_tool is not None:
+                available_tools.append("synthesize_findings")
+                a2a_agents.append("synthesizer")
 
             yield SSEEvent(
                 event_type=SSEEventType.AGENT_STARTED,
                 session_id=session_id,
                 data={
                     "phase": "orchestration",
-                    "description": "Orchestrator starting dynamic research workflow",
-                    "available_tools": ["market_analysis", "competitor_analysis", "location_scouting", "finance_analysis", "synthesize_findings"],
-                    "scratchpad_enabled": session_mcp_orchestrator is not None,
-                    "scratchpad_tools": [f.name for f in session_mcp_orchestrator.functions] if session_mcp_orchestrator else [],
-                    "session_isolation": True,  # Indicate session isolation is active
+                    "description": f"Orchestrator starting dynamic research workflow ({', '.join(a2a_agents)} via A2A)",
+                    "available_tools": available_tools,
+                    "a2a_agents": a2a_agents,
+                    "scratchpad_enabled": session_mcp_scratchpad is not None,
+                    "scratchpad_tools": [f.name for f in session_mcp_scratchpad.functions] if session_mcp_scratchpad else [],
+                    "session_isolation": True,
                 },
             )
 
-            # Build the tools list - agent tools + session-scoped MCP scratchpad
-            tools_list: list[Any] = [market_tool, competitor_tool, location_tool, finance_tool, synthesizer_tool]
+            # Build the tools list
+            tools_list: list[Any] = [market_tool, competitor_tool, finance_tool, location_tool]
+            if synthesizer_tool is not None:
+                tools_list.append(synthesizer_tool)
             
             # Add session-scoped MCP Scratchpad to orchestrator
             # SECURITY: Uses X-Session-ID header for isolation
-            if session_mcp_orchestrator:
-                tools_list.append(session_mcp_orchestrator)
+            if session_mcp_scratchpad:
+                tools_list.append(session_mcp_scratchpad)
                 logger.info(f"Added session-scoped MCP Scratchpad to orchestrator (session={session_id[:8]}...)")
             
-            # Load and render system prompt
+            # Load and render system prompt with language setting
             prompt_template = self.settings.get_prompt("system_prompt")
             template = Template(prompt_template)
             system_prompt = template.render(
                 query=session.query,
                 context=session.context,
-                scratchpad_enabled=session_mcp_orchestrator is not None
+                language=session.language,
+                scratchpad_enabled=session_mcp_scratchpad is not None
             )
 
             # Create the main orchestrator agent with specialist agents as tools
+            # Include retry middleware for handling 429 rate limit errors
             chat_client = self._create_orchestrator_client()
             clients_to_cleanup.append(chat_client)
+            retry_middleware = RateLimitRetryMiddleware(
+                max_retries=5,
+                initial_delay=2.0,
+                max_delay=60.0,
+                exponential_base=2.0,
+                jitter=True,
+            )
             orchestrator_agent = ChatAgent(
                 chat_client=chat_client,
                 name="research-orchestrator",
                 instructions=system_prompt,
                 tools=tools_list,
+                middleware=[retry_middleware],
             )
             agents_to_cleanup.append(orchestrator_agent)
 
@@ -1809,6 +2305,51 @@ class AgentOrchestrator:
                                 task_update=task_update,
                             ).model_dump(),
                         )
+                    
+                    # If this was add_question, emit QUESTION_ADDED event
+                    tool_type = tool_event.get("tool_type")
+                    if tool_type == "add_question":
+                        output = event_data_completed.output
+                        question_id = None
+                        logger.info(f"[QUESTION_ADDED] Raw output type: {type(output)}, value: {output}")
+                        
+                        # Handle list output (MCP tools return [{'type': 'text', 'text': '...'}])
+                        if isinstance(output, list) and len(output) > 0:
+                            output = output[0]  # Get first item
+                        
+                        if isinstance(output, dict):
+                            # Check if this is a TextContent-style dict with nested JSON in "text" field
+                            if "text" in output and isinstance(output["text"], str):
+                                try:
+                                    parsed = json.loads(output["text"])
+                                    question_id = parsed.get("question_id")
+                                    logger.info(f"[QUESTION_ADDED] Parsed from text field: question_id={question_id}")
+                                except json.JSONDecodeError:
+                                    logger.warning(f"[QUESTION_ADDED] Failed to parse text field as JSON")
+                            else:
+                                question_id = output.get("question_id")
+                                logger.info(f"[QUESTION_ADDED] Got from dict directly: question_id={question_id}")
+                        elif isinstance(output, str):
+                            try:
+                                parsed = json.loads(output)
+                                question_id = parsed.get("question_id")
+                                logger.info(f"[QUESTION_ADDED] Parsed from string: question_id={question_id}")
+                            except json.JSONDecodeError:
+                                logger.warning(f"[QUESTION_ADDED] Failed to parse string as JSON")
+                        
+                        input_args = self._tool_call_log[-1].get("input_args", {}) if self._tool_call_log else {}
+                        yield SSEEvent(
+                            event_type=SSEEventType.QUESTION_ADDED,
+                            session_id=session_id,
+                            timestamp=event_timestamp,
+                            data={
+                                "question_id": question_id,
+                                "question": input_args.get("question", ""),
+                                "context": input_args.get("context", ""),
+                                "priority": input_args.get("priority", "medium"),
+                                "asked_by": event_data_completed.agent_name,
+                            },
+                        )
                 
                 elif tool_event["type"] == "tool_failed":
                     event_data_failed: ToolCallFailedData = tool_event["event_data"]
@@ -1868,6 +2409,19 @@ class AgentOrchestrator:
                         data={
                             "subagent_name": subagent_progress.subagent_name,
                             "text_chunk": subagent_progress.text_chunk,
+                        },
+                    )
+                
+                # === Human-in-the-loop events ===
+                elif tool_event["type"] == "awaiting_user_input":
+                    event_timestamp = datetime.fromisoformat(tool_event["timestamp"])
+                    yield SSEEvent(
+                        event_type=SSEEventType.AWAITING_USER_INPUT,
+                        session_id=session_id,
+                        timestamp=event_timestamp,
+                        data={
+                            "reason": tool_event["data"].get("reason", ""),
+                            "blocking_question_ids": tool_event["data"].get("blocking_question_ids", []),
                         },
                     )
 
@@ -1943,7 +2497,7 @@ class AgentOrchestrator:
             )
 
             # Emit final scratchpad snapshot (using session-scoped tool)
-            if session_mcp_orchestrator:
+            if session_mcp_scratchpad:
                 final_snapshot = await self._get_scratchpad_snapshot_for_session(session_id)
                 if final_snapshot:
                     final_snapshot.triggered_by = "workflow_complete"
@@ -1955,7 +2509,7 @@ class AgentOrchestrator:
 
             # Record the orchestrator's result
             # Use synthesizer output if captured, otherwise fall back to accumulated content
-            final_synthesis_content = synthesizer_full_output or accumulated_content
+            final_synthesis_content = synthesizer_output or accumulated_content
             
             session.agent_results.append(
                 AgentResult(
@@ -1973,7 +2527,7 @@ class AgentOrchestrator:
             session.final_synthesis = final_synthesis_content
 
             # Only emit synthesis_completed if we didn't already emit it from the synthesizer tool
-            if not synthesizer_full_output:
+            if not synthesizer_output:
                 yield SSEEvent(
                     event_type=SSEEventType.SYNTHESIS_COMPLETED,
                     session_id=session_id,
@@ -2019,14 +2573,16 @@ class AgentOrchestrator:
             )
         
         finally:
-            # Clean up agent-specific MCP tools (demographics, business-registry, etc.)
-            # ADR-006: These are created per-workflow and must be cleaned up
-            for mcp_tool in agent_mcp_tools:
+            # Clean up A2A HTTP clients first (before MCP tools they might depend on)
+            for http_client in a2a_clients_to_cleanup:
                 try:
-                    await mcp_tool.__aexit__(None, None, None)
-                    logger.debug(f"Cleaned up agent MCP tool: {mcp_tool.name}")
+                    await http_client.aclose()
+                    logger.debug("Cleaned up A2A HTTP client")
                 except Exception as e:
-                    logger.debug(f"Error cleaning up agent MCP tool {mcp_tool.name}: {e}")
+                    logger.debug(f"Error closing A2A HTTP client: {e}")
+            
+            # NOTE: Agent-specific MCP tools (demographics, business-registry, etc.) are now
+            # managed internally by subagents via A2A protocol - no cleanup needed here
             
             # Clean up session-scoped scratchpad MCP tools
             # This prevents ClosedResourceError when API proxy tries to use stale cached tools
@@ -2065,6 +2621,12 @@ class AgentOrchestrator:
             "foundry_endpoint": self.settings.azure_ai_foundry_endpoint,
             "model_deployment": self.settings.model_deployment_name,
             "orchestration_mode": "dynamic_agent_as_tool",
+            "a2a_agents": {
+                "market_analyst": {
+                    "enabled": self.settings.a2a_market_analyst_enabled,
+                    "url": self.settings.a2a_market_analyst_url if self.settings.a2a_market_analyst_enabled else None,
+                },
+            },
             "mcp_scratchpad": {
                 "enabled": self.settings.mcp_scratchpad_enabled,
                 "connected": self._mcp_scratchpad is not None,

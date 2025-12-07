@@ -108,6 +108,66 @@ class Settings(BaseSettings):
         description="API key for MCP Calculator authentication",
     )
 
+    # A2A Market Analyst Agent configuration
+    a2a_market_analyst_url: str = Field(
+        default="",
+        alias="A2A_MARKET_ANALYST_URL",
+        description="URL to the Market Analyst A2A agent endpoint (e.g., https://apim-xxx/market-analyst)",
+    )
+    a2a_market_analyst_api_key: str = Field(
+        default="",
+        alias="A2A_MARKET_ANALYST_API_KEY",
+        description="API key for Market Analyst A2A authentication",
+    )
+
+    # A2A Competitor Analyst Agent configuration
+    a2a_competitor_analyst_url: str = Field(
+        default="",
+        alias="A2A_COMPETITOR_ANALYST_URL",
+        description="URL to the Competitor Analyst A2A agent endpoint (e.g., https://apim-xxx/competitor-analyst)",
+    )
+    a2a_competitor_analyst_api_key: str = Field(
+        default="",
+        alias="A2A_COMPETITOR_ANALYST_API_KEY",
+        description="API key for Competitor Analyst A2A authentication",
+    )
+
+    # A2A Finance Analyst Agent configuration
+    a2a_finance_analyst_url: str = Field(
+        default="",
+        alias="A2A_FINANCE_ANALYST_URL",
+        description="URL to the Finance Analyst A2A agent endpoint (e.g., https://apim-xxx/finance-analyst)",
+    )
+    a2a_finance_analyst_api_key: str = Field(
+        default="",
+        alias="A2A_FINANCE_ANALYST_API_KEY",
+        description="API key for Finance Analyst A2A authentication",
+    )
+
+    # A2A Location Scout Agent configuration
+    a2a_location_scout_url: str = Field(
+        default="",
+        alias="A2A_LOCATION_SCOUT_URL",
+        description="URL to the Location Scout A2A agent endpoint (e.g., https://apim-xxx/location-scout)",
+    )
+    a2a_location_scout_api_key: str = Field(
+        default="",
+        alias="A2A_LOCATION_SCOUT_API_KEY",
+        description="API key for Location Scout A2A authentication",
+    )
+
+    # A2A Synthesizer Agent configuration
+    a2a_synthesizer_url: str = Field(
+        default="",
+        alias="A2A_SYNTHESIZER_URL",
+        description="URL to the Synthesizer A2A agent endpoint (e.g., https://apim-xxx/synthesizer)",
+    )
+    a2a_synthesizer_api_key: str = Field(
+        default="",
+        alias="A2A_SYNTHESIZER_API_KEY",
+        description="API key for Synthesizer A2A authentication",
+    )
+
     # Application Insights / Log Analytics configuration (ADR-005)
     log_analytics_workspace_id: str = Field(
         default="",
@@ -174,6 +234,31 @@ class Settings(BaseSettings):
     def mcp_calculator_enabled(self) -> bool:
         """Check if MCP Calculator is configured (ADR-006)."""
         return bool(self.mcp_calculator_url and self.mcp_calculator_api_key)
+
+    @property
+    def a2a_market_analyst_enabled(self) -> bool:
+        """Check if Market Analyst A2A agent is configured."""
+        return bool(self.a2a_market_analyst_url and self.a2a_market_analyst_api_key)
+
+    @property
+    def a2a_competitor_analyst_enabled(self) -> bool:
+        """Check if Competitor Analyst A2A agent is configured."""
+        return bool(self.a2a_competitor_analyst_url and self.a2a_competitor_analyst_api_key)
+
+    @property
+    def a2a_finance_analyst_enabled(self) -> bool:
+        """Check if Finance Analyst A2A agent is configured."""
+        return bool(self.a2a_finance_analyst_url and self.a2a_finance_analyst_api_key)
+
+    @property
+    def a2a_location_scout_enabled(self) -> bool:
+        """Check if Location Scout A2A agent is configured."""
+        return bool(self.a2a_location_scout_url and self.a2a_location_scout_api_key)
+
+    @property
+    def a2a_synthesizer_enabled(self) -> bool:
+        """Check if Synthesizer A2A agent is configured."""
+        return bool(self.a2a_synthesizer_url and self.a2a_synthesizer_api_key)
 
     @property
     def trace_polling_configured(self) -> bool:

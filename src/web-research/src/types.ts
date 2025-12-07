@@ -62,17 +62,18 @@ export interface DraftSection {
 
 // === Questions Types (Human-in-the-Loop) ===
 
+export type QuestionPriority = 'low' | 'medium' | 'high' | 'blocking';
+
 export interface Question {
   id: string;
-  text: string;
+  question: string;
   context?: string;
-  askedBy: string;
-  priority: 'high' | 'medium' | 'low';
-  blocking: boolean;
-  options?: string[];
+  asked_by: string;
+  priority: QuestionPriority;
+  asked_at: string;
+  answered: boolean;
   answer?: string;
-  answeredAt?: string;
-  createdAt: string;
+  answered_at?: string;
 }
 
 // === Activity Message Types ===
@@ -150,6 +151,10 @@ export type SSEEventType =
   | 'subagent_progress'
   // Scratchpad events (primary - from middleware)
   | 'scratchpad_updated'
+  // Question events (human-in-the-loop)
+  | 'question_added'
+  | 'awaiting_user_input'
+  | 'questions_answered'
   // Synthesis events
   | 'synthesis_completed'
   // Keep-alive
@@ -238,6 +243,30 @@ export interface AppState {
   isConnected: boolean;
   activePanel: 'activity' | 'plan' | 'notes' | 'draft' | 'final';
   showQuestionModal: boolean;
+}
+
+// === Question SSE Event Data Types ===
+
+export interface QuestionAddedData {
+  question_id: string;
+  question: string;
+  context?: string;
+  asked_by: string;
+  priority: QuestionPriority;
+  timestamp: string;
+}
+
+export interface AwaitingUserInputData {
+  reason: string;
+  blocking_question_ids: string[];
+  pending_question_count: number;
+  timestamp: string;
+}
+
+export interface QuestionsAnsweredData {
+  answered_question_ids: string[];
+  answer_count: number;
+  timestamp: string;
 }
 
 // === Demo State Snapshot ===
