@@ -41,23 +41,24 @@ terraform apply -var-file=my.tfvars
 
 ### 2. Build Container Images
 
-After deploying infrastructure (which creates the ACR):
+After deploying infrastructure (which creates the ACR), build all 13 containers:
 
 ```bash
 cd deploy/azure
-
-# Install dependencies
 uv sync
-
-# Build all containers
-uv run python build.py
-
-# Build specific container
-uv run python build.py --container mcp-scratchpad
-
-# List available containers
-uv run python build.py --list
+uv run python build.py        # Build all containers (uses ACR Tasks - no local Docker needed)
 ```
+
+**Build options:**
+```bash
+uv run python build.py --container mcp-scratchpad   # Build specific container
+uv run python build.py --list                       # List available containers
+```
+
+**Containers built (see `build-config.yaml`):**
+- **MCP Servers**: mcp-scratchpad, mcp-business-registry, mcp-government-data, mcp-demographics, mcp-real-estate, mcp-calculator
+- **Agents (A2A)**: agent-market-analyst-a2a, agent-competitor-analyst-a2a, agent-finance-analyst-a2a, agent-location-scout-a2a, agent-synthesizer-a2a
+- **Services**: agent-research-orchestrator, web-research
 
 ## Container Registry
 
@@ -118,7 +119,9 @@ The Terraform configuration creates:
 | Log Analytics Workspace | Logging for Container Apps |
 | Container Apps Environment | Managed Kubernetes for containers |
 | Azure Container Registry | Image storage (required for Foundry agents) |
-| Container Apps | MCP servers and agents |
+| Container Apps | MCP servers (6), Agents (5), Orchestrator, Web UI |
+| Azure API Management | API gateway for all services |
+| Azure AI Foundry | Hub + Project for AI model access |
 | Role Assignments | ACR access for users and managed identities |
 
 ## Outputs
