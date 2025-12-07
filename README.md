@@ -1,7 +1,17 @@
 # Cloud and AI summit 2025 Czech - AI demo
 
 ## Cofilot AI Invoice processing workflow
-TBD
+> Multi-agent invoice extraction and validation workflow powered by Azure AI Foundry Workflows
+
+- Agents are created and hosted in **Azure Foundry Workflows**
+- MCP server runs **separatly as scalable microservice** in Azure Container Apps
+- Demo application is a **Static Web App**, APIs hosted in Azure Container Apps and calls Foundry Workflow API
+- Demo of automatic Invoice processing workflow with multiple agents collaborating to extract and validate invoice data implements **Human-in-the-loop** to approve important steps
+- Agents use tools and Logic Apps connectors to access external systems (Office 365 Outlook)
+
+![](./images/ai-foundry-workflows.jpg)
+
+![](./images/cofilot-workflow.jpg)
 
 ## Cofilot AI Research Platform
 
