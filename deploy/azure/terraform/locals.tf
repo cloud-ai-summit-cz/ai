@@ -48,6 +48,12 @@ locals {
   # Agent Synthesizer A2A image
   agent_synthesizer_a2a_image = "${azurerm_container_registry.main.login_server}/agent-synthesizer-a2a:latest"
 
+  # Research Orchestrator API image
+  agent_research_orchestrator_image = "${azurerm_container_registry.main.login_server}/agent-research-orchestrator:latest"
+
+  # Web Research UI image
+  web_research_image = "${azurerm_container_registry.main.login_server}/web-research:latest"
+
   # ============================================================================
   # AI Foundry Endpoints (computed from Terraform-managed resources)
   # ============================================================================

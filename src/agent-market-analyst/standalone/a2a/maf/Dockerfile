@@ -37,12 +37,9 @@ WORKDIR /app
 # Copy virtual environment from builder
 COPY --from=builder /app/.venv /app/.venv
 
-# Copy application code from standalone/a2a/maf/
-COPY standalone/a2a/maf/__init__.py ./
-COPY standalone/a2a/maf/agent.py ./
-COPY standalone/a2a/maf/a2a_server.py ./
-COPY standalone/a2a/maf/config.py ./
-COPY standalone/a2a/maf/main.py ./
+# Copy all Python application code from standalone/a2a/maf/
+# Using wildcard to ensure all .py files are included (avoids missing modules)
+COPY standalone/a2a/maf/*.py ./
 
 # Copy prompts from parent directory (relative to build context)
 COPY prompts/ ./prompts/

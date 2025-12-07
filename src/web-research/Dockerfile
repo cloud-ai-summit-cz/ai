@@ -12,8 +12,12 @@ RUN npm ci
 # Copy source
 COPY . .
 
-# Build
-RUN npm run build
+# Fix permissions on node_modules binaries (needed for ACR Tasks)
+# Must be after COPY . . since that overwrites node_modules
+RUN chmod -R +x node_modules/.bin/
+
+# Build using npx to ensure correct path resolution
+RUN npx tsc && npx vite build
 
 # Production stage
 FROM nginx:alpine

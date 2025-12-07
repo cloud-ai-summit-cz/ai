@@ -77,6 +77,18 @@ containers:
     image: agent-synthesizer-a2a
     tag: latest
 
+  - name: agent-research-orchestrator
+    # Research Orchestrator API - FastAPI backend
+    path: ../../src/agent-research-orchestrator
+    image: agent-research-orchestrator
+    tag: latest
+
+  - name: web-research
+    # Web Research UI - React frontend with nginx
+    path: ../../src/web-research
+    image: web-research
+    tag: latest
+
   # - name: test-hosted-agent
   #   path: ../../src/test-hosted-agent
   #   image: test-hosted-agent

@@ -1,8 +1,8 @@
-# Location Scout A2A Agent
+# Research Orchestrator API
 # Multi-stage build for smaller image
 #
-# Build Context: This Dockerfile expects to be built from src/agent-location-scout
-# Example: docker build -f standalone/a2a/maf/Dockerfile .
+# Build Context: This Dockerfile is built from src/agent-research-orchestrator
+# Example: docker build -t agent-research-orchestrator .
 
 # ============================================================
 # Build stage - install dependencies
@@ -18,10 +18,10 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-# Copy dependency files from standalone/a2a/maf/
-COPY standalone/a2a/maf/pyproject.toml standalone/a2a/maf/uv.lock ./
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
 
-# Install dependencies (no BuildKit cache for ACR Tasks compatibility)
+# Install dependencies (using lock file for reproducible builds)
 RUN uv sync --frozen --no-dev --no-install-project
 
 # ============================================================
@@ -37,28 +37,34 @@ WORKDIR /app
 # Copy virtual environment from builder
 COPY --from=builder /app/.venv /app/.venv
 
-# Copy all Python application code from standalone/a2a/maf/
-# Using wildcard to ensure all .py files are included (avoids missing modules)
-COPY standalone/a2a/maf/*.py ./
+# Copy application code
+COPY __init__.py ./
+COPY api.py ./
+COPY config.py ./
+COPY main.py ./
+COPY models.py ./
+COPY orchestrator.py ./
+COPY retry_middleware.py ./
+COPY telemetry.py ./
+COPY trace_poller.py ./
 
-# Copy prompts from parent directory (relative to build context)
+# Copy prompts directory
 COPY prompts/ ./prompts/
 
 # Set environment variables
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PROMPTS_DIR_OVERRIDE=/app/prompts
+    PYTHONDONTWRITEBYTECODE=1
 
 # Switch to non-root user
 USER appuser
 
-# Expose A2A server port
-EXPOSE 8023
+# Expose API port
+EXPOSE 8000
 
-# Health check - A2A agent card endpoint
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8023/.well-known/agent-card.json')" || exit 1
+# Health check - FastAPI docs endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-# Run the A2A server
+# Run the API server
 CMD ["python", "main.py"]
