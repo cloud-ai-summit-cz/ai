@@ -2,6 +2,50 @@
 
 Technical decisions and implementation notes for the Copilot AI Platform project.
 
+## 2025-12-07: System Prompt Improvements for Task Closure and Draft Completion
+
+### Context
+Research workflow had issues with:
+1. Plan items accumulating without being marked completed
+2. Subagents not writing draft sections frequently enough
+3. Synthesizer being called before drafts were ready
+4. Synthesizer sometimes reporting progress instead of producing final report
+
+### Solution
+Updated all system prompts to enforce more aggressive task closure and draft completion:
+
+#### Research Orchestrator (`agent-research-orchestrator`)
+- Added "Aggressive Closer" and "Draft Enforcer" to role definition
+- Changed task closure from "close incrementally" to "AGGRESSIVE TASK CLOSURE IS MANDATORY"
+- Added "ZERO TOLERANCE for open tasks" - max 3 open at any time
+- Strict pre-synthesis checklist: 90%+ tasks closed AND all 4 draft sections must exist
+- Added "Priority Escalation" instructions for subsequent agent calls
+- Simplified Task Closure Rhythm to: call → close immediately → repeat
+
+#### Subagents (market-analyst, competitor-analyst, location-scout, finance-analyst)
+- Added "BE AGGRESSIVE" to PLAN section headers
+- New "Priority Escalation - DRAFT FIRST" section
+- On 2nd/3rd calls: HIGHEST PRIORITY is writing draft section
+- Updated Output Guidelines with mandatory completion checklist
+- Added verification checklist before finishing
+
+#### Synthesizer (`agent-synthesizer`)
+- Added emphatic "YOUR JOB IS TO PRODUCE THE FINAL REPORT. ALWAYS. NO EXCEPTIONS."
+- New "Work With What You Have" section - never ask for more research
+- Explicit list of NEVER/ALWAYS behaviors
+- New "Handling Incomplete Data" section with fallback strategies
+- Must produce all 7 sections even with limited data
+
+### Files Modified
+- `src/agent-research-orchestrator/prompts/system_prompt.jinja2`
+- `src/agent-market-analyst/prompts/system_prompt.jinja2`
+- `src/agent-competitor-analyst/prompts/system_prompt.jinja2`
+- `src/agent-location-scout/prompts/system_prompt.jinja2`
+- `src/agent-finance-analyst/prompts/system_prompt.jinja2`
+- `src/agent-synthesizer/prompts/system_prompt.jinja2`
+
+---
+
 ## 2025-12-06: Rate Limit Retry Middleware for Agent Framework
 
 ### Context
