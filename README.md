@@ -9,6 +9,9 @@
 - Demo of automatic Invoice processing workflow with multiple agents collaborating to extract and validate invoice data implements **Human-in-the-loop** to approve important steps
 - Agents use tools and Logic Apps connectors to access external systems (Office 365 Outlook)
 
+> Known limitations:
+> - Azure AI Foundry Workflows is in preview and some features are not yet available (sending user message with file/image - at this stage of demo it is mocked by sending direct JSON from invoice)
+
 ![](./images/ai-foundry-workflows.jpg)
 
 ![](./images/cofilot-workflow.jpg)
