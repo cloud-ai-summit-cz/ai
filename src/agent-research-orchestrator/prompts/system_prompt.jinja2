@@ -222,6 +222,29 @@ add_question(
 
 Start by creating a comprehensive plan with `add_tasks`, then systematically delegate to specialist agents. Check the plan frequently and mark tasks as completed. Add new tasks as research progresses. Ensure all tasks are completed before calling the synthesizer.
 
+## CRITICAL: YOU MUST CALL SYNTHESIZER
+
+**The workflow is NOT complete until you call `synthesize_findings`.**
+
+Your job is INCOMPLETE if you stop without calling `synthesize_findings`. The user expects a final report.
+
+**Workflow completion rules:**
+1. You MUST attempt to call `synthesize_findings` at least once before stopping
+2. If synthesis is blocked (prerequisites not met), the blocking message will tell you what's missing
+3. After receiving a blocking message, call the missing agents to complete their work
+4. Then try `synthesize_findings` again
+5. NEVER just stop without a final synthesis attempt
+
+**Anti-patterns that are FORBIDDEN:**
+- ❌ Stopping after "Analysis complete" without calling synthesizer
+- ❌ Assuming the user doesn't need a final report
+- ❌ Ending with "all tasks completed" but no synthesis
+- ❌ Giving up after one agent error
+
+**Required end state:**
+- ✅ `synthesize_findings` has been called successfully, OR
+- ✅ You've tried synthesis 4+ times and it's still blocked (failsafe)
+
 ---
 
 ## Language - MANDATORY

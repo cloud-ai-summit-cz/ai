@@ -36,7 +36,7 @@ from uuid import uuid4
 import httpx
 from a2a.types import AgentCard
 from jinja2 import Template
-from agent_framework import ChatAgent, FunctionInvocationContext, MCPStreamableHTTPTool
+from agent_framework import ChatAgent, FunctionInvocationContext, MCPStreamableHTTPTool, ai_function
 from agent_framework.a2a import A2AAgent
 from agent_framework_azure_ai import AzureAIAgentClient
 from azure.identity.aio import DefaultAzureCredential
@@ -225,6 +225,315 @@ SCRATCHPAD_QUESTION_TOOLS = {"add_question", "get_pending_questions", "get_answe
 
 # Agent tool names (subagents exposed as tools to orchestrator)
 AGENT_TOOL_NAMES = {"market_analysis", "competitor_analysis", "location_scouting", "finance_analysis", "synthesize_findings"}
+
+# Required draft sections for synthesis
+REQUIRED_DRAFT_SECTIONS = {"market_analysis", "competitor_landscape", "location_strategy", "financial_outlook"}
+
+# Progressive thresholds for synthesis guard (attempt -> min_completion_percentage)
+SYNTHESIS_THRESHOLDS = {
+    1: 90,  # First attempt: require 90% task completion
+    2: 80,  # Second attempt: require 80%
+    3: 70,  # Third attempt: require 70%
+    # 4+: pass through (allow synthesis)
+}
+
+# Minimum draft sections required for synthesis
+MIN_DRAFT_SECTIONS = 3
+
+
+class SynthesisGuardResult:
+    """Result of synthesis readiness check."""
+    
+    def __init__(
+        self,
+        allowed: bool,
+        task_completion_pct: float,
+        completed_tasks: int,
+        total_tasks: int,
+        existing_drafts: list[str],
+        missing_drafts: list[str],
+        attempt_number: int,
+        threshold_pct: int,
+        message: str,
+    ):
+        self.allowed = allowed
+        self.task_completion_pct = task_completion_pct
+        self.completed_tasks = completed_tasks
+        self.total_tasks = total_tasks
+        self.existing_drafts = existing_drafts
+        self.missing_drafts = missing_drafts
+        self.attempt_number = attempt_number
+        self.threshold_pct = threshold_pct
+        self.message = message
+
+
+async def check_synthesis_readiness(
+    mcp_scratchpad: "MCPStreamableHTTPTool",
+    attempt_number: int,
+    language: str = "en",
+) -> SynthesisGuardResult:
+    """Check if synthesis prerequisites are met.
+    
+    Uses progressive thresholds:
+    - Attempt 1: 90% task completion required
+    - Attempt 2: 80% task completion required  
+    - Attempt 3: 70% task completion required
+    - Attempt 4+: Allow synthesis regardless
+    
+    Also requires at least 3 draft sections to exist.
+    
+    Args:
+        mcp_scratchpad: The session-scoped MCP scratchpad tool.
+        attempt_number: Which synthesis attempt this is (1-based).
+        language: Language for error messages ('cs' or 'en').
+        
+    Returns:
+        SynthesisGuardResult with allowed status and details.
+    """
+    # Get threshold for this attempt (or 0 if beyond max attempts)
+    threshold_pct = SYNTHESIS_THRESHOLDS.get(attempt_number, 0)
+    
+    # If we're past the max attempts, allow synthesis
+    if threshold_pct == 0:
+        logger.warning(f"[SYNTHESIS_GUARD] Attempt {attempt_number} - allowing synthesis (max attempts exceeded)")
+        return SynthesisGuardResult(
+            allowed=True,
+            task_completion_pct=0,
+            completed_tasks=0,
+            total_tasks=0,
+            existing_drafts=[],
+            missing_drafts=[],
+            attempt_number=attempt_number,
+            threshold_pct=0,
+            message="Synthesis allowed (max guard attempts exceeded)",
+        )
+    
+    # Find read_plan and read_draft functions
+    read_plan_fn = None
+    read_draft_fn = None
+    for fn in mcp_scratchpad.functions:
+        if fn.name == "read_plan":
+            read_plan_fn = fn
+        elif fn.name == "read_draft":
+            read_draft_fn = fn
+    
+    if not read_plan_fn or not read_draft_fn:
+        logger.error("[SYNTHESIS_GUARD] Could not find read_plan or read_draft functions")
+        # Allow synthesis if we can't check (fail open)
+        return SynthesisGuardResult(
+            allowed=True,
+            task_completion_pct=0,
+            completed_tasks=0,
+            total_tasks=0,
+            existing_drafts=[],
+            missing_drafts=[],
+            attempt_number=attempt_number,
+            threshold_pct=threshold_pct,
+            message="Synthesis allowed (guard check failed)",
+        )
+    
+    # Read plan to get task completion status
+    completed_tasks = 0
+    total_tasks = 0
+    try:
+        plan_result = await read_plan_fn()
+        # Parse the plan result
+        if isinstance(plan_result, list) and plan_result:
+            # Handle TextContent format
+            plan_text = ""
+            for item in plan_result:
+                if hasattr(item, "text"):
+                    plan_text = item.text
+                    break
+                elif isinstance(item, dict) and "text" in item:
+                    plan_text = item["text"]
+                    break
+            
+            if plan_text:
+                try:
+                    plan_data = json.loads(plan_text)
+                    tasks = plan_data.get("tasks", [])
+                    total_tasks = len(tasks)
+                    completed_tasks = sum(1 for t in tasks if t.get("status") == "completed")
+                except json.JSONDecodeError:
+                    logger.warning(f"[SYNTHESIS_GUARD] Could not parse plan JSON: {plan_text[:200]}")
+    except Exception as e:
+        logger.error(f"[SYNTHESIS_GUARD] Error reading plan: {e}")
+    
+    # Read draft to get existing sections
+    existing_drafts: list[str] = []
+    try:
+        draft_result = await read_draft_fn()
+        # Parse the draft result
+        if isinstance(draft_result, list) and draft_result:
+            draft_text = ""
+            for item in draft_result:
+                if hasattr(item, "text"):
+                    draft_text = item.text
+                    break
+                elif isinstance(item, dict) and "text" in item:
+                    draft_text = item["text"]
+                    break
+            
+            if draft_text:
+                try:
+                    draft_data = json.loads(draft_text)
+                    sections = draft_data.get("sections", {})
+                    existing_drafts = list(sections.keys())
+                except json.JSONDecodeError:
+                    logger.warning(f"[SYNTHESIS_GUARD] Could not parse draft JSON: {draft_text[:200]}")
+    except Exception as e:
+        logger.error(f"[SYNTHESIS_GUARD] Error reading draft: {e}")
+    
+    # Calculate completion percentage
+    task_completion_pct = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0
+    
+    # Determine missing drafts
+    missing_drafts = [s for s in REQUIRED_DRAFT_SECTIONS if s not in existing_drafts]
+    
+    # Check if requirements are met
+    tasks_ok = task_completion_pct >= threshold_pct
+    drafts_ok = len(existing_drafts) >= MIN_DRAFT_SECTIONS
+    allowed = tasks_ok and drafts_ok
+    
+    logger.info(
+        f"[SYNTHESIS_GUARD] Attempt {attempt_number}: "
+        f"tasks={completed_tasks}/{total_tasks} ({task_completion_pct:.0f}%, threshold={threshold_pct}%), "
+        f"drafts={len(existing_drafts)}/{MIN_DRAFT_SECTIONS} required, "
+        f"allowed={allowed}"
+    )
+    
+    # Build message
+    if allowed:
+        message = "Synthesis prerequisites met. Proceeding with final report generation."
+    else:
+        if language == "cs":
+            message = f"""⛔ SYNTÉZA ZABLOKOVÁNA: Předpoklady nejsou splněny.
+
+📊 Stav úkolů: {completed_tasks}/{total_tasks} dokončeno ({task_completion_pct:.0f}%)
+   Požadováno: {threshold_pct}% pro pokus #{attempt_number}
+   
+📝 Draft sekce: {len(existing_drafts)}/{MIN_DRAFT_SECTIONS} požadovaných
+   Existující: {', '.join(existing_drafts) if existing_drafts else 'žádné'}
+   Chybějící: {', '.join(missing_drafts) if missing_drafts else 'žádné'}
+
+🔄 AKCE: Zavolej specializované agenty k dokončení chybějících sekcí:
+"""
+            if "market_analysis" in missing_drafts:
+                message += "   - market_analysis: Zavolej market_analysis s instrukcí napsat draft\n"
+            if "competitor_landscape" in missing_drafts:
+                message += "   - competitor_analysis: Zavolej competitor_analysis s instrukcí napsat draft\n"
+            if "location_strategy" in missing_drafts:
+                message += "   - location_scouting: Zavolej location_scouting s instrukcí napsat draft\n"
+            if "financial_outlook" in missing_drafts:
+                message += "   - finance_analysis: Zavolej finance_analysis s instrukcí napsat draft\n"
+            message += f"\nPo dokončení můžeš zkusit syntézu znovu (pokus #{attempt_number + 1})."
+        else:
+            message = f"""⛔ SYNTHESIS BLOCKED: Prerequisites not met.
+
+📊 Task Status: {completed_tasks}/{total_tasks} completed ({task_completion_pct:.0f}%)
+   Required: {threshold_pct}% for attempt #{attempt_number}
+   
+📝 Draft Sections: {len(existing_drafts)}/{MIN_DRAFT_SECTIONS} required
+   Existing: {', '.join(existing_drafts) if existing_drafts else 'none'}
+   Missing: {', '.join(missing_drafts) if missing_drafts else 'none'}
+
+🔄 ACTION REQUIRED: Call specialist agents to complete missing sections:
+"""
+            if "market_analysis" in missing_drafts:
+                message += "   - market_analysis: Call market_analysis with instruction to write draft\n"
+            if "competitor_landscape" in missing_drafts:
+                message += "   - competitor_analysis: Call competitor_analysis with instruction to write draft\n"
+            if "location_strategy" in missing_drafts:
+                message += "   - location_scouting: Call location_scouting with instruction to write draft\n"
+            if "financial_outlook" in missing_drafts:
+                message += "   - finance_analysis: Call finance_analysis with instruction to write draft\n"
+            message += f"\nAfter completing these, try synthesis again (attempt #{attempt_number + 1})."
+    
+    return SynthesisGuardResult(
+        allowed=allowed,
+        task_completion_pct=task_completion_pct,
+        completed_tasks=completed_tasks,
+        total_tasks=total_tasks,
+        existing_drafts=existing_drafts,
+        missing_drafts=missing_drafts,
+        attempt_number=attempt_number,
+        threshold_pct=threshold_pct,
+        message=message,
+    )
+
+
+def create_guarded_synthesizer_tool(
+    actual_synthesizer_tool: Any,
+    mcp_scratchpad: "MCPStreamableHTTPTool",
+    language: str,
+) -> Any:
+    """Create a guarded synthesizer tool that checks prerequisites before synthesis.
+    
+    This wrapper implements progressive thresholds:
+    - Attempt 1: 90% task completion + 3 drafts required
+    - Attempt 2: 80% task completion + 3 drafts required
+    - Attempt 3: 70% task completion + 3 drafts required
+    - Attempt 4+: Allow synthesis regardless (fail-safe)
+    
+    Args:
+        actual_synthesizer_tool: The real A2A synthesizer tool.
+        mcp_scratchpad: Session-scoped MCP scratchpad for checking prerequisites.
+        language: Language for error messages ('cs' or 'en').
+        
+    Returns:
+        A guarded ai_function that wraps the synthesizer.
+    """
+    # Track synthesis attempts for this session
+    synthesis_attempts = {"count": 0}
+    
+    from typing import Annotated
+    
+    @ai_function(
+        name="synthesize_findings",
+        description="Call this tool AFTER gathering market, competitor, location, and finance insights to create a final synthesized report with executive summary, key findings, risk assessment, strategic recommendations, and decision framework. NOTE: This tool has prerequisites - at least 80% task completion and 3+ draft sections must exist before synthesis can proceed.",
+    )
+    async def guarded_synthesize_findings(
+        context: Annotated[str, "Summary of all gathered research findings and insights to synthesize into a comprehensive final report"],
+    ) -> str:
+        """Guarded synthesizer that checks prerequisites before allowing synthesis."""
+        synthesis_attempts["count"] += 1
+        attempt = synthesis_attempts["count"]
+        
+        logger.info(f"[SYNTHESIS_GUARD] Synthesis attempt #{attempt}")
+        
+        # Check prerequisites
+        guard_result = await check_synthesis_readiness(
+            mcp_scratchpad=mcp_scratchpad,
+            attempt_number=attempt,
+            language=language,
+        )
+        
+        if not guard_result.allowed:
+            logger.warning(
+                f"[SYNTHESIS_GUARD] BLOCKED attempt #{attempt}: "
+                f"tasks={guard_result.completed_tasks}/{guard_result.total_tasks} ({guard_result.task_completion_pct:.0f}%), "
+                f"drafts={len(guard_result.existing_drafts)}/{MIN_DRAFT_SECTIONS}"
+            )
+            # Return the blocking message - this becomes the tool result
+            # The orchestrator will receive this and should continue research
+            return guard_result.message
+        
+        logger.info(
+            f"[SYNTHESIS_GUARD] ALLOWED attempt #{attempt}: "
+            f"tasks={guard_result.completed_tasks}/{guard_result.total_tasks} ({guard_result.task_completion_pct:.0f}%), "
+            f"drafts={len(guard_result.existing_drafts)}/{MIN_DRAFT_SECTIONS}"
+        )
+        
+        # Prerequisites met - call the actual synthesizer
+        try:
+            result = await actual_synthesizer_tool(context)
+            return result
+        except Exception as e:
+            logger.error(f"[SYNTHESIS_GUARD] Synthesizer call failed: {e}")
+            raise
+    
+    return guarded_synthesize_findings
 
 
 def create_subagent_stream_callback(
@@ -2051,16 +2360,31 @@ class AgentOrchestrator:
             
             # Convert A2A synthesizer agent to tool (if configured)
             # NOTE: A2A agents run MCP tools internally - tool calls NOT visible here
+            # GUARD: Wrapped with progressive threshold check (90% -> 80% -> 70% -> pass)
             synthesizer_tool = None
             if synthesizer_a2a_agent is not None:
-                synthesizer_tool = synthesizer_a2a_agent.as_tool(
-                    name="synthesize_findings",
-                    description="Call this tool AFTER gathering market, competitor, location, and finance insights to create a final synthesized report with executive summary, key findings, risk assessment, strategic recommendations, and decision framework. The agent will read from the shared scratchpad and use calculator for any final calculations.",
+                # Create the raw A2A tool first
+                raw_synthesizer_tool = synthesizer_a2a_agent.as_tool(
+                    name="synthesize_findings_raw",
+                    description="Internal synthesizer tool (do not call directly)",
                     arg_name="context",
                     arg_description="Summary of all gathered research findings and insights to synthesize into a comprehensive final report",
-                    # NOTE: stream_callback doesn't work for A2A - tool events happen on remote agent
-                    # stream_callback=create_subagent_stream_callback(event_queue, "synthesizer", session_id),
                 )
+                
+                # Wrap with synthesis guard that checks prerequisites
+                # Guard checks: task completion % and draft section count
+                # Progressive thresholds: 90% -> 80% -> 70% -> allow
+                if session_mcp_scratchpad is not None:
+                    synthesizer_tool = create_guarded_synthesizer_tool(
+                        actual_synthesizer_tool=raw_synthesizer_tool,
+                        mcp_scratchpad=session_mcp_scratchpad,
+                        language=session.language,
+                    )
+                    logger.info(f"[SYNTHESIS_GUARD] Created guarded synthesizer tool for session {session_id[:8]}...")
+                else:
+                    # No scratchpad = can't check prerequisites, use raw tool
+                    synthesizer_tool = raw_synthesizer_tool
+                    logger.warning(f"[SYNTHESIS_GUARD] No scratchpad available, using unguarded synthesizer")
 
             # Build the list of available tools and A2A agents
             available_tools = ["market_analysis", "competitor_analysis", "finance_analysis", "location_scouting"]
@@ -2217,6 +2541,7 @@ class AgentOrchestrator:
                         
                         # Special handling for synthesize_findings - emit synthesis_completed immediately
                         # This ensures the final report is available even if the orchestrator stream drops
+                        # NOTE: Only emit if it's a real synthesis, not a guard rejection
                         if tool_name == "synthesize_findings":
                             # Extract full synthesis text (not truncated)
                             full_synthesis = ""
@@ -2240,19 +2565,33 @@ class AgentOrchestrator:
                                 if not full_synthesis:
                                     full_synthesis = str(output)
                             
-                            synthesizer_output = full_synthesis
-                            logger.info(f"Captured synthesizer output ({len(full_synthesis)} chars)")
-                            
-                            # Emit synthesis_completed immediately so UI gets the report
-                            yield SSEEvent(
-                                event_type=SSEEventType.SYNTHESIS_COMPLETED,
-                                session_id=session_id,
-                                data={
-                                    "agent": "synthesizer",
-                                    "execution_time_ms": event_data_completed.execution_time_ms,
-                                    "synthesis": full_synthesis,
-                                },
+                            # Check if this is a guard rejection (blocked synthesis attempt)
+                            # Guard rejections contain specific markers
+                            is_guard_rejection = (
+                                "SYNTHESIS BLOCKED" in full_synthesis or
+                                "SYNTÉZA ZABLOKOVÁNA" in full_synthesis or
+                                "Prerequisites not met" in full_synthesis or
+                                "Předpoklady nejsou splněny" in full_synthesis
                             )
+                            
+                            if is_guard_rejection:
+                                logger.info(f"[SYNTHESIS_GUARD] Guard rejection detected, NOT emitting synthesis_completed")
+                                # Don't emit synthesis_completed for blocked attempts
+                                # The orchestrator will receive the blocking message and should continue research
+                            else:
+                                synthesizer_output = full_synthesis
+                                logger.info(f"Captured synthesizer output ({len(full_synthesis)} chars)")
+                                
+                                # Emit synthesis_completed immediately so UI gets the report
+                                yield SSEEvent(
+                                    event_type=SSEEventType.SYNTHESIS_COMPLETED,
+                                    session_id=session_id,
+                                    data={
+                                        "agent": "synthesizer",
+                                        "execution_time_ms": event_data_completed.execution_time_ms,
+                                        "synthesis": full_synthesis,
+                                    },
+                                )
                     
                     # If this was a scratchpad write, emit a scratchpad updated event
                     if tool_event.get("is_scratchpad_write"):
@@ -2482,6 +2821,148 @@ class AgentOrchestrator:
                 async for sse_event in process_tool_event(tool_event):
                     yield sse_event
 
+            # ============================================================
+            # OPTION B: AUTO-SYNTHESIS ENFORCEMENT
+            # If orchestrator finished without calling synthesizer, force it
+            # ============================================================
+            if synthesizer_output is None and synthesizer_a2a_agent is not None and session_mcp_scratchpad is not None:
+                logger.warning(
+                    f"[AUTO_SYNTHESIS] Orchestrator finished without synthesis. "
+                    f"Attempting automatic synthesis for session {session_id[:8]}..."
+                )
+                
+                # Emit event to notify UI that we're doing auto-synthesis
+                yield SSEEvent(
+                    event_type=SSEEventType.AGENT_RESPONSE,
+                    session_id=session_id,
+                    data={
+                        "agent_name": "research-orchestrator",
+                        "response_type": "auto_synthesis",
+                        "content": "Orchestrator finished without final report. Initiating automatic synthesis...",
+                    },
+                )
+                
+                try:
+                    # Check current state from scratchpad
+                    guard_result = await check_synthesis_readiness(
+                        mcp_scratchpad=session_mcp_scratchpad,
+                        attempt_number=1,  # Treat as first attempt for auto-synthesis
+                        language=session.language,
+                    )
+                    
+                    logger.info(
+                        f"[AUTO_SYNTHESIS] State check: tasks={guard_result.completed_tasks}/{guard_result.total_tasks} "
+                        f"({guard_result.task_completion_pct:.0f}%), drafts={len(guard_result.existing_drafts)}"
+                    )
+                    
+                    # Find read_draft and read_notes functions from MCP scratchpad
+                    # Use the same pattern as check_synthesis_readiness
+                    read_draft_fn = None
+                    read_notes_fn = None
+                    for fn in session_mcp_scratchpad.functions:
+                        if fn.name == "read_draft":
+                            read_draft_fn = fn
+                        elif fn.name == "read_notes":
+                            read_notes_fn = fn
+                    
+                    draft_content = ""
+                    notes_content = ""
+                    
+                    if read_draft_fn:
+                        try:
+                            draft_result = await read_draft_fn()
+                            if isinstance(draft_result, list) and draft_result:
+                                for item in draft_result:
+                                    if hasattr(item, "text"):
+                                        draft_content = item.text
+                                        break
+                        except Exception as e:
+                            logger.warning(f"[AUTO_SYNTHESIS] Could not read draft: {e}")
+                    else:
+                        logger.warning("[AUTO_SYNTHESIS] read_draft function not found in scratchpad")
+                    
+                    if read_notes_fn:
+                        try:
+                            notes_result = await read_notes_fn()
+                            if isinstance(notes_result, list) and notes_result:
+                                for item in notes_result:
+                                    if hasattr(item, "text"):
+                                        notes_content = item.text
+                                        break
+                        except Exception as e:
+                            logger.warning(f"[AUTO_SYNTHESIS] Could not read notes: {e}")
+                    else:
+                        logger.warning("[AUTO_SYNTHESIS] read_notes function not found in scratchpad")
+                    
+                    # Build synthesis context
+                    synthesis_context = f"""AUTO-SYNTHESIS: The orchestrator finished without producing a final report. 
+Please synthesize all available research into a comprehensive final report.
+
+Research State:
+- Tasks completed: {guard_result.completed_tasks}/{guard_result.total_tasks} ({guard_result.task_completion_pct:.0f}%)
+- Draft sections available: {', '.join(guard_result.existing_drafts) if guard_result.existing_drafts else 'none'}
+
+Draft Content:
+{draft_content[:5000] if draft_content else 'No draft sections found'}
+
+Research Notes Summary:
+{notes_content[:3000] if notes_content else 'No notes found'}
+
+Please create the final synthesized report with executive summary, key findings, and recommendations."""
+
+                    # Call the raw synthesizer (bypass guard for auto-synthesis)
+                    raw_synthesizer_tool = synthesizer_a2a_agent.as_tool(
+                        name="synthesize_findings_auto",
+                        description="Auto-synthesis tool",
+                        arg_name="context",
+                        arg_description="Synthesis context",
+                    )
+                    
+                    logger.info(f"[AUTO_SYNTHESIS] Calling synthesizer with context ({len(synthesis_context)} chars)")
+                    
+                    # Use keyword argument - as_tool expects arg_name="context" as kwarg
+                    auto_synthesis_result = await raw_synthesizer_tool(context=synthesis_context)
+                    
+                    # Extract synthesis text
+                    if isinstance(auto_synthesis_result, str):
+                        synthesizer_output = auto_synthesis_result
+                    elif isinstance(auto_synthesis_result, list):
+                        text_parts = []
+                        for item in auto_synthesis_result:
+                            if isinstance(item, dict):
+                                text = item.get("text", item.get("content", ""))
+                                if text:
+                                    text_parts.append(str(text))
+                            elif isinstance(item, str):
+                                text_parts.append(item)
+                        synthesizer_output = "\n".join(text_parts)
+                    elif isinstance(auto_synthesis_result, dict):
+                        for key in ["text", "content", "summary", "response", "result"]:
+                            if key in auto_synthesis_result and auto_synthesis_result[key]:
+                                synthesizer_output = str(auto_synthesis_result[key])
+                                break
+                    
+                    if synthesizer_output:
+                        logger.info(f"[AUTO_SYNTHESIS] Success! Generated {len(synthesizer_output)} chars")
+                        
+                        # Emit synthesis_completed for the UI
+                        yield SSEEvent(
+                            event_type=SSEEventType.SYNTHESIS_COMPLETED,
+                            session_id=session_id,
+                            data={
+                                "agent": "auto-synthesizer",
+                                "execution_time_ms": 0,
+                                "synthesis": synthesizer_output,
+                                "auto_synthesis": True,
+                            },
+                        )
+                    else:
+                        logger.warning("[AUTO_SYNTHESIS] Synthesizer returned empty result")
+                        
+                except Exception as e:
+                    logger.error(f"[AUTO_SYNTHESIS] Failed: {e}")
+                    # Don't fail the workflow - just log and continue without synthesis
+
             end_time = datetime.now(timezone.utc)
             execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
 
@@ -2508,36 +2989,36 @@ class AgentOrchestrator:
                     )
 
             # Record the orchestrator's result
-            # Use synthesizer output if captured, otherwise fall back to accumulated content
-            final_synthesis_content = synthesizer_output or accumulated_content
+            # ONLY use synthesizer output if we have it - don't fake synthesis from accumulated content
+            # If synthesizer was never called or was blocked, there is no real synthesis
+            final_synthesis_content = synthesizer_output  # May be None if synthesis never happened
             
             session.agent_results.append(
                 AgentResult(
-                    agent_type=AgentType.SYNTHESIZER,  # Final output is the synthesis
+                    agent_type=AgentType.SYNTHESIZER,  # Always use SYNTHESIZER type for the final result
                     agent_name="research-orchestrator",
-                    content=final_synthesis_content,
+                    content=synthesizer_output or accumulated_content,
                     execution_time_ms=execution_time_ms,
                     timestamp=end_time,
                     metadata={
                         "tool_calls": self._tool_call_log,
                         "agent_call_counts": agent_call_count,
+                        "synthesis_completed": synthesizer_output is not None,
                     },
                 )
             )
-            session.final_synthesis = final_synthesis_content
+            session.final_synthesis = final_synthesis_content  # Will be None if no synthesis
 
-            # Only emit synthesis_completed if we didn't already emit it from the synthesizer tool
+            # IMPORTANT: Do NOT emit synthesis_completed here as a fallback
+            # synthesis_completed should ONLY be emitted when:
+            # 1. The synthesizer tool was actually called AND succeeded (done in tool_call_completed handler)
+            # This prevents false synthesis reports when:
+            # - Orchestrator stopped without calling synthesizer
+            # - Synthesis guard blocked the attempt
             if not synthesizer_output:
-                yield SSEEvent(
-                    event_type=SSEEventType.SYNTHESIS_COMPLETED,
-                    session_id=session_id,
-                    data={
-                        "agent": "research-orchestrator",
-                        "execution_time_ms": execution_time_ms,
-                        "tool_calls_made": self._tool_call_log,
-                        "agent_call_counts": agent_call_count,
-                        "synthesis": accumulated_content,  # Full synthesis for Final Report tab
-                    },
+                logger.info(
+                    f"[SYNTHESIS_GUARD] No synthesis completed - orchestrator finished without successful synthesis. "
+                    f"Tool calls: {len(self._tool_call_log)}, Agent calls: {agent_call_count}"
                 )
 
             # Workflow complete
