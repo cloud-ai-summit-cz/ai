@@ -1,0 +1,11 @@
+[project]
+name = "workflow-agent-provisioning"
+version = "0.1.0"
+description = "Provision invoice workflow agents to Azure AI Foundry"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = []

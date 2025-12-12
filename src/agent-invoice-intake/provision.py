@@ -4,8 +4,10 @@ Creates and destroys the invoice-intake-agent in Azure AI Foundry Agent Service.
 This agent handles OCR and data extraction from invoice images.
 """
 
+import argparse
 import os
 import sys
+from typing import Callable
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
@@ -31,6 +33,68 @@ console = Console(force_terminal=True)
 
 AGENT_NAME = "invoice-intake-agent"
 AGENT_DISPLAY_NAME = "Invoice Intake Agent"
+
+
+def _apply_env_overrides(overrides: dict[str, str | None]) -> None:
+    """Apply CLI-provided overrides to environment variables.
+
+    Args:
+        overrides: Mapping of environment variable names to their desired values.
+            Values of None are ignored.
+
+    Notes:
+        This clears the cached settings to ensure overrides take effect.
+    """
+    applied = False
+    for key, value in overrides.items():
+        if value is None:
+            continue
+        os.environ[key] = value
+        applied = True
+
+    if applied:
+        get_settings.cache_clear()
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser.
+
+    The optional flags correspond 1:1 with variables in `.env.example` and are
+    applied as environment variables to override local env / `.env` values.
+    """
+    parser = argparse.ArgumentParser(
+        prog="provision.py",
+        description="Provision and manage the Invoice Intake agent in Azure AI Foundry.",
+    )
+
+    parser.add_argument(
+        "--azure-ai-foundry-endpoint",
+        dest="azure_ai_foundry_endpoint",
+        help="Overrides AZURE_AI_FOUNDRY_ENDPOINT",
+    )
+    parser.add_argument(
+        "--model-deployment-name",
+        dest="model_deployment_name",
+        help="Overrides MODEL_DEPLOYMENT_NAME",
+    )
+    parser.add_argument(
+        "--applicationinsights-connection-string",
+        dest="applicationinsights_connection_string",
+        help="Overrides APPLICATIONINSIGHTS_CONNECTION_STRING",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    create = subparsers.add_parser("create", help="Create the agent in AI Foundry")
+    create.set_defaults(_handler=create_agent)
+
+    list_cmd = subparsers.add_parser("list", help="List all agents in the project")
+    list_cmd.set_defaults(_handler=list_agents)
+
+    destroy = subparsers.add_parser("destroy", help="Destroy the agent")
+    destroy.set_defaults(_handler=destroy_agent)
+
+    return parser
 
 INVOICE_EXTRACTION_SCHEMA: dict[str, object] = {
     "type": "object",
@@ -228,25 +292,19 @@ def destroy_agent() -> None:
 
 def main() -> None:
     """CLI entry point."""
-    if len(sys.argv) < 2:
-        console.print("[bold]Usage:[/bold] python provision.py <command>")
-        console.print("\n[bold]Commands:[/bold]")
-        console.print("  create   - Create the agent in AI Foundry")
-        console.print("  list     - List all agents in the project")
-        console.print("  destroy  - Destroy the agent")
-        sys.exit(1)
+    parser = _build_parser()
+    args = parser.parse_args()
 
-    command = sys.argv[1].lower()
+    _apply_env_overrides(
+        {
+            "AZURE_AI_FOUNDRY_ENDPOINT": args.azure_ai_foundry_endpoint,
+            "MODEL_DEPLOYMENT_NAME": args.model_deployment_name,
+            "APPLICATIONINSIGHTS_CONNECTION_STRING": args.applicationinsights_connection_string,
+        }
+    )
 
-    if command == "create":
-        create_agent()
-    elif command == "list":
-        list_agents()
-    elif command == "destroy":
-        destroy_agent()
-    else:
-        console.print(f"[red]Unknown command: {command}[/red]")
-        sys.exit(1)
+    handler: Callable[[], None] = args._handler
+    handler()
 
 
 if __name__ == "__main__":

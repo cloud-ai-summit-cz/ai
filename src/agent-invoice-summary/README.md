@@ -30,6 +30,16 @@ Create the agent in AI Foundry (idempotent - recreates if exists):
 uv run python provision.py create
 ```
 
+Optionally override `.env` / environment variables via CLI flags (mirrors `.env.example`):
+
+```bash
+uv run python provision.py \
+   --azure-ai-foundry-endpoint "https://<foundry-project>.services.ai.azure.com/api/projects/proj-default" \
+   --model-deployment-name "gpt-5" \
+   --mcp-invoice-data-url "https://<example>.<region>.azurecontainerapps.io/mcp" \
+   create
+```
+
 List agents:
 
 ```bash
