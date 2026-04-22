@@ -1,0 +1,58 @@
+{
+  "is_ready_for_posting": false,
+  "invoice_validation_status": "<INV_FAIL>",
+  "issues": [
+    {
+      "code": "PO_MISSING",
+      "severity": "error",
+      "message": "No PO number provided in the invoice.",
+      "field": "po_number"
+    }
+  ],
+  "normalized_invoice": {
+    "invoice_number": "00012",
+    "invoice_date": "2205-10-01",
+    "due_date": "2205-10-16",
+    "currency": "USD",
+    "supplier": {
+      "name": "Contoso Fin Consulting",
+      "address": "450 East 78th Ave, Denver, CO 12345",
+      "email": "",
+      "phone": "(123) 456-7890"
+    },
+    "bill_to": {
+      "name": "Tomas Kubica",
+      "address": "Karlinska 1918, Karlin, Czechia",
+      "department": ""
+    },
+    "line_items": [
+      {
+        "description": "Consultation services implementation of AI powered grinder",
+        "quantity": 3,
+        "unit_price": 375,
+        "uom": "hours",
+        "total": 1125
+      }
+    ],
+    "subtotal": 1125,
+    "tax": 0,
+    "shipping": 0,
+    "total": 1125,
+    "confidence": 0.95,
+    "notes": "Total matches the sum of line items.",
+    "status": "pending"
+  },
+  "po_validation_result": {
+    "po_number": "",
+    "is_valid": false,
+    "tool_name": "MCP PO Check",
+    "notes": "PO does not exist in the system."
+  },
+  "business_rules": [
+    {
+      "rule": "PO must be present and valid",
+      "passed": false,
+      "details": "No PO number provided."
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+# Workflow Infrastructure - Terraform Variables Example
+# =====================================================
+# Copy this file to terraform.tfvars and fill in your values.
+
+# Required
+subscription_id      = "your-subscription-id"
+mcp_invoice_api_key  = "your-secure-token"  # openssl rand -hex 32
+
+# Default behavior:
+# - Container Apps are deployed immediately using a public hello-world image
+# - After you build/push images to ACR, set bootstrap_with_hello_world=false
+deploy_container_apps       = true
+bootstrap_with_hello_world  = true
+
+# Optional (defaults match demo requirements)
+project_name         = "invoice-wf"
+resource_group_name  = "rg-invoice-wf"
+location             = "eastus2"
+
+# Container sizing
+backend_container_cpu    = 0.5
+backend_container_memory = "1.0Gi"
+mcp_container_cpu        = 0.25
+mcp_container_memory     = "0.5Gi"
+min_replicas             = 1
+max_replicas             = 3
+
+# Model capacities (thousands TPM)
+gpt5_capacity         = 200
+gpt4o_mini_capacity   = 200
+
+# Static Web App (created by default; repo integration optional)
+enable_static_web_app = true
+# For GitHub integration (optional):
+# swa_repo_url     = "https://github.com/<org>/<repo>"
+# swa_branch       = "main"
+# swa_github_token = "ghp_..."

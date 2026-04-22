@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invoice Processing Workflow</title>
+    <link rel="stylesheet" href="styles.css?v=3">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <div class="app">
+        <header class="header">
+            <div class="header-content">
+                <i data-lucide="coffee" class="header-logo"></i>
+                <h1>Cofilot</h1>
+                <span class="subtitle">invoice processing</span>
+            </div>
+        </header>
+
+        <main class="main">
+            <!-- Main Column -->
+            <div class="main-column">
+                <!-- Input Section -->
+                <section id="input-section" class="section input-section">
+                <div class="input-container">
+                    <div class="image-upload">
+                        <input type="file" id="invoice-input" accept="image/*" hidden>
+                        <label for="invoice-input" class="upload-label" id="upload-label">
+                            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                <polyline points="21 15 16 10 5 21"></polyline>
+                            </svg>
+                            <span>Upload Invoice Image</span>
+                        </label>
+                        <div id="image-preview" class="image-preview hidden">
+                            <img id="preview-img" src="" alt="Invoice preview">
+                            <button id="remove-image" class="remove-btn" title="Remove image">×</button>
+                        </div>
+                    </div>
+                    
+                    <div class="prompt-container hidden ">
+                        <textarea 
+                            id="prompt-input" 
+                            placeholder="Enter your prompt... (e.g., Please extract the data from this invoice.)"
+                            rows="3"
+                        ></textarea>
+                    </div>
+                    
+                    <button id="start-btn" class="start-btn">
+                        <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                        Start Workflow
+                    </button>
+                </div>
+            </section>
+
+            <!-- Tabbed Workspace -->
+            <div id="workflow-tabs" class="workflow-tabs hidden">
+                <div class="tab-bar" role="tablist" aria-label="Workflow views">
+                    <button class="tab-button active" data-tab-target="diagram" role="tab" aria-selected="true">
+                        <span class="tab-button-inner">
+                            <i data-lucide="activity" class="tab-logo"></i>
+                            <span class="tab-label">Activity</span>
+                        </span>
+                    </button>
+                    <button class="tab-button" data-tab-target="progress" role="tab" aria-selected="false">
+                        <span class="tab-button-inner">
+                            <i data-lucide="list-todo" class="tab-logo"></i>
+                            <span class="tab-label">Progress</span>
+                            <span id="tab-progress-badge" class="tab-badge">0</span>
+                        </span>
+                    </button>
+                    <button class="tab-button" data-tab-target="console" role="tab" aria-selected="false">
+                        <span class="tab-button-inner">
+                            <i data-lucide="terminal" class="tab-logo"></i>
+                            <span class="tab-label">Console</span>
+                            <span id="tab-console-badge" class="tab-badge">0</span>
+                        </span>
+                    </button>
+                </div>
+
+                <div class="tab-panels">
+                    <div class="tab-panel active" data-tab="diagram" role="tabpanel">
+                        <section class="section workflow-diagram-shell">
+                            <div class="panel-header">
+                                <div class="panel-title">Diagram</div>
+                                <span class="panel-pill">Live</span>
+                            </div>
+                            <div id="workflow-diagram" class="workflow-diagram">
+                                <div class="diagram-container">
+                                    <div class="diagram-loading">Loading workflow diagram...</div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="tab-panel" data-tab="progress" role="tabpanel">
+                        <section id="workflow-section" class="section workflow-section hidden">
+                            <div class="workflow-header">
+                                <h2>Workflow Progress</h2>
+                                <div id="workflow-status" class="status-badge">Running</div>
+                            </div>
+                            
+                            <div id="events-container" class="events-container">
+                                <!-- Events will be added here dynamically -->
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="tab-panel" data-tab="console" role="tabpanel">
+                        <section class="section console-section">
+                            <div class="event-console">
+                                <div class="console-header">
+                                    <div class="console-title">
+                                        <span class="console-icon">⬢</span>
+                                        <span>Event Console</span>
+                                    </div>
+                                    <div class="console-controls">
+                                        <button id="console-clear" class="console-btn" title="Clear console">Clear</button>
+                                        <span id="console-status" class="console-status">Ready</span>
+                                    </div>
+                                </div>
+                                <div id="console-output" class="console-output">
+                                    <div class="console-line console-info">
+                                        <span class="console-prefix">[INFO]</span>
+                                        <span class="console-text">Waiting for workflow to start...</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Result Section -->
+            <section id="result-section" class="section result-section hidden">
+                <div class="result-header">
+                    <h2>Result</h2>
+                    <span id="conversation-badge" class="conversation-badge hidden"></span>
+                </div>
+                <div id="result-content" class="result-content">
+                    <!-- Final result will be displayed here -->
+                </div>
+                
+                <!-- Follow-up Section -->
+                <div class="followup-container">
+                    <textarea 
+                        id="followup-input" 
+                        placeholder="Ask a follow-up question..."
+                        rows="2"
+                    ></textarea>
+                    <button id="followup-btn" class="followup-btn">
+                        <svg class="send-icon" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                        </svg>
+                        Send
+                    </button>
+                </div>
+                
+                <button id="restart-btn" class="restart-btn">
+                    <svg class="restart-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="1 4 1 10 7 10"></polyline>
+                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                    </svg>
+                    Start Over
+                </button>
+            </section>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <div class="footer-content">
+                <span class="footer-text">Cloud & AI Summit CZ 2025</span>
+                <span class="footer-divider">•</span>
+                <span class="footer-text">Powered by Azure AI Foundry</span>
+                <svg class="footer-logo" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" role="presentation"><path clip-rule="evenodd" d="M20.4052 2C20.3713 2.04989 20.3403 2.10356 20.3119 2.15906C20.1753 2.42519 20.0629 2.80022 19.9685 3.2499C19.7794 4.15205 19.6545 5.3972 19.5714 6.7798C19.405 9.54716 19.405 12.8938 19.405 15.213V24.4338L19.4049 24.4698C19.3854 27.5153 16.8918 29.9806 13.8112 29.9999L13.7749 30H3.57642C3.18062 30 2.9073 29.6141 3.04346 29.2496C4.56004 25.1917 6.6982 19.4832 8.50404 14.6901C9.40697 12.2934 10.2268 10.1257 10.8442 8.50763C11.4636 6.88453 11.876 5.82419 11.9665 5.63239C12.2132 5.10978 12.6147 4.1951 13.1873 3.40856C13.7637 2.61659 14.4808 2.00001 15.3445 2H20.4052ZM29.2769 10.1842C29.4966 10.1842 29.6747 10.3603 29.6747 10.5775V17.6706L29.6745 17.7148C29.6504 19.5836 28.1106 21.0913 26.2147 21.0913H21.668C21.6778 21.0796 21.6872 21.0676 21.6966 21.0552C21.8605 20.8367 21.9531 20.526 21.9587 20.134L21.9589 20.0958V14.0817C21.9589 11.9291 23.7238 10.1842 25.9011 10.1842H29.2769ZM21.2532 2.14424C21.5631 2.14425 21.8986 2.38926 22.2468 2.88783C22.5881 3.37681 22.9111 4.06635 23.2065 4.85721C23.7783 6.3875 24.2354 8.26487 24.5265 9.71512C22.6354 10.2861 21.2595 12.0248 21.2595 14.0817V20.0782L21.2594 20.0921C21.2575 20.2355 21.2263 20.4039 21.1685 20.5329C21.1042 20.6758 21.0375 20.7121 20.9938 20.7121C20.9575 20.7121 20.8869 20.6826 20.7852 20.5652C20.6894 20.4549 20.5915 20.2961 20.4975 20.1117C20.3151 19.7539 20.1614 19.3273 20.0739 19.0482V15.213C20.0739 8.68733 20.3039 5.39271 20.5834 3.73209C20.7239 2.89797 20.8739 2.49601 20.9998 2.30459C21.0605 2.21243 21.1101 2.17748 21.1426 2.16241C21.1755 2.14714 21.207 2.14424 21.2532 2.14424Z" fill="currentColor" fill-rule="evenodd"></path></svg>
+                
+            </div>
+        </footer>
+    </div>
+
+    <script src="app.js?v=3"></script>
+</body>
+</html>

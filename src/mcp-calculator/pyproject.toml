@@ -1,0 +1,20 @@
+[project]
+name = "mcp-calculator"
+version = "0.1.0"
+description = "MCP server for financial calculations and projections"
+requires-python = ">=3.11"
+dependencies = [
+    "azure-monitor-opentelemetry>=1.6.0",
+    "fastmcp>=2.0.0",
+    "opentelemetry-instrumentation-fastapi>=0.50b0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "uvicorn>=0.30.0",
+]
+
+[tool.hatch.build.targets.wheel]
+only-include = ["config.py", "models.py", "calculations.py", "server.py", "main.py"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

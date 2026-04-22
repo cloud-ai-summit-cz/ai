@@ -1,0 +1,143 @@
+{
+  "name": "mcp-government-data",
+  "version": "1.0.0",
+  "description": "Government permits, zoning, and regulatory data",
+  "tools": [
+    {
+      "name": "get_business_permits",
+      "description": "Get required permits for a business type in a location",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "City name"
+          },
+          "country": {
+            "type": "string",
+            "description": "Country code (e.g., 'AT' for Austria)"
+          },
+          "business_type": {
+            "type": "string",
+            "description": "Type of business (e.g., 'coffee_shop', 'restaurant')"
+          }
+        },
+        "required": ["city", "business_type"]
+      }
+    },
+    {
+      "name": "get_zoning_info",
+      "description": "Get zoning information for a specific address or area",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "district": {
+            "type": "string",
+            "description": "District or neighborhood"
+          },
+          "address": {
+            "type": "string",
+            "description": "Specific address (optional)"
+          }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "get_regulations",
+      "description": "Get industry-specific regulations",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "country": {
+            "type": "string"
+          },
+          "industry": {
+            "type": "string",
+            "description": "Industry (e.g., 'food_service', 'retail')"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["employment", "health", "safety", "environment", "all"],
+            "default": "all"
+          }
+        },
+        "required": ["country", "industry"]
+      }
+    },
+    {
+      "name": "get_tax_rates",
+      "description": "Get business tax rates for a location",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "country": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "business_type": {
+            "type": "string"
+          }
+        },
+        "required": ["country"]
+      }
+    },
+    {
+      "name": "get_licensing_requirements",
+      "description": "Get professional licensing requirements",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "country": {
+            "type": "string"
+          },
+          "profession": {
+            "type": "string",
+            "description": "Profession type (e.g., 'food_handler', 'barista')"
+          }
+        },
+        "required": ["country", "profession"]
+      }
+    },
+    {
+      "name": "get_health_safety_codes",
+      "description": "Get health and safety codes for food service",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "country": {
+            "type": "string"
+          },
+          "establishment_type": {
+            "type": "string",
+            "description": "Type (e.g., 'cafe', 'restaurant', 'bakery')"
+          }
+        },
+        "required": ["country", "establishment_type"]
+      }
+    },
+    {
+      "name": "get_labor_laws",
+      "description": "Get employment and labor regulations",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "country": {
+            "type": "string"
+          },
+          "topics": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Topics (e.g., ['minimum_wage', 'working_hours', 'benefits'])"
+          }
+        },
+        "required": ["country"]
+      }
+    }
+  ]
+}

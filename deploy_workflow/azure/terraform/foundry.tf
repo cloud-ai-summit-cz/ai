@@ -1,0 +1,132 @@
+# ==========================================================================
+# Azure AI Foundry (Cognitive Services)
+# ==========================================================================
+
+resource "azapi_resource" "ai_foundry_account" {
+  type      = "Microsoft.CognitiveServices/accounts@2025-04-01-preview"
+  name      = "ai-${var.project_name}-${random_string.suffix.result}"
+  location  = var.location
+  parent_id = azurerm_resource_group.main.id
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  body = {
+    kind = "AIServices"
+    sku = {
+      name = "S0"
+    }
+    properties = {
+      customSubDomainName    = "ai-${var.project_name}-${random_string.suffix.result}"
+      publicNetworkAccess    = "Enabled"
+      disableLocalAuth       = false
+      allowProjectManagement = true
+    }
+  }
+
+  response_export_values = ["properties.endpoint", "properties.endpoints", "identity.principalId"]
+}
+
+resource "azapi_resource" "ai_foundry_project" {
+  type      = "Microsoft.CognitiveServices/accounts/projects@2025-04-01-preview"
+  name      = "${var.project_name}-project"
+  location  = var.location
+  parent_id = azapi_resource.ai_foundry_account.id
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  body = {
+    properties = {}
+  }
+
+  response_export_values = ["properties.endpoints", "identity.principalId"]
+}
+
+# ==========================================================================
+# Model Deployments (GlobalStandard)
+# ==========================================================================
+
+resource "azapi_resource" "model_gpt5" {
+  type      = "Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview"
+  name      = "gpt-5"
+  parent_id = azapi_resource.ai_foundry_account.id
+
+  body = {
+    sku = {
+      name     = "GlobalStandard"
+      capacity = var.gpt5_capacity
+    }
+    properties = {
+      model = {
+        format  = "OpenAI"
+        name    = "gpt-5"
+        version = var.gpt5_version
+      }
+      versionUpgradeOption = "OnceCurrentVersionExpired"
+    }
+  }
+
+  depends_on = [azapi_resource.ai_foundry_project]
+}
+
+resource "azapi_resource" "model_gpt4o_mini" {
+  type      = "Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview"
+  name      = "gpt-4o-mini"
+  parent_id = azapi_resource.ai_foundry_account.id
+
+  body = {
+    sku = {
+      name     = "GlobalStandard"
+      capacity = var.gpt4o_mini_capacity
+    }
+    properties = {
+      model = {
+        format  = "OpenAI"
+        name    = "gpt-4o-mini"
+        version = var.gpt4o_mini_version
+      }
+      versionUpgradeOption = "OnceCurrentVersionExpired"
+    }
+  }
+
+  depends_on = [azapi_resource.model_gpt5]
+}
+
+# ==========================================================================
+# Capability Hosts (Enable Agents API)
+# ==========================================================================
+
+resource "azapi_resource" "ai_foundry_account_capability_host" {
+  type      = "Microsoft.CognitiveServices/accounts/capabilityHosts@2025-04-01-preview"
+  name      = "caphost"
+  parent_id = azapi_resource.ai_foundry_account.id
+
+  schema_validation_enabled = false
+
+  body = {
+    properties = {
+      capabilityHostKind = "Agents"
+    }
+  }
+
+  depends_on = [azapi_resource.model_gpt4o_mini]
+}
+
+resource "azapi_resource" "ai_foundry_project_capability_host" {
+  type      = "Microsoft.CognitiveServices/accounts/projects/capabilityHosts@2025-04-01-preview"
+  name      = "caphostproj"
+  parent_id = azapi_resource.ai_foundry_project.id
+
+  schema_validation_enabled = false
+
+  body = {
+    properties = {
+      capabilityHostKind = "Agents"
+    }
+  }
+
+  depends_on = [azapi_resource.ai_foundry_account_capability_host]
+}

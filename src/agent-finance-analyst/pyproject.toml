@@ -1,0 +1,23 @@
+[project]
+name = "agent-finance-analyst"
+version = "0.1.0"
+description = "Finance Analyst agent for Cofilot expansion analysis"
+requires-python = ">=3.11"
+dependencies = [
+    "azure-ai-projects>=1.0.0b1",
+    "azure-identity>=1.15.0",
+    "jinja2>=3.1.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+provision = "provision:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

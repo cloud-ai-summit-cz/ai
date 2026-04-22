@@ -1,0 +1,97 @@
+# Build Configuration for ACR Tasks
+# Defines containers to build and push to Azure Container Registry
+
+# Azure Container Registry name (auto-detected from Terraform output)
+# Can be overridden via --acr-name flag
+acr_name: acrrgsummitai5oxyy5
+
+# Container definitions
+containers:
+  - name: mcp-scratchpad
+    path: ../../src/mcp-scratchpad
+    image: mcp-scratchpad
+    tag: latest
+    
+  - name: mcp-business-registry
+    path: ../../src/mcp-business-registry
+    image: mcp-business-registry
+    tag: latest
+
+  - name: mcp-government-data
+    path: ../../src/mcp-government-data
+    image: mcp-government-data
+    tag: latest
+
+  - name: mcp-demographics
+    path: ../../src/mcp-demographics
+    image: mcp-demographics
+    tag: latest
+
+  - name: mcp-real-estate
+    path: ../../src/mcp-real-estate
+    image: mcp-real-estate
+    tag: latest
+
+  - name: mcp-calculator
+    path: ../../src/mcp-calculator
+    image: mcp-calculator
+    tag: latest
+
+  - name: agent-market-analyst-a2a
+    # Build context is agent-market-analyst (to include prompts/)
+    path: ../../src/agent-market-analyst
+    # Dockerfile is in standalone/a2a/maf/ subdirectory
+    dockerfile: standalone/a2a/maf/Dockerfile
+    image: agent-market-analyst-a2a
+    tag: latest
+
+  - name: agent-competitor-analyst-a2a
+    # Build context is agent-competitor-analyst (to include prompts/)
+    path: ../../src/agent-competitor-analyst
+    # Dockerfile is in standalone/a2a/maf/ subdirectory
+    dockerfile: standalone/a2a/maf/Dockerfile
+    image: agent-competitor-analyst-a2a
+    tag: latest
+
+  - name: agent-finance-analyst-a2a
+    # Build context is agent-finance-analyst (to include prompts/)
+    path: ../../src/agent-finance-analyst
+    # Dockerfile is in standalone/a2a/maf/ subdirectory
+    dockerfile: standalone/a2a/maf/Dockerfile
+    image: agent-finance-analyst-a2a
+    tag: latest
+
+  - name: agent-location-scout-a2a
+    # Build context is agent-location-scout (to include prompts/)
+    path: ../../src/agent-location-scout
+    # Dockerfile is in standalone/a2a/maf/ subdirectory
+    dockerfile: standalone/a2a/maf/Dockerfile
+    image: agent-location-scout-a2a
+    tag: latest
+
+  - name: agent-synthesizer-a2a
+    # Build context is agent-synthesizer (to include prompts/)
+    path: ../../src/agent-synthesizer
+    # Dockerfile is in standalone/a2a/maf/ subdirectory
+    dockerfile: standalone/a2a/maf/Dockerfile
+    image: agent-synthesizer-a2a
+    tag: latest
+
+  - name: agent-research-orchestrator
+    # Research Orchestrator API - FastAPI backend
+    path: ../../src/agent-research-orchestrator
+    image: agent-research-orchestrator
+    tag: latest
+
+  - name: web-research
+    # Web Research UI - React frontend with nginx
+    path: ../../src/web-research
+    image: web-research
+    tag: latest
+
+  # - name: test-hosted-agent
+  #   path: ../../src/test-hosted-agent
+  #   image: test-hosted-agent
+  #   tag: latest
+
+build_all_by_default: true

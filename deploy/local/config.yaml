@@ -1,0 +1,111 @@
+# Cofilot AI Platform - Local Development Configuration
+# =====================================================
+# Control which services to start locally.
+# Set to false to disable a service.
+
+# Agents (6 total)
+# ----------------
+# Note: Foundry Native agents (market-analyst, competitor-analyst, synthesizer)
+# are hosted in Azure AI Foundry and don't run locally as processes.
+# MAF and LangGraph agents run as local Python processes.
+
+agents:
+  # MAF-based orchestrator (coordinates research workflow)
+  research-orchestrator:
+    enabled: true
+    # command: "uv run python -m research_orchestrator.main"
+
+  # Foundry Native agents (provision to Azure AI Foundry, then exit)
+  market-analyst:
+    enabled: false
+    provision_only: true  # Runs provisioning script, not a long-running service
+    # command: "uv run python -m market_analyst.provision create"
+
+  competitor-analyst:
+    enabled: false
+    provision_only: true
+    # command: "uv run python -m competitor_analyst.provision create"
+
+  # LangGraph agents (local Python processes)
+  location-scout:
+    enabled: false
+    # command: "uv run python -m location_scout.main"
+
+  finance-analyst:
+    enabled: false
+    provision_only: true  # Runs provisioning script, not a long-running service
+    # command: "uv run python -m finance_analyst.main"
+
+  # Foundry Native agent (provision to Azure AI Foundry, then exit)
+  synthesizer:
+    enabled: false
+    provision_only: true
+    # command: "uv run python -m synthesizer.provision create"
+
+# MCP Servers (7 total)
+# ---------------------
+# All MCP servers run as local FastAPI/Uvicorn processes.
+
+mcp_servers:
+  scratchpad:
+    enabled: false
+    port: 8010
+    command: "uv run python main.py"
+
+  web-search:
+    enabled: false
+    port: 8011
+    command: "uv run python main.py"
+
+  business-registry:
+    enabled: false
+    port: 8012
+    command: "uv run python main.py"
+
+  government-data:
+    enabled: false
+    port: 8013
+    command: "uv run python main.py"
+
+  demographics:
+    enabled: false
+    port: 8014
+    command: "uv run python main.py"
+
+  real-estate:
+    enabled: false
+    port: 8015
+    command: "uv run python main.py"
+
+  calculator:
+    enabled: false
+    port: 8016
+    command: "uv run python main.py"
+
+# Global Settings
+# ---------------
+
+settings:
+  # Working directory for all services (relative to repo root)
+  src_dir: "../../src"
+  
+  # Log level for all services
+  log_level: "INFO"
+  
+  # Colors for log output tags (ANSI color names)
+  colors:
+    agents:
+      research-orchestrator: "cyan"
+      market-analyst: "bright_cyan"
+      competitor-analyst: "bright_yellow"
+      location-scout: "blue"
+      finance-analyst: "magenta"
+      synthesizer: "bright_magenta"
+    mcp_servers:
+      scratchpad: "green"
+      web-search: "yellow"
+      business-registry: "red"
+      government-data: "bright_blue"
+      demographics: "bright_green"
+      real-estate: "bright_magenta"
+      calculator: "bright_cyan"

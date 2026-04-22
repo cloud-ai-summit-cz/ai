@@ -1,0 +1,33 @@
+{
+  "po_number": "534",
+  "invoice_number": "100",
+  "invoice_date": "2025-10-15",
+  "due_date": "",
+  "currency": "EUR",
+  "supplier": {
+    "name": "Zava Specialty Coffee",
+    "address": "333 3rd Ave, Seattle, WA 12345",
+    "email": "",
+    "phone": "123-456-7890"
+  },
+  "bill_to": {
+    "name": "Tomas Kubica",
+    "address": "Karlinska 1918, Karlin, Czechia",
+    "department": "CoPilot Inc"
+  },
+  "line_items": [
+    {
+      "description": "Zava Ethiopia for Espresso",
+      "quantity": 80,
+      "unit_price": 20,
+      "uom": "Kg",
+      "total": 2000
+    }
+  ],
+  "subtotal": 2000,
+  "tax": 300,
+  "shipping": 0,
+  "total": 2300,
+  "confidence": 0.88,
+  "notes": "Handwritten PO (534) detected. Invoice # read as '100'. Invoice date read as 10/15/2025 and converted to ISO. Supplier address and purchaser/shipping address OCRed as 'Karlinska 1918, Karlin, Czechia' (minor uncertainty). Totals (subtotal 2000 + tax 300 + shipping 0 = total 2300) match the invoice."
+}

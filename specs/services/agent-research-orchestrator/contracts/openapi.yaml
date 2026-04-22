@@ -1,0 +1,757 @@
+openapi: 3.1.0
+info:
+  title: Research Orchestrator API
+  description: REST API for the research orchestrator service, providing endpoints for managing research sessions and receiving real-time updates via SSE.
+  version: 1.0.0
+  contact:
+    name: Platform Team
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+  - url: https://research.cofilot.demo
+    description: Production
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /research/sessions:
+    post:
+      summary: Create a new research session
+      operationId: createSession
+      tags:
+        - Research
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResearchRequest'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchSession'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+
+  /research/sessions/{session_id}:
+    get:
+      summary: Get session status
+      operationId: getSession
+      tags:
+        - Research
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchSession'
+        '404':
+          description: Session not found
+
+  /research/sessions/{session_id}/start:
+    post:
+      summary: Start the research workflow
+      operationId: startWorkflow
+      tags:
+        - Research
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '202':
+          description: Workflow started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowStarted'
+        '404':
+          description: Session not found
+        '409':
+          description: Workflow already running
+
+  /research/sessions/{session_id}/answers:
+    post:
+      summary: Submit answers to questions and unblock workflow
+      description: |
+        Submits answers to one or more questions. If the workflow is currently 
+        waiting for user input (blocked), this automatically unblocks it.
+        This is the combined Save & Unblock action from the UI.
+      operationId: submitAnswers
+      tags:
+        - Research
+        - Human-in-the-Loop
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnswersRequest'
+      responses:
+        '200':
+          description: Answers saved and workflow unblocked (if waiting)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnswersResponse'
+        '404':
+          description: Session not found
+        '400':
+          description: Invalid question ID or missing required fields
+
+  /research/sessions/{session_id}/questions:
+    get:
+      summary: Get all questions for the session
+      description: |
+        Returns all questions (pending and answered) for the session.
+        UI should poll this endpoint to display questions to the user.
+        The response includes workflow status to indicate if waiting for input.
+      operationId: getQuestions
+      tags:
+        - Research
+        - Human-in-the-Loop
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, answered, all]
+            default: all
+          description: Filter questions by status
+      responses:
+        '200':
+          description: List of questions with workflow status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionsResponse'
+        '404':
+          description: Session not found
+
+  /research/sessions/{session_id}/events:
+    get:
+      summary: Subscribe to session events (SSE)
+      operationId: subscribeEvents
+      tags:
+        - Research
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/AgentActivityEvent'
+        '404':
+          description: Session not found
+
+  # === Scratchpad Proxy Endpoints ===
+  # These endpoints proxy to the MCP scratchpad service.
+  # Frontend should poll these after each SSE event to get current state.
+
+  /research/sessions/{session_id}/scratchpad/plan:
+    get:
+      summary: Get current research plan (tasks)
+      description: |
+        Returns the current plan with all tasks, their statuses, assignments, and priorities.
+        Frontend should poll this endpoint after each SSE event to get the current state.
+        This proxies to the MCP scratchpad read_plan tool.
+      operationId: getPlan
+      tags:
+        - Research
+        - Scratchpad
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Current plan with tasks
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanResponse'
+        '404':
+          description: Session not found
+        '503':
+          description: Scratchpad service unavailable
+
+  /research/sessions/{session_id}/scratchpad/notes:
+    get:
+      summary: Get all research notes
+      description: |
+        Returns all notes collected during research, organized by section/topic.
+        Frontend should poll this endpoint after each SSE event to get current state.
+        This proxies to the MCP scratchpad read_notes tool.
+      operationId: getNotes
+      tags:
+        - Research
+        - Scratchpad
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: All research notes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotesResponse'
+        '404':
+          description: Session not found
+        '503':
+          description: Scratchpad service unavailable
+
+  /research/sessions/{session_id}/scratchpad/draft:
+    get:
+      summary: Get current draft report sections
+      description: |
+        Returns all draft sections written so far.
+        Frontend should poll this endpoint after each SSE event to get current state.
+        This proxies to the MCP scratchpad read_draft tool.
+      operationId: getDraft
+      tags:
+        - Research
+        - Scratchpad
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Current draft sections
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DraftResponse'
+        '404':
+          description: Session not found
+        '503':
+          description: Scratchpad service unavailable
+
+  /research/sessions/{session_id}/cancel:
+    post:
+      summary: Cancel a running workflow
+      operationId: cancelWorkflow
+      tags:
+        - Research
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Workflow cancelled
+        '404':
+          description: Session not found
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - version
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        version:
+          type: string
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+
+    ResearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          minLength: 10
+          maxLength: 1000
+          description: Research question
+          example: "Should Cofilot expand to Vienna?"
+        context:
+          type: object
+          additionalProperties: true
+          description: Optional context for the research
+
+    ResearchSession:
+      type: object
+      required:
+        - id
+        - query
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        query:
+          type: string
+        status:
+          type: string
+          enum: [created, running, waiting_input, completed, failed]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        current_agent:
+          type: string
+          nullable: true
+        checklist:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChecklistItem'
+        pending_questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Question'
+        final_report:
+          type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+
+    ChecklistItem:
+      type: object
+      required:
+        - id
+        - task
+        - agent
+        - status
+      properties:
+        id:
+          type: integer
+        task:
+          type: string
+        agent:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, completed, skipped]
+        notes:
+          type: string
+          nullable: true
+
+    Question:
+      type: object
+      required:
+        - id
+        - question
+        - context
+        - asked_by
+        - priority
+        - asked_at
+        - answered
+      properties:
+        id:
+          type: string
+          description: Unique question ID
+          example: "q_abc12345"
+        question:
+          type: string
+          description: The question text
+        context:
+          type: string
+          description: Why this information is needed
+        asked_by:
+          type: string
+          description: Agent that asked this question
+          example: "finance-analyst"
+        priority:
+          type: string
+          enum: [low, medium, high, blocking]
+          description: |
+            Question priority:
+            - low: Nice to have, won't block research
+            - medium: Would improve research quality  
+            - high: Important for accurate recommendations
+            - blocking: Research cannot proceed without answer
+        asked_at:
+          type: string
+          format: date-time
+          description: When the question was asked
+        answered:
+          type: boolean
+          description: Whether user has answered this question
+        answer:
+          type: string
+          nullable: true
+          description: User's answer (null if not answered)
+        answered_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the question was answered
+
+    QuestionsResponse:
+      type: object
+      required:
+        - session_id
+        - questions
+        - pending_count
+        - answered_count
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Question'
+          description: All questions (pending and answered)
+        pending_count:
+          type: integer
+          description: Number of unanswered questions
+        answered_count:
+          type: integer
+          description: Number of answered questions
+        has_blocking_pending:
+          type: boolean
+          description: True if any blocking questions are unanswered
+        workflow_waiting:
+          type: boolean
+          description: True if workflow is currently waiting for user input
+
+    AnswersRequest:
+      type: object
+      required:
+        - answers
+      properties:
+        answers:
+          type: array
+          items:
+            type: object
+            required:
+              - question_id
+              - answer
+            properties:
+              question_id:
+                type: string
+                description: ID of the question being answered
+              answer:
+                type: string
+                description: User's answer
+          description: List of question answers to submit
+
+    AnswersResponse:
+      type: object
+      required:
+        - session_id
+        - answers_saved
+        - workflow_unblocked
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        answers_saved:
+          type: integer
+          description: Number of answers successfully saved
+        workflow_unblocked:
+          type: boolean
+          description: True if submitting these answers unblocked the workflow
+        remaining_pending:
+          type: integer
+          description: Number of questions still awaiting answers
+
+    WorkflowStarted:
+      type: object
+      required:
+        - session_id
+        - status
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [started]
+        message:
+          type: string
+
+    AgentActivityEvent:
+      type: object
+      required:
+        - event_type
+        - session_id
+        - timestamp
+        - sequence
+      properties:
+        event_type:
+          type: string
+          enum:
+            - workflow_started
+            - agent_invoked
+            - agent_completed
+            - sub_agent_tool_call
+            - scratchpad_updated
+            - question_added
+            - awaiting_user_input
+            - questions_answered
+            - thinking
+            - workflow_completed
+            - error
+        session_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        sequence:
+          type: integer
+          description: Monotonic sequence number for event ordering
+        agent:
+          type: string
+          nullable: true
+        message:
+          type: string
+          nullable: true
+        data:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Event-specific payload (see SSE Event Types in ARCHITECTURE.md)
+
+    ValidationError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  type: string
+              msg:
+                type: string
+              type:
+                type: string
+
+    # === Scratchpad Response Schemas ===
+
+    PlanResponse:
+      type: object
+      required:
+        - session_id
+        - tasks
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanTask'
+        total_tasks:
+          type: integer
+        tasks_by_status:
+          type: object
+          properties:
+            todo:
+              type: integer
+            in_progress:
+              type: integer
+            done:
+              type: integer
+            blocked:
+              type: integer
+
+    PlanTask:
+      type: object
+      required:
+        - task_id
+        - description
+        - status
+      properties:
+        task_id:
+          type: string
+          description: Server-assigned unique task ID
+        description:
+          type: string
+        priority:
+          type: string
+          enum: [low, medium, high]
+          default: medium
+        assigned_to:
+          type: string
+          nullable: true
+          description: Agent assigned to this task
+        status:
+          type: string
+          enum: [todo, in-progress, done, blocked]
+          default: todo
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    NotesResponse:
+      type: object
+      required:
+        - session_id
+        - notes
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        notes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Note'
+        total_notes:
+          type: integer
+        notes_by_author:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Count of notes per agent
+
+    Note:
+      type: object
+      required:
+        - note_id
+        - content
+        - author
+        - created_at
+      properties:
+        note_id:
+          type: string
+        content:
+          type: string
+        author:
+          type: string
+          description: Agent that created this note
+        section:
+          type: string
+          nullable: true
+          description: Topic or section this note belongs to
+        source_url:
+          type: string
+          nullable: true
+          description: URL source if from web search
+        created_at:
+          type: string
+          format: date-time
+
+    DraftResponse:
+      type: object
+      required:
+        - session_id
+        - sections
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        sections:
+          type: array
+          items:
+            $ref: '#/components/schemas/DraftSection'
+        total_sections:
+          type: integer
+
+    DraftSection:
+      type: object
+      required:
+        - section_id
+        - title
+        - content
+        - author
+      properties:
+        section_id:
+          type: string
+          description: Unique section identifier (e.g., executive_summary, market_analysis)
+        title:
+          type: string
+        content:
+          type: string
+          description: Markdown content of this section
+        author:
+          type: string
+          description: Agent that wrote this section
+        order:
+          type: integer
+          description: Display order in final report
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time

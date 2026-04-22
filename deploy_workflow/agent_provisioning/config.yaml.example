@@ -1,0 +1,47 @@
+# Workflow Agent Provisioning Configuration
+# =======================================
+# Defines all invoice workflow agents to provision to Azure AI Foundry.
+# Each agent has a path (relative to src/) and a command to run.
+
+agents:
+  - name: invoice-intake
+    path: agent-invoice-intake
+    command: uv run python provision.py create
+
+  - name: invoice-validation
+    path: agent-invoice-validation
+    command: uv run python provision.py create
+
+  - name: invoice-validation-summary
+    path: agent-invoice-validation-summary
+    command: uv run python provision.py create
+
+  - name: invoice-summary
+    path: agent-invoice-summary
+    command: uv run python provision.py create
+
+  - name: invoice-mailer
+    path: agent-invoice-mailer
+    command: uv run python provision.py create
+
+settings:
+  # Source directory relative to this config file
+  src_dir: "../../src"
+
+  # Optional defaults to pass to agent provisioners.
+  # Keys mirror env var names from each agent's `.env.example`.
+  # Values can be overridden per-agent (see `overrides`) and/or via provision_all.py CLI flags.
+  env_overrides:
+    # AZURE_AI_FOUNDRY_ENDPOINT: "https://<foundry-project>.services.ai.azure.com/api/projects/proj-default"
+    # MODEL_DEPLOYMENT_NAME: "gpt-5"
+    # MCP_INVOICE_DATA_URL: "https://<example>.<region>.azurecontainerapps.io/mcp"
+    # APPLICATIONINSIGHTS_CONNECTION_STRING: "InstrumentationKey=...;IngestionEndpoint=..."
+    {}
+
+# Optional per-agent overrides example:
+# agents:
+#   - name: invoice-validation
+#     path: agent-invoice-validation
+#     command: uv run python provision.py create
+#     overrides:
+#       MODEL_DEPLOYMENT_NAME: gpt-5

@@ -1,0 +1,12 @@
+[project]
+name = "cofilot-deploy-workflow-azure"
+version = "0.1.0"
+description = "Azure deployment and build tooling for Cofilot workflow infrastructure"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+build-containers = "build:main"

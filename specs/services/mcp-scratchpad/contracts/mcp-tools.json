@@ -1,0 +1,194 @@
+{
+  "name": "mcp-scratchpad",
+  "version": "2.0.0",
+  "description": "Shared workspace for inter-agent collaboration with three pillars: Notes (raw findings), Draft (structured document), and Plan (task checklist). Session ID is injected via X-Session-ID HTTP header for security isolation.",
+  "security": {
+    "sessionIsolation": {
+      "description": "Session ID is NOT a tool parameter. It is injected by the orchestrator via X-Session-ID HTTP header. This ensures AI agents cannot access other sessions.",
+      "requiredHeader": "X-Session-ID",
+      "optionalHeader": "X-Caller-Agent",
+      "enforcement": "Server rejects requests without valid X-Session-ID header"
+    }
+  },
+  "tools": [
+    {
+      "name": "add_note",
+      "description": "Add a raw note, finding, or fact to the shared workspace. Use this to share information that might be useful for other agents.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The content of the note"
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional tags for categorization"
+          }
+        },
+        "required": ["content"]
+      }
+    },
+    {
+      "name": "read_notes",
+      "description": "Read notes from the workspace, optionally filtering by query or tag",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Optional text to search for in note content"
+          },
+          "tag": {
+            "type": "string",
+            "description": "Optional tag to filter by"
+          }
+        }
+      }
+    },
+    {
+      "name": "write_draft_section",
+      "description": "Write or overwrite a section of the structured draft document",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section_id": {
+            "type": "string",
+            "description": "Unique identifier for the section (e.g., 'executive_summary', 'market_analysis')"
+          },
+          "title": {
+            "type": "string",
+            "description": "Human-readable title"
+          },
+          "content": {
+            "type": "string",
+            "description": "The full text content of the section"
+          }
+        },
+        "required": ["section_id", "title", "content"]
+      }
+    },
+    {
+      "name": "read_draft",
+      "description": "Read the current draft, either a specific section or the full document",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section_id": {
+            "type": "string",
+            "description": "If provided, returns only that section. If null, returns full draft."
+          }
+        }
+      }
+    },
+    {
+      "name": "add_tasks",
+      "description": "Add one or more tasks to the shared plan. Use this to define what work needs to be done and track dependencies.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "description": "List of tasks to add",
+            "items": {
+              "type": "object",
+              "properties": {
+                "description": {
+                  "type": "string",
+                  "description": "What needs to be done"
+                },
+                "dependencies": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "List of task IDs that must be completed first"
+                }
+              },
+              "required": ["description"]
+            },
+            "minItems": 1
+          }
+        },
+        "required": ["tasks"]
+      }
+    },
+    {
+      "name": "update_task",
+      "description": "Update a task's status or assignment",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "The ID of the task"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["todo", "in_progress", "completed", "blocked"],
+            "description": "New status for the task"
+          },
+          "assigned_to": {
+            "type": "string",
+            "description": "Optional agent ID to assign the task to"
+          }
+        },
+        "required": ["task_id", "status"]
+      }
+    },
+    {
+      "name": "read_plan",
+      "description": "Read the current plan/checklist of tasks",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "add_question",
+      "description": "Add a question for user clarification. Use this when you need information from the user to proceed with research.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The question to ask the user"
+          },
+          "context": {
+            "type": "string",
+            "description": "Why this information is needed (helps user understand importance)"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "blocking"],
+            "description": "Question priority: low (nice to have), medium (improves quality), high (important), blocking (cannot proceed without)"
+          }
+        },
+        "required": ["question", "context", "priority"]
+      }
+    },
+    {
+      "name": "get_pending_questions",
+      "description": "Get all unanswered questions for the session",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_answered_questions",
+      "description": "Get all questions that have been answered by the user",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_all_questions",
+      "description": "Get all questions (both pending and answered) for the session",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ]
+}

@@ -1,0 +1,530 @@
+# SSE Event Contract - Direct Orchestrator Events (ADR-007)
+# =========================================================
+# Events are generated directly by the orchestrator middleware and streamed
+# to the frontend via Server-Sent Events (SSE).
+#
+# This replaces the trace-based architecture (ADR-005) which had 2-5 second
+# latency due to App Insights ingestion delays. Direct events provide
+# real-time updates with no polling overhead.
+
+---
+# Event Type Enumeration
+event_types:
+  # Workflow Lifecycle
+  - workflow_started      # Research workflow initialized
+  - workflow_completed    # Research workflow finished successfully
+  - workflow_failed       # Research workflow failed
+  
+  # Agent Operations (from orchestrator)
+  - agent_started         # Subagent invocation started
+  - agent_completed       # Subagent invocation completed
+  - agent_response        # Subagent response with preview
+  - agent_progress        # Subagent progress update
+  
+  # Tool Calls (from middleware)
+  - tool_call_started     # Tool call initiated
+  - tool_call_completed   # Tool call completed with results
+  - tool_call_failed      # Tool call error
+  
+  # Subagent Tool Calls (from stream_callback)
+  - subagent_tool_started    # Subagent's tool call started
+  - subagent_tool_completed  # Subagent's tool call completed
+  - subagent_progress        # Subagent streaming progress
+  
+  # Scratchpad Operations
+  - scratchpad_updated    # Scratchpad write operation completed
+  
+  # Human-in-the-Loop (Questions)
+  - question_added           # Agent added a question for user
+  - awaiting_user_input      # Workflow blocked, waiting for user answers
+  - questions_answered       # User submitted answers
+  
+  # Synthesis
+  - synthesis_completed   # Final report ready
+  
+  # Keep-alive
+  - heartbeat             # Keep-alive signal
+
+---
+# Event Schemas
+
+workflow_started:
+  description: Emitted when a new research workflow begins
+  source: orchestrator
+  payload:
+    session_id:
+      type: string
+      description: Unique identifier for the research session
+      example: "550e8400-e29b-41d4-a716-446655440000"
+    operation_id:
+      type: string
+      description: OpenTelemetry operation ID for trace correlation
+      example: "abc123def456"
+    query:
+      type: string
+      description: The research query being processed
+      example: "Analyze the coffee shop market in Prague"
+    mode:
+      type: string
+      description: Orchestration mode
+      example: "dynamic_orchestration"
+    timestamp:
+      type: string
+      format: ISO 8601
+      example: "2025-01-15T10:30:00Z"
+
+agent_started:
+  description: Emitted when the orchestrator delegates to a subagent
+  source: orchestrator
+  payload:
+    session_id:
+      type: string
+    phase:
+      type: string
+      description: Current workflow phase
+      example: "orchestration"
+    agent_name:
+      type: string
+      description: Name of the agent being invoked
+      example: "market-analyst"
+    description:
+      type: string
+      description: Description of what the agent is doing
+      example: "Analyzing market opportunities"
+    available_tools:
+      type: array
+      items:
+        type: string
+      description: Tools available to the agent
+    scratchpad_enabled:
+      type: boolean
+      description: Whether MCP scratchpad is available
+    timestamp:
+      type: string
+      format: ISO 8601
+
+agent_completed:
+  description: Emitted when a subagent finishes its work
+  source: orchestrator
+  payload:
+    session_id:
+      type: string
+    agent_name:
+      type: string
+      description: Name of the completed agent
+    content:
+      type: string
+      description: Agent's output content
+    execution_time_ms:
+      type: integer
+      description: Execution time in milliseconds
+    timestamp:
+      type: string
+      format: ISO 8601
+
+agent_response:
+  description: Emitted when a subagent returns a response
+  source: orchestrator
+  payload:
+    session_id:
+      type: string
+    agent_name:
+      type: string
+    response_preview:
+      type: string
+      description: Preview of agent response (truncated to ~500 chars)
+    execution_time_ms:
+      type: integer
+    timestamp:
+      type: string
+      format: ISO 8601
+
+tool_call_started:
+  description: Emitted when a tool call begins (intercepted by middleware)
+  source: middleware
+  payload:
+    session_id:
+      type: string
+    tool_name:
+      type: string
+      description: Name of the tool being called
+      example: "add_note"
+    tool_call_id:
+      type: string
+      description: Unique identifier for this tool call
+      example: "add_note_1_abc12345"
+    agent_name:
+      type: string
+      description: Agent making the tool call
+      example: "research-orchestrator"
+    input_args:
+      type: object
+      description: Arguments passed to the tool
+    call_number:
+      type: integer
+      description: Sequential call number for this tool type
+    timestamp:
+      type: string
+      format: ISO 8601
+
+tool_call_completed:
+  description: Emitted when a tool call completes successfully
+  source: middleware
+  payload:
+    session_id:
+      type: string
+    tool_name:
+      type: string
+    tool_call_id:
+      type: string
+    agent_name:
+      type: string
+    output:
+      type: any
+      description: Tool output (serialized for JSON)
+    execution_time_ms:
+      type: integer
+      description: Tool execution duration
+    call_number:
+      type: integer
+    timestamp:
+      type: string
+      format: ISO 8601
+
+tool_call_failed:
+  description: Emitted when a tool call fails
+  source: middleware
+  payload:
+    session_id:
+      type: string
+    tool_name:
+      type: string
+    tool_call_id:
+      type: string
+    agent_name:
+      type: string
+    error:
+      type: string
+      description: Error message
+    error_type:
+      type: string
+      description: Error type/class name
+    call_number:
+      type: integer
+    timestamp:
+      type: string
+      format: ISO 8601
+
+subagent_tool_started:
+  description: Emitted when a subagent calls a tool (captured via stream_callback)
+  source: stream_callback
+  payload:
+    session_id:
+      type: string
+    subagent_name:
+      type: string
+      description: Name of the subagent making the call
+      example: "market-analyst"
+    tool_name:
+      type: string
+      description: Tool being called by the subagent
+      example: "add_note"
+    tool_call_id:
+      type: string
+    input_preview:
+      type: string
+      nullable: true
+      description: Preview of input arguments (truncated)
+    timestamp:
+      type: string
+      format: ISO 8601
+
+subagent_tool_completed:
+  description: Emitted when a subagent's tool call completes
+  source: stream_callback
+  payload:
+    session_id:
+      type: string
+    subagent_name:
+      type: string
+    tool_name:
+      type: string
+    tool_call_id:
+      type: string
+    output_preview:
+      type: string
+      nullable: true
+      description: Preview of tool output (truncated)
+    timestamp:
+      type: string
+      format: ISO 8601
+
+subagent_progress:
+  description: Streaming progress from a subagent
+  source: stream_callback
+  payload:
+    session_id:
+      type: string
+    subagent_name:
+      type: string
+    text_chunk:
+      type: string
+      description: Text chunk from subagent (max 500 chars)
+    timestamp:
+      type: string
+      format: ISO 8601
+
+scratchpad_updated:
+  description: Emitted when a scratchpad write operation completes
+  source: middleware
+  payload:
+    session_id:
+      type: string
+    section_name:
+      type: string
+      description: Scratchpad section affected
+      example: "plan"
+    operation:
+      type: string
+      enum: [created, updated]
+    updated_by:
+      type: string
+      description: Agent that made the update
+    tool_type:
+      type: string
+      description: Specific tool used
+      example: "add_tasks"
+    content_preview:
+      type: string
+      nullable: true
+      description: Preview of content (truncated)
+    tasks_created:
+      type: integer
+      nullable: true
+      description: Number of tasks created (for add_tasks)
+    tasks:
+      type: array
+      nullable: true
+      description: Task details (for add_tasks)
+    task_update:
+      type: object
+      nullable: true
+      description: Task update details (for update_task)
+    timestamp:
+      type: string
+      format: ISO 8601
+
+# --- Human-in-the-Loop Events ---
+
+question_added:
+  description: Emitted when an agent adds a question for user clarification
+  source: middleware
+  payload:
+    session_id:
+      type: string
+    question_id:
+      type: string
+      description: Unique question identifier
+      example: "q_abc12345"
+    question:
+      type: string
+      description: The question text
+      example: "What is your target budget for the initial investment?"
+    context:
+      type: string
+      description: Why this information is needed
+      example: "Needed for financial projections and ROI calculations"
+    priority:
+      type: string
+      enum: [low, medium, high, blocking]
+      description: Question priority level
+    asked_by:
+      type: string
+      description: Agent that asked the question
+      example: "finance-analyst"
+    timestamp:
+      type: string
+      format: ISO 8601
+
+awaiting_user_input:
+  description: Emitted when workflow is blocked waiting for user to answer questions
+  source: orchestrator
+  payload:
+    session_id:
+      type: string
+    reason:
+      type: string
+      description: Why human input is needed
+      example: "Need budget clarification before financial projections can proceed"
+    blocking_question_ids:
+      type: array
+      items:
+        type: string
+      description: Question IDs that must be answered to continue
+      example: ["q_abc12345", "q_def67890"]
+    pending_questions_count:
+      type: integer
+      description: Total number of unanswered questions
+    timestamp:
+      type: string
+      format: ISO 8601
+
+questions_answered:
+  description: Emitted when user submits answers to questions
+  source: api
+  payload:
+    session_id:
+      type: string
+    answered_question_ids:
+      type: array
+      items:
+        type: string
+      description: IDs of questions that were answered
+      example: ["q_abc12345"]
+    workflow_unblocked:
+      type: boolean
+      description: Whether this unblocked a waiting workflow
+    timestamp:
+      type: string
+      format: ISO 8601
+
+synthesis_completed:
+  description: Emitted when the final synthesis/report is ready
+  source: orchestrator
+  payload:
+    session_id:
+      type: string
+    agent:
+      type: string
+      example: "research-orchestrator"
+    execution_time_ms:
+      type: integer
+    synthesis:
+      type: string
+      description: Full synthesized report content
+    tool_calls_made:
+      type: array
+      description: Log of all tool calls during workflow
+    agent_call_counts:
+      type: object
+      description: Count of calls per agent type
+    timestamp:
+      type: string
+      format: ISO 8601
+
+workflow_completed:
+  description: Emitted when the research workflow completes successfully
+  source: orchestrator
+  payload:
+    session_id:
+      type: string
+    total_tool_calls:
+      type: integer
+      description: Total number of tool calls made
+    agent_call_counts:
+      type: object
+      description: Count of calls per agent
+    total_time_ms:
+      type: integer
+      description: Total workflow duration
+    synthesis:
+      type: string
+      description: Final synthesized report
+    timestamp:
+      type: string
+      format: ISO 8601
+
+workflow_failed:
+  description: Emitted when the research workflow fails
+  source: orchestrator
+  payload:
+    session_id:
+      type: string
+    error:
+      type: string
+      description: Error message
+    error_type:
+      type: string
+      nullable: true
+      description: Error classification
+    tool_calls_before_failure:
+      type: array
+      description: Tool calls made before failure
+    timestamp:
+      type: string
+      format: ISO 8601
+
+heartbeat:
+  description: Keep-alive signal sent periodically to maintain SSE connection
+  source: api
+  payload:
+    session_id:
+      type: string
+    timestamp:
+      type: string
+      format: ISO 8601
+
+---
+# SSE Format Specification
+
+sse_format:
+  description: |
+    Events are sent as Server-Sent Events with the following format:
+    
+    event: <event_type>
+    data: <json_payload>
+    
+    Each event is followed by a blank line. The client should parse the 
+    event type and JSON payload accordingly.
+  
+  example: |
+    event: workflow_started
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","operation_id":"abc123","query":"Analyze coffee shop market","timestamp":"2025-01-15T10:30:00Z"}
+    
+    event: agent_started
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","phase":"orchestration","description":"Starting research workflow","timestamp":"2025-01-15T10:30:01Z"}
+    
+    event: tool_call_started
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","tool_name":"add_tasks","agent_name":"research-orchestrator","input_args":{"tasks":[...]},"timestamp":"2025-01-15T10:30:02Z"}
+    
+    event: tool_call_completed
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","tool_name":"add_tasks","execution_time_ms":150,"timestamp":"2025-01-15T10:30:02Z"}
+    
+    event: heartbeat
+    data: {"session_id":"550e8400-e29b-41d4-a716-446655440000","timestamp":"2025-01-15T10:30:05Z"}
+
+---
+# Architecture Notes
+
+architecture:
+  description: |
+    Events flow directly from the orchestrator to the UI via SSE:
+    
+    1. Orchestrator middleware intercepts tool calls in real-time
+    2. Events are queued in ToolCallEventQueue
+    3. The streaming loop yields events immediately as SSE
+    4. Frontend processes events and updates UI state
+    
+    OpenTelemetry traces are still emitted for observability but are NOT
+    used for UI events (per ADR-007). Traces flow to App Insights for
+    dashboards and debugging.
+    
+    This architecture provides:
+    - Real-time updates (no polling delay)
+    - Reliable event delivery (no App Insights dependency)
+    - Simple correlation (events carry session_id directly)
+
+---
+# Deprecated (Observability Only)
+
+deprecated_events:
+  description: |
+    The following events were part of the trace-based architecture (ADR-005)
+    and are no longer emitted to the UI SSE stream. They remain in the codebase
+    for potential future observability tools but are not part of the UI contract.
+    
+    - trace_span_started
+    - trace_span_completed  
+    - trace_tool_call
+    
+    See ADR-007 for the rationale behind this change.

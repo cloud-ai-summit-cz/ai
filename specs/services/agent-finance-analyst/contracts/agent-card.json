@@ -1,0 +1,26 @@
+{
+  "name": "finance-analyst",
+  "description": "Financial analyst agent that creates projections, startup costs, operating costs, and break-even analysis for market expansion research.",
+  "url": "https://agent-finance-analyst.internal.cofilot.westeurope.azurecontainerapps.io",
+  "version": "1.0.0",
+  "protocol_version": "1.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "skills": [
+    {
+      "id": "financial-projection",
+      "name": "Financial Projection",
+      "description": "Creates comprehensive financial projections including startup costs, operating costs, revenue projections, and break-even analysis."
+    }
+  ],
+  "authentication": {
+    "schemes": [
+      {
+        "scheme": "bearer",
+        "description": "Azure AD managed identity token"
+      }
+    ]
+  }
+}

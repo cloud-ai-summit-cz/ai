@@ -1,0 +1,19 @@
+# Build Configuration for ACR Tasks (Workflow)
+# Defines containers to build and push to Azure Container Registry
+
+# Azure Container Registry name (auto-detected from Terraform output)
+# Can be overridden via --acr-name flag
+# acr_name: myacr
+
+containers:
+  - name: workflow-backend
+    path: ../../src/workflows/backend
+    image: workflow-backend
+    tag: latest
+
+  - name: mcp-invoice-data
+    path: ../../src/mcp-invoice-data
+    image: mcp-invoice-data
+    tag: latest
+
+build_all_by_default: true

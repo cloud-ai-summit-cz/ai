@@ -1,0 +1,177 @@
+{
+  "name": "mcp-real-estate",
+  "version": "1.0.0",
+  "description": "Commercial real estate and location data",
+  "tools": [
+    {
+      "name": "search_commercial_properties",
+      "description": "Search for available commercial properties",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "district": {
+            "type": "string"
+          },
+          "property_type": {
+            "type": "string",
+            "enum": ["retail", "restaurant", "office", "mixed"],
+            "default": "retail"
+          },
+          "min_size_sqm": {
+            "type": "number"
+          },
+          "max_size_sqm": {
+            "type": "number"
+          },
+          "max_rent_usd": {
+            "type": "number"
+          }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "get_rental_rates",
+      "description": "Get commercial rental rates for an area",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "district": {
+            "type": "string"
+          },
+          "property_type": {
+            "type": "string",
+            "enum": ["retail", "restaurant", "office"]
+          }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "get_foot_traffic",
+      "description": "Get pedestrian foot traffic data",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "district": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "get_nearby_amenities",
+      "description": "Get nearby businesses, transit, and amenities",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "radius_meters": {
+            "type": "integer",
+            "default": 500
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Types to search (transit, competitor, restaurant, etc.)"
+          }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "get_location_score",
+      "description": "Get comprehensive location scoring",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "district": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "business_type": {
+            "type": "string",
+            "description": "Type of business for relevance scoring"
+          }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "get_vacancy_rates",
+      "description": "Get commercial vacancy rates for an area",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "district": {
+            "type": "string"
+          },
+          "property_type": {
+            "type": "string"
+          }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "compare_locations",
+      "description": "Compare multiple locations side by side",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "city": {
+                  "type": "string"
+                },
+                "district": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "List of locations to compare"
+          },
+          "criteria": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Criteria to compare (rent, traffic, competition, etc.)"
+          }
+        },
+        "required": ["locations"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,112 @@
+{
+  "name": "mcp-demographics",
+  "version": "1.0.0",
+  "description": "Demographic and consumer behavior data",
+  "tools": [
+    {
+      "name": "get_population_stats",
+      "description": "Get population statistics for a location",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "City name"
+          },
+          "district": {
+            "type": "string",
+            "description": "Optional district/neighborhood"
+          }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "get_income_distribution",
+      "description": "Get income distribution and purchasing power data",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "district": {
+            "type": "string"
+          }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "get_age_distribution",
+      "description": "Get age demographics for a location",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "district": {
+            "type": "string"
+          }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "get_consumer_spending",
+      "description": "Get consumer spending patterns by category",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["food_beverage", "dining_out", "coffee", "entertainment", "retail"],
+            "description": "Spending category"
+          }
+        },
+        "required": ["city", "category"]
+      }
+    },
+    {
+      "name": "get_lifestyle_segments",
+      "description": "Get consumer lifestyle segmentation",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "district": {
+            "type": "string"
+          }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "get_commuter_patterns",
+      "description": "Get commuter and foot traffic patterns",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "district": {
+            "type": "string"
+          },
+          "day_type": {
+            "type": "string",
+            "enum": ["weekday", "weekend", "both"],
+            "default": "both"
+          }
+        },
+        "required": ["city"]
+      }
+    }
+  ]
+}
